@@ -72,6 +72,12 @@ function pspkt {
         [switch]
         $DNSoverTCP,
 
+        ## KERBEROS ##
+        [Parameter()]
+        [switch]
+        [Alias("kerb","krb")]
+        $Kerberos,
+
         ## DATA LINK ##
         [Parameter()]
         [switch]
@@ -204,34 +210,39 @@ switch -Regex ($PSItem) {
         $cmd = "pktmon start --capture --flags 0x010"
 
         ## do NIC work to limit the output ##
-        # add the NIC component filter
-        $first = $true
-        foreach ($int in $Interface) {
-            # get the interface based on the -D index number, subtract 1 to zero index
-            $tmpIdx = $intIdx[($int-1)]
-            $tmpNic = $lclIpAddr | Where-Object interfaceIndex -eq $tmpIdx | Select-Object InterfaceAlias, InterfaceIndex -Unique
-            Write-Verbose "pspkt - Selected NIC: $($tmpNic.InterfaceAlias) [$($tmpNic.InterfaceIndex)]"
+        if ($null -eq $Interface) {
+            # add all NICs
+            $cmd = [string]::Concat($cmd, " --comp nics")
+        } else {
+            # add the NIC component filter
+            $first = $true
+            foreach ($int in $Interface) {
+                # get the interface based on the -D index number, subtract 1 to zero index
+                $tmpIdx = $intIdx[($int-1)]
+                $tmpNic = $lclIpAddr | Where-Object interfaceIndex -eq $tmpIdx | Select-Object InterfaceAlias, InterfaceIndex -Unique
+                Write-Verbose "pspkt - Selected NIC: $($tmpNic.InterfaceAlias) [$($tmpNic.InterfaceIndex)]"
 
-            # hard fail if there is a mismatch
-            if (-NOT $tmpNic) {
-                throw "Failed to find a NIC matching interface number $int."
-            }
+                # hard fail if there is a mismatch
+                if (-NOT $tmpNic) {
+                    throw "Failed to find a NIC matching interface number $int."
+                }
 
-            # get the miniport match
-            $compID = $allInterfaces | Where-Object ifIndex -eq $tmpNic.InterfaceIndex | ForEach-Object Id | Select-Object -Unique
+                # get the miniport match
+                $compID = $allInterfaces | Where-Object ifIndex -eq $tmpNic.InterfaceIndex | ForEach-Object Id | Select-Object -Unique
 
-            # add the component to the start command
-            if ($compID) {
-                Write-Verbose "pspkt - Component ID is $compID."
-                if ($first) {
-                    Write-Verbose "pspkt - Initial component add."
-                    $cmd = [string]::Concat($cmd, " --comp $compID")
+                # add the component to the start command
+                if ($compID) {
+                    Write-Verbose "pspkt - Component ID is $compID."
+                    if ($first) {
+                        Write-Verbose "pspkt - Initial component add."
+                        $cmd = [string]::Concat($cmd, " --comp $compID")
 
-                    # disable first
-                    $first = $false
-                } else {
-                    Write-Verbose "pspkt - Add component."
-                    $cmd = [string]::Concat($cmd, " $compID")
+                        # disable first
+                        $first = $false
+                    } else {
+                        Write-Verbose "pspkt - Add component."
+                        $cmd = [string]::Concat($cmd, " $compID")
+                    }
                 }
             }
         }
@@ -316,7 +327,7 @@ switch -Regex ($PSItem) {
                 # add the console filter
                 $tmpStr = @'
 
-            # DNS
+            # DNS over TCP
             "(\.53: |\.53 >)" { [System.Console]::WriteLine("$PSItem") }
 '@
                 $strSwitch = [string]::Concat($strSwitch, $tmpStr)
@@ -552,6 +563,44 @@ switch -Regex ($PSItem) {
                 $strSwitch = [string]::Concat($strSwitch, $tmpStr)
                 Write-Verbose "pspkt - Added echo filter to strSwitch: $strSwitch"
 
+            }
+
+            "Kerberos" {
+                Write-Verbose "Adding Kerberos to pspkt."
+
+                # add the pktmon filter for TCP 88
+                $filtSplat = @{ 
+                    Name = "Kerberos"
+                    Port = 88
+                    Protocol = "TCP"
+                }
+
+                # add the IP address(es)
+                if ($IPAddress) {
+                    $filtSplat += @{ IPAddress = $IPAddress }
+                }
+
+                # create the filter
+                Write-Debug "filtSplat:`n`n$($filtSplat | Out-String)`n"
+                Add-PspktFilter @filtSplat
+
+                # check whether the filter string is started
+                if (-NOT $firstFiltAdded) {
+                    $firstFiltAdded = $true
+
+                    # create the attach to the command
+                    $strSwitch = $strSwitchStart
+                }
+
+                # add the console filter
+                $tmpStr = @'
+
+            # Kerberos
+            "(\.88: |\.88 >)" { [System.Console]::WriteLine("$PSItem") }
+'@
+                $strSwitch = [string]::Concat($strSwitch, $tmpStr)
+
+                #done - don't break or the switch-loop ends
             }
 
             default {
