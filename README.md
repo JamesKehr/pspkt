@@ -4,6 +4,8 @@ A PowerShell wrapper for Windows pktmon in real-time mode designed to ease the u
 # In Progress
 Bugs ahead!
 
+There is a known delay of ~1-3 seconds between the packet being send or received and appearing in the pspkt output.
+
 # Examples
 
 ## Example 1
@@ -33,8 +35,13 @@ pspkt -Ping -int 1,3 -Force
 **Output**
 
 ```
-        4C-ED-FB-B4-34-9E > 24-A4-3C-3C-19-13, ethertype IPv6 (0x86dd), length 102: 2600:... > 2606:4700:4700::1111: HBH ICMP6, echo request, seq 7, length 40
-        4C-ED-FB-B4-34-9E > 24-A4-3C-3C-19-13, ethertype IPv6 (0x86dd), length 102: 2600:... > 2606:4700:4700::1111: HBH ICMP6, echo request, seq 8, length 40
-        4C-ED-FB-B4-34-9E > 24-A4-3C-3C-19-13, ethertype IPv6 (0x86dd), length 102: 2600:... > 2606:4700:4700::1111: HBH ICMP6, echo request, seq 9, length 40
-        4C-ED-FB-B4-34-9E > 24-A4-3C-3C-19-13, ethertype IPv6 (0x86dd), length 102: 2600:... > 2606:4700:4700::1111: HBH ICMP6, echo request, seq 10, length 40
+Press Ctrl+C to stop.
+        4C-ED-FB-B4-34-9E > 24-A4-3C-3C-19-13, ethertype IPv4 (0x0800), length 74: 192.168.xxx.yyy > 1.1.1.1: ICMP echo request, id 1, seq 391, length 40
+        24-A4-3C-3C-19-13 > 4C-ED-FB-B4-34-9E, ethertype IPv4 (0x0800), length 74: 1.1.1.1 > 192.168.xxx.yyy: ICMP echo reply, id 1, seq 391, length 40
+        4C-ED-FB-B4-34-9E > 24-A4-3C-3C-19-13, ethertype IPv4 (0x0800), length 74: 192.168.xxx.yyy > 1.1.1.1: ICMP echo request, id 1, seq 392, length 40
+        24-A4-3C-3C-19-13 > 4C-ED-FB-B4-34-9E, ethertype IPv4 (0x0800), length 74: 1.1.1.1 > 192.168.xxx.yyy: ICMP echo reply, id 1, seq 392, length 40
+        4C-ED-FB-B4-34-9E > 24-A4-3C-3C-19-13, ethertype IPv4 (0x0800), length 74: 192.168.xxx.yyy > 1.1.1.1: ICMP echo request, id 1, seq 393, length 40
+        24-A4-3C-3C-19-13 > 4C-ED-FB-B4-34-9E, ethertype IPv4 (0x0800), length 74: 1.1.1.1 > 192.168.xxx.yyy: ICMP echo reply, id 1, seq 393, length 40
+        4C-ED-FB-B4-34-9E > 24-A4-3C-3C-19-13, ethertype IPv4 (0x0800), length 74: 192.168.xxx.yyy > 1.1.1.1: ICMP echo request, id 1, seq 394, length 40
+        24-A4-3C-3C-19-13 > 4C-ED-FB-B4-34-9E, ethertype IPv4 (0x0800), length 74: 1.1.1.1 > 192.168.xxx.yyy: ICMP echo reply, id 1, seq 394, length 40
 ```
