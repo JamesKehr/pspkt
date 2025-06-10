@@ -83,3 +83,20 @@ process {
 end {
 
 }
+
+
+
+$cmd =  @'
+pktmon start --capture --flags 0x010 --comp 119 119 13 --log-mode real-time | & { process {
+         switch -Regex ($PSItem) {
+             # ping4 (ICMP Echo)
+             "(?:ICMP echo)" { Write-Host "$PSItem" }
+             # ping6 (ICMPv6 Echo)
+             "(?:ICMP6, echo)" { [System.Console]::WriteLine("$PSItem") }
+             # write hidden lines to Verbose for funzies
+             default {Write-Verbose "$PSItem"}
+         }
+     }}
+'@
+
+Invoke-Expression $cmd
