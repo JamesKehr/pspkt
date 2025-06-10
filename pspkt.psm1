@@ -72,6 +72,15 @@ function pspkt {
         [switch]
         $DNSoverTCP,
 
+        ## DATA LINK ##
+        [Parameter()]
+        [switch]
+        $ARP,
+
+        [Parameter()]
+        [switch]
+        $NDP,
+
         ### GLOBAL ###
 
         [Parameter()]
@@ -148,19 +157,35 @@ function pspkt {
             $strSwitch = ""
 
             # this enables filtering the output 
-            $strSwitchStart = @"
- | & { process {
-        switch -Regex (`$_) {
-"@
+            <#
+
+Write-Debug "loop: $PSItem"
+switch -Regex ($PSItem) {  
+
+                | Foreach-Object -Process {
+                    Write-Debug "loop: $PSItem"
+                    switch -Regex ($PSItem) {           
+            
+                | &{ process {
+                    Write-Debug "loop: $PSItem"
+                    switch -Regex ($PSItem) { 
+            #>
+            $strSwitchStart = @'
+ | &{ process {
+        $line = $_
+        Write-Debug "loop: $line"
+        
+        switch -Regex -CaseSensitive ($line) { 
+'@
 
             # add the ending part
-            $strSwitchEnd = @"
+            $strSwitchEnd = @'
 
-            # write hidden lines to Verbose for funzies
-            default {Write-Verbose "`$_"}
-        }
-    }}
-"@
+        # write hidden lines to Verbose for funzies
+        default {Write-Verbose "$PSItem"}
+    }
+}}
+'@
         }
     }
 
@@ -193,7 +218,7 @@ function pspkt {
             }
 
             # get the miniport match
-            $compID = $allInterfaces | Where-Object ifIndex -eq $tmpNic.InterfaceIndex | ForEach-Object Id
+            $compID = $allInterfaces | Where-Object ifIndex -eq $tmpNic.InterfaceIndex | ForEach-Object Id | Select-Object -Unique
 
             # add the component to the start command
             if ($compID) {
@@ -201,6 +226,9 @@ function pspkt {
                 if ($first) {
                     Write-Verbose "pspkt - Initial component add."
                     $cmd = [string]::Concat($cmd, " --comp $compID")
+
+                    # disable first
+                    $first = $false
                 } else {
                     Write-Verbose "pspkt - Add component."
                     $cmd = [string]::Concat($cmd, " $compID")
@@ -219,7 +247,7 @@ function pspkt {
         
 
         ## FILTER ##
-        switch ($PSBoundParameters.Keys) {
+        switch -Regex ($PSBoundParameters.Keys) {
             "^DNS$" {
                 Write-Verbose "Adding DNS to pspkt."
 
@@ -248,11 +276,11 @@ function pspkt {
                 }
 
                 # add the console filter
-                $tmpStr = @"
+                $tmpStr = @'
 
             # DNS
-            "(\.53`: |\.53 >)" { [System.Console]::WriteLine("`$_") }
-"@
+            "(\.53: |\.53 >)" { [System.Console]::WriteLine("$PSItem") }
+'@
                 $strSwitch = [string]::Concat($strSwitch, $tmpStr)
 
                 #done - don't break or the switch-loop ends
@@ -286,11 +314,11 @@ function pspkt {
                 }
 
                 # add the console filter
-                $tmpStr = @"
+                $tmpStr = @'
 
             # DNS
-            "(\.53`: |\.53 >)" { [System.Console]::WriteLine("`$_") }
-"@
+            "(\.53: |\.53 >)" { [System.Console]::WriteLine("$PSItem") }
+'@
                 $strSwitch = [string]::Concat($strSwitch, $tmpStr)
 
                 #done - don't break or the switch-loop ends
@@ -322,11 +350,11 @@ function pspkt {
                     $strSwitch = $strSwitchStart
                 }
 
-                $tmpStr = @"
+                $tmpStr = @'
 
-            # ping (ICMP Echo)
-            "(?:ICMP echo)" { [System.Console]::WriteLine("`$_") }
-"@
+            # ping4 (ICMP Echo)
+            "(?:ICMP echo)" { [System.Console]::WriteLine("$PSItem") }
+'@
                 $strSwitch = [string]::Concat($strSwitch, $tmpStr)
                 Write-Verbose "pspkt - Added echo filter to strSwitch: $strSwitch"
 
@@ -359,19 +387,175 @@ function pspkt {
                     $strSwitch = $strSwitchStart
                 }
 
-                $tmpStr = @"
+                $tmpStr = @'
 
-            # ping (ICMP Echo)
-            "(?:ICMP6, echo)" { [System.Console]::WriteLine("`$_") }
-"@
+            # ping6 (ICMPv6 Echo)
+            "(?:ICMP6, echo)" { [System.Console]::WriteLine("$PSItem") }
+'@
                 $strSwitch = [string]::Concat($strSwitch, $tmpStr)
                 Write-Verbose "pspkt - Added echo filter to strSwitch: $strSwitch"
             
                 #done - don't break or the switch-loop ends
             }
 
+            "NDP" {
+                Write-Verbose "Adding NDP to pspkt."
+
+                # add the pktmon filter for ICMP
+                $filtSplat = @{ 
+                    Name = "NDP"
+                    Protocol = "ICMPv6"
+                }
+
+                # add the IP address(es)
+                if ($IPAddress) {
+                    $filtSplat += @{ IPAddress = $IPAddress }
+                }
+
+                # create the filter
+                Write-Debug "filtSplat:`n`n$($filtSplat | Out-String)`n"
+                Add-PspktFilter @filtSplat
+
+                # check whether the filter string is started
+                if (-NOT $firstFiltAdded) {
+                    $firstFiltAdded = $true
+
+                    # create the attach to the command
+                    $strSwitch = $strSwitchStart
+                }
+
+                $tmpStr = @'
+
+            # NDP (ICMPv6 neighbor)
+            "ICMP6, (?:router|neighbor) (?:solicitation|advertisement)" { [System.Console]::WriteLine("$PSItem") }
+'@
+                $strSwitch = [string]::Concat($strSwitch, $tmpStr)
+                Write-Verbose "pspkt - Added echo filter to strSwitch: $strSwitch"
+            
+                #done - don't break or the switch-loop ends
+            }
+
+            "SMBoverQUIC" {
+                Write-Verbose "Adding SMB over QUIC to pspkt."
+
+                $SmbPort = 443
+                # support for alternate ports
+                if ($SMBAltPort) {
+                    $SmbPort = $SMBAltPort
+                }
+
+                # add the pktmon filter 
+                $filtSplat = @{ 
+                    Name = "SMB"
+                    Port = $SmbPort
+                    Protocol = "UDP"
+                }
+
+                # add the IP address(es)
+                if ($IPAddress) {
+                    $filtSplat += @{ IPAddress = $IPAddress }
+                }
+
+                # create the filter
+                Write-Debug "filtSplat:`n`n$($filtSplat | Out-String)`n"
+                Add-PspktFilter @filtSplat
+
+                # check whether the filter string is started
+                if (-NOT $firstFiltAdded) {
+                    $firstFiltAdded = $true
+
+                    # create the attach to the command
+                    $strSwitch = $strSwitchStart
+                }
+
+                # add the console filter
+                $tmpStr = @"
+
+            # SMB over QUIC
+            "(\.$SmbPort`: |\.$SmbPort >)" { [System.Console]::WriteLine("`$PSItem") }
+"@
+                $strSwitch = [string]::Concat($strSwitch, $tmpStr)
+
+                #done - don't break or the switch-loop ends
+            }
+
+            "^SMB$" {
+                Write-Verbose "Adding SMB over TCP to pspkt."
+
+                $SmbPort = 445
+                # SMB over TCP does not support alternative listener ports (yet) but does support the client using an alternate port
+                if ($SMBAltPort) {
+                    $SmbPort = $SMBAltPort
+                }
+
+                # add the pktmon filter 
+                $filtSplat = @{ 
+                    Name = "SMB"
+                    Port = $SmbPort
+                    Protocol = "TCP"
+                }
+
+                # add the IP address(es)
+                if ($IPAddress) {
+                    $filtSplat += @{ IPAddress = $IPAddress }
+                }
+
+                # create the filter
+                Write-Debug "filtSplat:`n`n$($filtSplat | Out-String)`n"
+                Add-PspktFilter @filtSplat
+
+                # check whether the filter string is started
+                if (-NOT $firstFiltAdded) {
+                    $firstFiltAdded = $true
+
+                    # create the attach to the command
+                    $strSwitch = $strSwitchStart
+                }
+
+                # add the console filter
+                $tmpStr = @"
+
+            # SMB
+            "(\.$SmbPort`: |\.$SmbPort >)" { [System.Console]::WriteLine("`$PSItem") }
+"@
+                $strSwitch = [string]::Concat($strSwitch, $tmpStr)
+
+                #done - don't break or the switch-loop ends
+            }
+
+            "ARP" {
+                 Write-Verbose "Adding ARP to pspkt."
+
+                # add the pktmon filter for ICMP
+                $filtSplat = @{ 
+                    Name = "ARP"
+                    Protocol = "ARP"
+                }
+
+                # create the filter
+                Write-Debug "filtSplat:`n`n$($filtSplat | Out-String)`n"
+                Add-PspktFilter @filtSplat
+
+                # check whether the filter string is started
+                if (-NOT $firstFiltAdded) {
+                    $firstFiltAdded = $true
+
+                    # create the attach to the command
+                    $strSwitch = $strSwitchStart
+                }
+
+                $tmpStr = @'
+
+            # ping4 (ICMP Echo)
+            "ARP.*(?:Request who-has|Reply .* is-at)" { [System.Console]::WriteLine("$PSItem") }
+'@
+                $strSwitch = [string]::Concat($strSwitch, $tmpStr)
+                Write-Verbose "pspkt - Added echo filter to strSwitch: $strSwitch"
+
+            }
+
             default {
-                Write-Verbose "Unknown or unused filter parameter: $_"
+                Write-Verbose "Unknown or non-filter parameter: $_"
             }
         }
         ##
@@ -380,22 +564,31 @@ function pspkt {
         ##
 
         ## RUN TIME! ##
-        if ($firstFiltAdded) {
-            # combine start and end, then add it to cmd
-            $strSwitch = [string]::Concat($strSwitch, $strSwitchEnd)
-            Write-Verbose "pspkt - Final strSwitch: $strSwitch"
+        $strSwitch = [string]::Concat($strSwitch, $strSwitchEnd)
+        Write-Verbose "pspkt - Final strSwitch: $strSwitch"
 
-            $cmd = [string]::Concat($cmd, $strSwitch)
-            Write-Verbose "pspkt - Final cmd:`n`n$cmd`n"
-        }
+        $cmd = [string]::Concat($cmd, $strSwitch)
+        Write-Verbose "pspkt - Final cmd: $cmd"
 
         # convert the string to a scriptblock
         Write-Verbose "pspkt - Convert to scriptblock."
         $sbCmd = [scriptblock]::Create($cmd)
+        #$sbProcess = [scriptblock]::Create($strSwitch)
+
 
         Write-Verbose "pspkt - Running pktmon in real-time mode."
         Write-Host -ForegroundColor Green "Press Ctrl+C to stop."
         Invoke-Command -ScriptBlock $sbCmd
+        #Invoke-Command -ScriptBlock $sbCmd | ForEach-Object -Process $sbProcess
+        #Invoke-Expression $cmd #| Out-Host | ForEach-Object -Process $sbProcess
+
+        <# encode the command
+        $bytes = [System.Text.Encoding]::Unicode.GetBytes($cmd)
+        $encodedCommand = [Convert]::ToBase64String($bytes)
+        Write-Verbose "encoded command: $encodedCommand"
+
+        Start-Process pwsh -ArgumentList "-NoLogo -NoProfile -EncodedCommand $encodedCommand" -NoNewWindow -Wait
+        #>
         ##
 
     }
@@ -407,7 +600,7 @@ function pspkt {
     clean {
         if (-NOT $DumpInterfaces.IsPresent -or $Force.IsPresent) {
             # stop and remove filters
-            Reset-Pktmon -Force
+            #Reset-Pktmon -Force
         }
     }
 }
@@ -621,7 +814,10 @@ function Add-PspktFilter {
     # https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
     # 
     # The valid protocol numbers are 0-147 as of 29 May 2025.
-    [string[]]$validProtNames = "TCP", "UDP", "ICMP", "ICMPv6"
+    #
+    # Yes, I know ARP is a data link protocol and not a transport protocol, but I'm simplifying things here
+    #
+    [string[]]$validProtNames = "TCP", "UDP", "ICMP", "ICMPv6", "ARP"
     [int[]]$validProtNums = 0..147
 
     # valid protocol tracker
@@ -648,18 +844,32 @@ function Add-PspktFilter {
     }
 
     Write-Verbose "Add-PspktFilter - Name: $Name; Protocol: $Protocol; Port: $Port; IPAddress: $($IPAddress.IPAddressToString -join ", ")"
-            
-    if ($IPAddress) {
+
+    if ($Protocol -eq "ARP") {
+        Write-Verbose "Add-PspktFilter - Adding ARP filter."
+        pktmon filter add "$Name" -d $Protocol *> $null
+    } elseif ($IPAddress) {
         $i = 1
         foreach ($ip in $IPAddress) {
             $strIP = $ip.IPAddressToString
             Write-Verbose "Add-PspktFilter - Adding filter for IP address: $strIP"
-            pktmon filter add "$Name`_$i" -i $strIP -t $Protocol -p $Port *> $null
+            # TCP and UDP can also be represented by the protocol numbers 6 (TCP) and 17 (UDP)
+            if ($Protocol -eq "TCP" -or $Protocol -eq "UDP" -or $Protocol -eq 6 -or $Protocol -eq 17) {
+                pktmon filter add "$Name`_$i" -i $strIP -t $Protocol -p $Port *> $null
+            } else {
+                pktmon filter add "$Name`_$i" -i $strIP -t $Protocol *> $null
+            }
             $i++
         }
     } else {
         Write-Verbose "Add-PspktFilter - Adding filter with no IP address filter."
-        pktmon filter add "$Name" -t $Protocol -p $Port *> $null
+        # TCP and UDP can also be represented by the protocol numbers 6 (TCP) and 17 (UDP)
+        if ($Protocol -eq "TCP" -or $Protocol -eq "UDP" -or $Protocol -eq 6 -or $Protocol -eq 17) {
+            pktmon filter add "$Name" -t $Protocol -p $Port *> $null
+        # ignore the port when not UDP or TCP or the filter won't work
+        } else {
+            pktmon filter add "$Name" -t $Protocol *> $null
+        }
     }
 }
 
