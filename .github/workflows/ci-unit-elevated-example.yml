@@ -1,0 +1,29 @@
+name: CI Unit Elevated Example
+
+on:
+  workflow_dispatch:
+
+jobs:
+  unit-elevated:
+    # Example runner labels. Use a self-hosted Windows runner configured to run as Administrator.
+    runs-on:
+      - self-hosted
+      - windows
+
+    strategy:
+      matrix:
+        shell: [pwsh, powershell]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pester
+        shell: ${{ matrix.shell }}
+        run: |
+          Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run full unit tests
+        shell: ${{ matrix.shell }}
+        run: |
+          & ./tests/Invoke-Tests.ps1 -Mode Unit -Verbosity Detailed

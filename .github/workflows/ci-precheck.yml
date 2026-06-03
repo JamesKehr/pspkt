@@ -1,0 +1,29 @@
+name: CI Precheck
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  precheck:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: [pwsh, powershell]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pester
+        shell: ${{ matrix.shell }}
+        run: |
+          Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run precheck tests
+        shell: ${{ matrix.shell }}
+        run: |
+          & ./tests/Invoke-Tests.ps1 -Mode Precheck -Verbosity Detailed

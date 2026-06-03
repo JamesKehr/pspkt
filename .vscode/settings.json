@@ -1,0 +1,11 @@
+{
+    "vscode-nmake-tools.workspaceBuildDirectories": [],
+    "vscode-nmake-tools.installOsRepoRustHelperExtension": false,
+    "vscode-nmake-tools.installRazzleSourcesFormatterExtension": false,
+    "chat.tools.terminal.autoApprove": {
+        "/^pwsh -NoProfile -File \\.\\\\tests\\\\Invoke-Tests\\.ps1 -Mode Precheck$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
