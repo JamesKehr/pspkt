@@ -1,0 +1,32 @@
+# --- Dev scratch (intentionally ignored; not part of the shipped module) ---
+scratch.ps1
+test.ps1
+*.bah
+class/class speed test.ps1
+function/PspktFilter-JAK-TOOLS.psm1
+
+# --- Editor / IDE ---
+.vs/
+*.suo
+*.user
+*.userprefs
+*.swp
+*~
+.idea/
+
+# --- OS noise ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Build / test outputs (not currently produced, future-proofing) ---
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+*.trx
+
+# --- Backups / temp ---
+*.bak
+*.orig
+*.tmp
