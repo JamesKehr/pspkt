@@ -131,5 +131,29 @@ Group:Component         Data Link       Network         Transport       Applicat
 ```
 
 But what you see in the terminal is this:
+
 <img width="1712" height="608" alt="image" src="https://github.com/user-attachments/assets/fda6bbab-3b51-454c-9a51-c9b79bd8d121" />
 
+## Captured, Drops, Missed, and BufferOverflow
+
+These four statistics are output every time a real-time pspkt session is ended. All numbers are exclusive, meaning Drops is not included in Captured, and so on. Here's what the statistics mean.
+
+#### Captured
+
+The total number of packets collected by pktmonapi. 
+
+#### Drops
+
+These are packets dropped inside of Windows for technical (corruption, malformed, duplicate, and so on) or security reasons, that pktmonapi knows about. The Reason provides a clue about where and why a packet was dropped. The Location is an opaque code. Meaning it's for Microsoft internal use only.
+
+Please rmemeber that a drop can be benign or unrelated to the data you are analyzing. But they can also be a clue, especially when analyzing firewall, antivirus, and Hyper-V.
+
+A note here about drops pktmonapi cannot see. Currently, pktmonapi can only see Windows related drops. Components that are not Windows in-box, and this technically includes Defender, can drop or discard a packet in a manner that pktmonapi cannot report. Pktmon, and by extension pspkt, can still provide clues because the packet will disappear within a TCP or WFP component. It just can't tell you what dropped it. Yet.
+
+#### Missed
+
+These are packets that pktmonapi knows existed inside of Windows, but was unable to collect due to performance, buffer limitations, or some other reason.
+
+#### BufferOverflow
+
+This is a pspkt specific statistic that equals the number of packets that pspkt knows about (see Captured) but was unable to collect. pspkt has an second buffer that is independent of pktmonapi. When this value is non-zero, it means pspkt could not keep up with the amount of incoming data.
