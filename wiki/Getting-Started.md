@@ -74,13 +74,14 @@ pspkt -i 2606:4700:4700::1111
 ## Capturing a Hyper-V VM
 
 ```powershell
-# By name (also auto-adds MAC filters per vmNIC)
+# By name — auto-adds a MAC filter per vmNIC to capture all VM traffic.
 pspkt -VMName 'Win11-Dev'
 
 # By VM object
 pspkt -VM (Get-VM 'Win11-Dev')
 
-# Constrain further with quick filters
+# Constrain further with quick filters. Each quick filter is AND-combined with
+# each vmNIC MAC, so only "(MAC=vmNIC AND TCP/445 AND IP=10.0.0.5)" matches.
 pspkt -VMName 'Win11-Dev' -SMB -i 10.0.0.5
 ```
 

@@ -48,17 +48,29 @@ pspkt -SMB -i 10.0.0.10
 ## Capture a Hyper-V VM
 
 ```powershell
-# By name — also auto-adds MAC filters for every vmNIC on the VM
+# By name — auto-adds a MAC filter per vmNIC.
+# pktmon filter: (MAC=vmNIC1) OR (MAC=vmNIC2) — all VM traffic.
 pspkt -VMName 'Win11-Dev'
 
 # By VM object
 pspkt -VM (Get-VM 'Win11-Dev')
 
-# All HTTPS to/from a VM
+# All HTTPS to/from a VM — every quick filter is AND-combined with each vmNIC MAC.
+# pktmon filter: (MAC=vmNIC AND TCP/443) per vmNIC. Only VM HTTPS traffic.
 pspkt -VMName 'Win11-Dev' -HTTPS
 
-# A specific destination IP inside the VM's traffic
+# A specific destination IP inside the VM's traffic (MAC AND IP per vmNIC).
 pspkt -VMName 'Win11-Dev' -i 10.0.0.5
+
+# Only SMB Create operations inside a VM (app-layer predicate scoped to vmNICs).
+pspkt -VMName 'Win11-Dev' -SmbCommand Create
+
+# DNS queries to a specific name inside a VM.
+pspkt -VMName 'Win11-Dev' -DnsName 'contoso\.com$' -DnsQR Query
+
+# Capture an OFF VM — host NIC fallback + MAC filter starts matching when the
+# VM starts. Works for Saved / Paused VMs too.
+pspkt -VMName 'Win11-Dev' -SmbCommand Create   # then: Start-VM Win11-Dev
 ```
 
 ## Catch drops

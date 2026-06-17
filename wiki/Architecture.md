@@ -38,7 +38,9 @@ A high-level tour of how pspkt captures, parses, and renders packets — useful 
 │    PacketLineFormatter.FormatBatch / FormatSinglePacket            │
 │    parserCommon.cs   — helpers, colorize                           │
 │    Transport/tcp.cs  — TcpParser                                   │
-│    Application/dns.cs, smb2.cs                                     │
+│    Network/ndp.cs    — NdpParser (NS/NA/RS/RA/Redirect detail)     │
+│    Application/dns.cs, tls.cs, http.cs, dhcp.cs, smb2.cs, icmp.cs  │
+│    Filter/*.cs       — typed app-layer display predicates          │
 └────────────────────────────────────────────────────────────────────┘
                               │
                               ▼

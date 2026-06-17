@@ -127,6 +127,45 @@ public static class PacketLineFormatter
     private static bool _icmpEchoOnly;
     private static bool _icmpNdpOnly;
 
+    // Application-layer display predicates. Evaluated by the consumer thread when
+    // _detailLevel >= 1 (Detailed/VeryDetailed). Never touched by the producer callback.
+    // Null = no predicate active for that protocol; the hot-path null check is branch-
+    // predicted false and effectively free when no predicate is configured.
+    private static DnsAppPredicate _dnsPredicate;
+    private static TlsAppPredicate _tlsPredicate;
+    private static HttpAppPredicate _httpPredicate;
+    private static DhcpAppPredicate _dhcpPredicate;
+    private static Smb2AppPredicate _smb2Predicate;
+    private static IcmpAppPredicate _icmpPredicate;
+
+    // Thread-static cache populated by the IPv4 fast-path gate in FormatSinglePacketInto
+    // when a DNS predicate accepts a packet. DetectUdpAppDetailed re-uses the cached
+    // parse instead of re-decoding the same payload. Invalidated at the top of every
+    // FormatSinglePacketInto call.
+    [ThreadStatic] private static DnsContext _dnsCtxCache;
+    [ThreadStatic] private static bool _dnsCtxCacheValid;
+
+    // Same pattern for TLS: populated by the IPv4 TCP fast-path gate when the
+    // predicate accepts; consumed by DetectTcpAppDetailed. Both invalidated by
+    // the cache-reset block at the top of FormatSinglePacketInto.
+    [ThreadStatic] private static TlsContext _tlsCtxCache;
+    [ThreadStatic] private static bool _tlsCtxCacheValid;
+
+    // Same pattern for HTTP: populated by the IPv4 TCP fast-path gate when the
+    // predicate accepts; consumed by DetectTcpAppDetailed.
+    [ThreadStatic] private static HttpContext _httpCtxCache;
+    [ThreadStatic] private static bool _httpCtxCacheValid;
+
+    // Same pattern for DHCP: populated by the IPv4 UDP fast-path gate when the
+    // predicate accepts; consumed by DetectUdpAppDetailed.
+    [ThreadStatic] private static DhcpContext _dhcpCtxCache;
+    [ThreadStatic] private static bool _dhcpCtxCacheValid;
+
+    // Sentinel returned by DetectUdpAppDetailed when an app-layer predicate rejects
+    // the packet. Reference-equality compared in callers so an actual DNS response
+    // that happens to render as the same characters won't collide.
+    internal static readonly string FilteredByPredicate = "\0__pspkt_app_predicate_filtered__\0";
+
     /// <summary>
     /// Configures display-level filtering for ICMP/ICMPv6 packets. pktmon driver filters
     /// cannot constrain on ICMP type, so this is applied in FormatSinglePacket.
@@ -139,6 +178,89 @@ public static class PacketLineFormatter
     {
         _icmpEchoOnly = echoOnly;
         _icmpNdpOnly = ndpOnly;
+    }
+
+    /// <summary>
+    /// Sets the DNS application-layer display predicate. Pass null to clear.
+    /// Predicate is evaluated by the consumer thread when ParsingLevel >= Detailed.
+    /// </summary>
+    public static void SetDnsPredicate(DnsAppPredicate p)
+    {
+        _dnsPredicate = p;
+    }
+
+    /// <summary>
+    /// Sets the TLS application-layer display predicate. Pass null to clear.
+    /// Predicate is evaluated by the consumer thread when ParsingLevel >= Detailed.
+    /// </summary>
+    public static void SetTlsPredicate(TlsAppPredicate p)
+    {
+        _tlsPredicate = p;
+    }
+
+    /// <summary>
+    /// Sets the HTTP application-layer display predicate. Pass null to clear.
+    /// Predicate is evaluated by the consumer thread when ParsingLevel >= Detailed.
+    /// </summary>
+    public static void SetHttpPredicate(HttpAppPredicate p)
+    {
+        _httpPredicate = p;
+    }
+
+    /// <summary>
+    /// Sets the DHCP application-layer display predicate. Pass null to clear.
+    /// Predicate is evaluated by the consumer thread when ParsingLevel >= Detailed.
+    /// </summary>
+    public static void SetDhcpPredicate(DhcpAppPredicate p)
+    {
+        _dhcpPredicate = p;
+    }
+
+    /// <summary>
+    /// Sets the SMB2 application-layer display predicate. Pass null to clear.
+    /// Predicate is evaluated by the consumer thread when ParsingLevel >= Detailed.
+    /// </summary>
+    public static void SetSmb2Predicate(Smb2AppPredicate p)
+    {
+        _smb2Predicate = p;
+    }
+
+    /// <summary>
+    /// Sets the ICMP / ICMPv6 / NDP application-layer display predicate. Pass null
+    /// to clear. Predicate is evaluated by the consumer thread when
+    /// ParsingLevel >= Detailed. Non-ICMP packets are unaffected (always pass).
+    /// </summary>
+    public static void SetIcmpPredicate(IcmpAppPredicate p)
+    {
+        _icmpPredicate = p;
+    }
+
+    /// <summary>
+    /// Clears all application-layer display predicates. Call from <c>Start-Pspkt</c>'s
+    /// finally block so a predicate from one capture never leaks into the next.
+    /// </summary>
+    public static void ClearAppPredicates()
+    {
+        _dnsPredicate  = null;
+        _tlsPredicate  = null;
+        _httpPredicate = null;
+        _dhcpPredicate = null;
+        _smb2Predicate = null;
+        _icmpPredicate = null;
+    }
+
+    /// <summary>True when any application-layer predicate is configured.</summary>
+    public static bool HasAppPredicate
+    {
+        get
+        {
+            return _dnsPredicate  != null
+                || _tlsPredicate  != null
+                || _httpPredicate != null
+                || _dhcpPredicate != null
+                || _smb2Predicate != null
+                || _icmpPredicate != null;
+        }
     }
 
     /// <summary>
@@ -848,7 +970,14 @@ public static class PacketLineFormatter
                 transportLayerIndex = 2;
                 if (icmpv6Type >= 133 && icmpv6Type <= 137)
                 {
-                    transportDetail = FormatNdpBasic(icmpv6Type);
+                    // Use the rich NDP parser which extracts per-message fields
+                    // (target / dest addresses, RA timers + flags, NS/NA target,
+                    // common NDP options).
+                    transportDetail = NdpParser.FormatNdpDetailed(rawPacketData, ipv6TransportOffset, ipv6TransportLength);
+                    if (string.IsNullOrEmpty(transportDetail))
+                    {
+                        transportDetail = FormatNdpBasic(icmpv6Type);
+                    }
                 }
                 else if ((icmpv6Type == 128 || icmpv6Type == 129) && ipv6TransportLength >= 8)
                 {
@@ -906,6 +1035,14 @@ public static class PacketLineFormatter
                 }
                 appDetail = DetectUdpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload);
             }
+        }
+
+        // App-layer predicate rejection sentinel — return false to drop the packet so
+        // FormatBatch rolls back any partial appends. Reference equality avoids any
+        // chance of collision with an actual formatted line.
+        if ((object)appDetail == (object)FilteredByPredicate)
+        {
+            return false;
         }
 
         if (networkDetail == null)
@@ -1301,13 +1438,13 @@ public static class PacketLineFormatter
     // HTTP port detection
     private static bool IsHttpPort(int port)
     {
-        return port == 80 || port == 8080 || port == 8000 || port == 8888;
+        return HttpParser.IsHttpPort(port);
     }
 
     // TLS port detection
     private static bool IsTlsPort(int port)
     {
-        return port == 443 || port == 8443 || port == 993 || port == 995 || port == 465 || port == 636;
+        return TlsParser.IsTlsPort(port);
     }
 
     // True when a TCP src/dst pair could match an app-layer detector (SMB2/HTTP/TLS).
@@ -1331,111 +1468,23 @@ public static class PacketLineFormatter
 
     private static string DetectHttpContent(byte[] data, int dataLen, int srcPort, int dstPort)
     {
-        if (data == null || data.Length < 4) return null;
-
-        // Check for HTTP response: "HTTP"
-        if (data[0] == 0x48 && data[1] == 0x54 && data[2] == 0x54 && data[3] == 0x50)
-        {
-            // Extract status line
-            int end = Math.Min(data.Length, 32);
-            for (int i = 4; i < end; i++)
-            {
-                if (data[i] == 0x0D || data[i] == 0x0A)
-                {
-                    end = i;
-                    break;
-                }
-            }
-            return System.Text.Encoding.ASCII.GetString(data, 0, end);
-        }
-
-        // Check for HTTP methods
-        string method = DetectHttpMethod(data);
-        if (method != null)
-        {
-            // Extract first line (method + path)
-            int end = Math.Min(data.Length, 64);
-            for (int i = 0; i < end; i++)
-            {
-                if (data[i] == 0x0D || data[i] == 0x0A)
-                {
-                    end = i;
-                    break;
-                }
-            }
-            return System.Text.Encoding.ASCII.GetString(data, 0, end);
-        }
-
-        return null;
+        // Delegates to HttpParser for the short-form Default-tier line (request/status
+        // line only, no headers).
+        return HttpParser.FormatHttpSegment(data, dataLen);
     }
 
     private static string DetectHttpMethod(byte[] data)
     {
-        if (data == null || data.Length < 3) return null;
-        // GET
-        if (data[0] == 'G' && data[1] == 'E' && data[2] == 'T' && data.Length > 3 && data[3] == ' ') return "GET";
-        // POST
-        if (data.Length >= 4 && data[0] == 'P' && data[1] == 'O' && data[2] == 'S' && data[3] == 'T') return "POST";
-        // PUT
-        if (data[0] == 'P' && data[1] == 'U' && data[2] == 'T' && data.Length > 3 && data[3] == ' ') return "PUT";
-        // DELETE
-        if (data.Length >= 6 && data[0] == 'D' && data[1] == 'E' && data[2] == 'L') return "DELETE";
-        // HEAD
-        if (data.Length >= 4 && data[0] == 'H' && data[1] == 'E' && data[2] == 'A' && data[3] == 'D') return "HEAD";
-        return null;
+        // Kept as a thin wrapper for any existing callers; HttpParser does the work.
+        HttpContext ctx;
+        if (!HttpParser.TryParseHttp(data, out ctx)) return null;
+        return ctx.IsRequest ? ctx.Method : null;
     }
 
     private static string DetectTlsContent(byte[] data, int dataLen)
     {
-        if (data == null || data.Length < 5) return null;
-        int contentType = data[0];
-        if (contentType < 20 || contentType > 23) return null;
-        int major = data[1];
-        int minor = data[2];
-        if (major != 3 || minor > 4) return null;
-
-        string typeName;
-        switch (contentType)
-        {
-            case 20: typeName = "ChangeCipherSpec"; break;
-            case 21: typeName = "Alert"; break;
-            case 22: typeName = "Handshake"; break;
-            case 23: typeName = "ApplicationData"; break;
-            default: typeName = "Type" + contentType; break;
-        }
-
-        int ver = (major << 8) | minor;
-        string verName;
-        switch (ver)
-        {
-            case 0x0301: verName = "TLS 1.0"; break;
-            case 0x0302: verName = "TLS 1.1"; break;
-            case 0x0303: verName = "TLS 1.2"; break;
-            case 0x0304: verName = "TLS 1.3"; break;
-            default: verName = "TLS " + major + "." + minor; break;
-        }
-
-        // For Handshake, try to identify the handshake type
-        if (contentType == 22 && data.Length >= 6)
-        {
-            int hsType = data[5];
-            string hsName;
-            switch (hsType)
-            {
-                case 1: hsName = "ClientHello"; break;
-                case 2: hsName = "ServerHello"; break;
-                case 11: hsName = "Certificate"; break;
-                case 12: hsName = "ServerKeyExchange"; break;
-                case 14: hsName = "ServerHelloDone"; break;
-                case 16: hsName = "ClientKeyExchange"; break;
-                case 20: hsName = "Finished"; break;
-                default: hsName = null; break;
-            }
-            if (hsName != null)
-                return verName + " " + hsName;
-        }
-
-        return verName + " " + typeName + ", len " + dataLen;
+        // Delegates to TlsParser for the short-form Default-tier line.
+        return TlsParser.FormatTlsSegment(data, dataLen);
     }
 
     private static string DetectTcpApp(int srcPort, int dstPort, byte[] data, int dataLen)
@@ -1480,28 +1529,8 @@ public static class PacketLineFormatter
 
     private static string FormatDhcpBasic(byte[] data, int srcPort, int dstPort)
     {
-        if (data == null || data.Length < 4) return null;
-        // DHCPv6
-        if (srcPort == 546 || srcPort == 547 || dstPort == 546 || dstPort == 547)
-        {
-            int msgType = data[0];
-            string typeName;
-            switch (msgType)
-            {
-                case 1: typeName = "Solicit"; break;
-                case 2: typeName = "Advertise"; break;
-                case 3: typeName = "Request"; break;
-                case 7: typeName = "Reply"; break;
-                case 11: typeName = "Information-request"; break;
-                default: typeName = "type " + msgType; break;
-            }
-            return "DHCPv6 " + typeName;
-        }
-        // DHCPv4 - minimum 240 bytes for valid DHCP
-        if (data.Length < 240) return null;
-        int op = data[0];
-        string opName = (op == 1) ? "Discover/Request" : (op == 2) ? "Offer/Ack" : "op" + op;
-        return "DHCP " + opName;
+        // Delegates to DhcpParser for the short-form Default-tier line.
+        return DhcpParser.FormatDhcpSegment(data, srcPort, dstPort);
     }
 
     private static int GetWifiPayloadOffset(byte[] raw)
@@ -1534,13 +1563,82 @@ public static class PacketLineFormatter
             return null;
 
         if ((srcPort == 445 || dstPort == 445) && Smb2Parser.IsSmb2Packet(data, srcPort, dstPort))
+        {
+            // IPv6 path (or any case where the IPv4 early gate didn't run):
+            // evaluate the predicate inline so the same drop semantics apply
+            // to IPv6 SMB2 traffic. FilteredByPredicate bubbles up through
+            // FormatDetailedLineInto to FormatBatch which rolls back any
+            // partial appends. The IPv4 fast path already returned false in
+            // FormatSinglePacketInto and never reaches here on reject.
+            if (_smb2Predicate != null)
+            {
+                Smb2Context sctx;
+                if (Smb2Parser.TryParseSmb2Header(data, srcPort, dstPort, out sctx))
+                {
+                    if (!_smb2Predicate.Evaluate(ref sctx)) return FilteredByPredicate;
+                }
+                else if (!_smb2Predicate.MatchTruncated)
+                {
+                    return FilteredByPredicate;
+                }
+            }
             return Smb2Parser.FormatSmb2Detailed(data, srcPort, dstPort);
+        }
 
         if (LooksLikeHttp(data))
+        {
+            // IPv4 fast path: predicate already ran in FormatSinglePacketInto and
+            // stashed the parsed context here. Format from cache to avoid a re-parse.
+            if (_httpCtxCacheValid)
+            {
+                _httpCtxCacheValid = false;
+                return HttpParser.FormatHttpFromContext(ref _httpCtxCache);
+            }
+
+            // IPv6 path (or any case where the early gate didn't run): evaluate inline.
+            // FilteredByPredicate bubbles up through FormatDetailedLineInto to FormatBatch
+            // which rolls back any partial appends.
+            if (_httpPredicate != null)
+            {
+                HttpContext hctx;
+                if (HttpParser.TryParseHttp(data, out hctx))
+                {
+                    if (!_httpPredicate.Evaluate(ref hctx)) return FilteredByPredicate;
+                    return HttpParser.FormatHttpFromContext(ref hctx);
+                }
+                // Unparseable HTTP payload — fall through to the legacy detailed formatter.
+            }
+
             return FormatHttpDetailed(data);
+        }
 
         if (LooksLikeTls(data))
+        {
+            // IPv4 fast path: predicate already ran in FormatSinglePacketInto and
+            // stashed the parsed context here. Format from cache to avoid a re-parse.
+            if (_tlsCtxCacheValid)
+            {
+                _tlsCtxCacheValid = false;
+                return TlsParser.FormatTlsFromContext(ref _tlsCtxCache, data.Length);
+            }
+
+            // IPv6 path (or any case where the early gate didn't run): evaluate inline.
+            // FilteredByPredicate bubbles up through FormatDetailedLineInto to FormatBatch
+            // which rolls back any partial appends.
+            if (_tlsPredicate != null)
+            {
+                TlsContext tctx;
+                if (TlsParser.TryParseTls(data, out tctx))
+                {
+                    if (!_tlsPredicate.Evaluate(ref tctx)) return FilteredByPredicate;
+                    return TlsParser.FormatTlsFromContext(ref tctx, data.Length);
+                }
+                // Unparseable TLS payload — fall through to whatever the legacy
+                // FormatTlsDetailed returns (will also be null in practice).
+            }
+
             return FormatTlsDetailed(data);
+        }
 
         return null;
     }
@@ -1551,264 +1649,123 @@ public static class PacketLineFormatter
             return null;
 
         if (srcPort == 53 || dstPort == 53 || srcPort == 5353 || dstPort == 5353)
+        {
+            // IPv4 fast path: FormatSinglePacketInto's gate parsed + accepted the
+            // packet and stashed the context here. Format from the cache to avoid
+            // re-parsing the same payload.
+            if (_dnsCtxCacheValid)
+            {
+                _dnsCtxCacheValid = false;
+                return DnsParser.FormatDnsFromContext(ref _dnsCtxCache, data.Length);
+            }
+
+            // IPv6 path (or any other case where the early gate didn't run): evaluate
+            // the predicate inline. The FilteredByPredicate sentinel bubbles up to the
+            // detailed format function which propagates a drop to FormatBatch.
+            if (_dnsPredicate != null)
+            {
+                DnsContext dctx;
+                if (DnsParser.TryParseDns(data, srcPort, dstPort, out dctx))
+                {
+                    if (!_dnsPredicate.Evaluate(ref dctx)) return FilteredByPredicate;
+                    return DnsParser.FormatDnsFromContext(ref dctx, data.Length);
+                }
+                if (!_dnsPredicate.MatchTruncated) return FilteredByPredicate;
+                // MatchTruncated=true with an unparseable packet falls through to the
+                // best-effort formatter below; it will likely return null too.
+            }
+
             return DnsParser.FormatDnsSegment(data, srcPort, dstPort);
+        }
 
         if (srcPort == 67 || srcPort == 68 || dstPort == 67 || dstPort == 68 ||
             srcPort == 546 || srcPort == 547 || dstPort == 546 || dstPort == 547)
+        {
+            // IPv4 fast path: predicate already ran in FormatSinglePacketInto and
+            // stashed the parsed context here. Format from cache to avoid a re-parse.
+            if (_dhcpCtxCacheValid)
+            {
+                _dhcpCtxCacheValid = false;
+                return DhcpParser.FormatDhcpFromContext(ref _dhcpCtxCache);
+            }
+
+            // IPv6 path (or any other case where the early gate didn't run):
+            // evaluate the predicate inline. The FilteredByPredicate sentinel
+            // bubbles up through FormatDetailedLineInto to FormatBatch which
+            // rolls back any partial appends.
+            if (_dhcpPredicate != null)
+            {
+                DhcpContext dhctx;
+                if (DhcpParser.TryParseDhcp(data, srcPort, dstPort, out dhctx))
+                {
+                    if (!_dhcpPredicate.Evaluate(ref dhctx)) return FilteredByPredicate;
+                    return DhcpParser.FormatDhcpFromContext(ref dhctx);
+                }
+                if (!_dhcpPredicate.MatchTruncated) return FilteredByPredicate;
+            }
+
             return FormatDhcpDetailed(data, srcPort, dstPort);
+        }
 
         return null;
     }
 
     private static bool LooksLikeHttp(byte[] data)
     {
-        if (data == null || data.Length < 4)
-            return false;
-
-        if (data[0] == 'H' && data[1] == 'T' && data[2] == 'T' && data[3] == 'P') return true;
-        if (data[0] == 'G' && data[1] == 'E' && data[2] == 'T' && data[3] == ' ') return true;
-        if (data.Length >= 5 && data[0] == 'P' && data[1] == 'O' && data[2] == 'S' && data[3] == 'T' && data[4] == ' ') return true;
-        if (data[0] == 'P' && data[1] == 'U' && data[2] == 'T' && data[3] == ' ') return true;
-        if (data.Length >= 5 && data[0] == 'H' && data[1] == 'E' && data[2] == 'A' && data[3] == 'D' && data[4] == ' ') return true;
-        if (data.Length >= 5 && data[0] == 'D' && data[1] == 'E' && data[2] == 'L' && data[3] == 'E') return true;
-        if (data.Length >= 5 && data[0] == 'O' && data[1] == 'P' && data[2] == 'T' && data[3] == 'I') return true;
-        if (data.Length >= 5 && data[0] == 'P' && data[1] == 'A' && data[2] == 'T' && data[3] == 'C') return true;
-        return false;
+        return HttpParser.LooksLikeHttp(data);
     }
 
     private static string FormatHttpDetailed(byte[] data)
     {
-        if (data == null || data.Length == 0)
-            return null;
-
-        int textLen = Math.Min(data.Length, 1024);
-        string text = Encoding.ASCII.GetString(data, 0, textLen);
-        string[] lines = text.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None);
-        if (lines.Length == 0 || string.IsNullOrEmpty(lines[0]))
-            return null;
-
-        StringBuilder sb = new StringBuilder(128);
-        sb.Append("HTTP - ");
-        sb.Append(lines[0].TrimEnd('\0'));
-
-        AppendHttpHeader(sb, lines, "Host");
-        AppendHttpHeader(sb, lines, "Content-Type");
-        AppendHttpHeader(sb, lines, "Content-Length");
-        return sb.ToString();
-    }
-
-    private static void AppendHttpHeader(StringBuilder sb, string[] lines, string name)
-    {
-        string prefix = name + ":";
-        for (int i = 1; i < lines.Length; i++)
-        {
-            string line = lines[i];
-            if (string.IsNullOrEmpty(line))
-                break;
-            if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                sb.Append("; ");
-                sb.Append(name);
-                sb.Append(": ");
-                sb.Append(line.Substring(prefix.Length).Trim());
-                return;
-            }
-        }
+        // Delegates to HttpParser. The single-call entry-point is preserved so the
+        // FormatDetailedLineInto TCP branch (which doesn't have access to the
+        // cached HttpContext from the IPv4 fast-path gate) keeps working unchanged.
+        HttpContext ctx;
+        if (!HttpParser.TryParseHttp(data, out ctx)) return null;
+        return HttpParser.FormatHttpFromContext(ref ctx);
     }
 
     private static bool LooksLikeTls(byte[] data)
     {
-        if (data == null || data.Length < 5)
-            return false;
-        int contentType = data[0];
-        if (contentType < 20 || contentType > 23)
-            return false;
-        int version = (data[1] << 8) | data[2];
-        return version >= 0x0300 && version <= 0x0304;
+        return TlsParser.LooksLikeTls(data);
     }
 
     private static string FormatTlsDetailed(byte[] data)
     {
-        if (!LooksLikeTls(data))
-            return null;
-
-        int contentType = data[0];
-        int version = (data[1] << 8) | data[2];
-        int recordLen = PacketParseHelper.ReadUInt16BE(data, 3);
-        string versionName = GetTlsVersionName(version);
-
-        if (contentType == 22 && data.Length >= 6)
-        {
-            string handshakeName = GetTlsHandshakeName(data[5]);
-            if (handshakeName != null)
-            {
-                StringBuilder sb = new StringBuilder(96);
-                sb.Append("TLS ");
-                sb.Append(handshakeName);
-                sb.Append("; ver: ");
-                sb.Append(versionName);
-                sb.Append("; len: ");
-                sb.Append(recordLen.ToString());
-                if (data[5] == 1)
-                {
-                    string sni = ExtractTlsSni(data);
-                    if (!string.IsNullOrEmpty(sni))
-                    {
-                        sb.Append("; SNI: ");
-                        sb.Append(sni);
-                    }
-                }
-                return sb.ToString();
-            }
-        }
-
-        return "TLS " + GetTlsContentTypeName(contentType) + "; ver: " + versionName + "; len: " + recordLen.ToString();
+        // Delegates to TlsParser. The single-call entry-point is preserved so the
+        // FormatDetailedLineInto TCP branch (which doesn't have access to the
+        // cached TlsContext from the IPv4 fast-path gate) keeps working unchanged.
+        TlsContext ctx;
+        if (!TlsParser.TryParseTls(data, out ctx)) return null;
+        return TlsParser.FormatTlsFromContext(ref ctx, data == null ? 0 : data.Length);
     }
 
     private static string ExtractTlsSni(byte[] data)
     {
-        if (data == null || data.Length < 43 || data[0] != 22 || data[5] != 1)
-            return null;
-
-        int recordLen = PacketParseHelper.ReadUInt16BE(data, 3);
-        int recordEnd = Math.Min(data.Length, 5 + recordLen);
-        int pos = 9;
-        if (recordEnd < pos + 34)
-            return null;
-
-        pos += 2;
-        pos += 32;
-        if (pos >= recordEnd)
-            return null;
-
-        int sessionIdLen = data[pos];
-        pos += 1;
-        if (pos + sessionIdLen + 2 > recordEnd)
-            return null;
-        pos += sessionIdLen;
-
-        int cipherLen = PacketParseHelper.ReadUInt16BE(data, pos);
-        pos += 2;
-        if (pos + cipherLen + 1 > recordEnd)
-            return null;
-        pos += cipherLen;
-
-        int compressionLen = data[pos];
-        pos += 1;
-        if (pos + compressionLen + 2 > recordEnd)
-            return null;
-        pos += compressionLen;
-
-        int extLen = PacketParseHelper.ReadUInt16BE(data, pos);
-        pos += 2;
-        int extEnd = Math.Min(recordEnd, pos + extLen);
-
-        while (pos + 4 <= extEnd)
-        {
-            int extType = PacketParseHelper.ReadUInt16BE(data, pos);
-            int itemLen = PacketParseHelper.ReadUInt16BE(data, pos + 2);
-            pos += 4;
-            if (pos + itemLen > extEnd)
-                break;
-
-            if (extType == 0 && itemLen >= 5)
-            {
-                int listLen = PacketParseHelper.ReadUInt16BE(data, pos);
-                int listPos = pos + 2;
-                int listEnd = Math.Min(pos + itemLen, listPos + listLen);
-                while (listPos + 3 <= listEnd)
-                {
-                    int nameType = data[listPos];
-                    int nameLen = PacketParseHelper.ReadUInt16BE(data, listPos + 1);
-                    listPos += 3;
-                    if (listPos + nameLen > listEnd)
-                        break;
-                    if (nameType == 0)
-                        return Encoding.ASCII.GetString(data, listPos, nameLen);
-                    listPos += nameLen;
-                }
-            }
-
-            pos += itemLen;
-        }
-
-        return null;
+        // Kept as a thin wrapper for any existing callers; TlsParser does the work.
+        TlsContext ctx;
+        if (!TlsParser.TryParseTls(data, out ctx)) return null;
+        return ctx.Sni;
     }
 
     private static string FormatDhcpDetailed(byte[] data, int srcPort, int dstPort)
     {
-        if (data == null || data.Length < 4)
-            return null;
-
-        if (srcPort == 546 || srcPort == 547 || dstPort == 546 || dstPort == 547)
-        {
-            int msgType = data[0];
-            int txid = (data[1] << 16) | (data[2] << 8) | data[3];
-            return "DHCPv6 " + GetDhcpV6MessageTypeName(msgType) + " - txid: 0x" + txid.ToString("x6");
-        }
-
-        if (data.Length < 240)
-            return null;
-
-        uint xid = PacketParseHelper.ReadUInt32BE(data, 4);
-        string chaddr = PacketParseHelper.FormatMac(data, 28);
-        string msgName = (data[0] == 1) ? "Request" : (data[0] == 2) ? "Reply" : "op " + data[0].ToString();
-        if (data.Length >= 244 && data[236] == 0x63 && data[237] == 0x82 && data[238] == 0x53 && data[239] == 0x63)
-        {
-            int pos = 240;
-            while (pos < data.Length)
-            {
-                int code = data[pos++];
-                if (code == 0)
-                    continue;
-                if (code == 255)
-                    break;
-                if (pos >= data.Length)
-                    break;
-                int len = data[pos++];
-                if (pos + len > data.Length)
-                    break;
-                if (code == 53 && len >= 1)
-                {
-                    msgName = GetDhcpV4MessageTypeName(data[pos]);
-                    break;
-                }
-                pos += len;
-            }
-        }
-
-        return "DHCP " + msgName + " - xid: 0x" + xid.ToString("x8") + "; chaddr: " + chaddr;
+        // Delegates to DhcpParser. Kept as a single-call entry-point so the
+        // FormatDetailedLineInto UDP branch (which doesn't have access to the
+        // cached DhcpContext from the IPv4 fast-path gate) keeps working unchanged.
+        DhcpContext ctx;
+        if (!DhcpParser.TryParseDhcp(data, srcPort, dstPort, out ctx)) return null;
+        return DhcpParser.FormatDhcpFromContext(ref ctx);
     }
 
     private static string GetDhcpV4MessageTypeName(int msgType)
     {
-        switch (msgType)
-        {
-            case 1: return "Discover";
-            case 2: return "Offer";
-            case 3: return "Request";
-            case 4: return "Decline";
-            case 5: return "Ack";
-            case 6: return "Nak";
-            case 7: return "Release";
-            case 8: return "Inform";
-            default: return "type " + msgType.ToString();
-        }
+        return DhcpParser.GetV4MessageTypeName(msgType);
     }
 
     private static string GetDhcpV6MessageTypeName(int msgType)
     {
-        switch (msgType)
-        {
-            case 1: return "Solicit";
-            case 2: return "Advertise";
-            case 3: return "Request";
-            case 4: return "Confirm";
-            case 5: return "Renew";
-            case 7: return "Reply";
-            case 11: return "Information-request";
-            default: return "type " + msgType.ToString();
-        }
+        return DhcpParser.GetV6MessageTypeName(msgType);
     }
 
     private static string GetDscpName(int dscp)
@@ -1867,46 +1824,6 @@ public static class PacketLineFormatter
         byte[] addr = new byte[16];
         Buffer.BlockCopy(data, offset, addr, 0, 16);
         return new System.Net.IPAddress(addr).ToString();
-    }
-
-    private static string GetTlsVersionName(int version)
-    {
-        switch (version)
-        {
-            case 0x0300: return "SSL 3.0";
-            case 0x0301: return "TLS 1.0";
-            case 0x0302: return "TLS 1.1";
-            case 0x0303: return "TLS 1.2";
-            case 0x0304: return "TLS 1.3";
-            default: return "0x" + version.ToString("x4");
-        }
-    }
-
-    private static string GetTlsContentTypeName(int contentType)
-    {
-        switch (contentType)
-        {
-            case 20: return "ChangeCipherSpec";
-            case 21: return "Alert";
-            case 22: return "Handshake";
-            case 23: return "ApplicationData";
-            default: return "type " + contentType.ToString();
-        }
-    }
-
-    private static string GetTlsHandshakeName(int handshakeType)
-    {
-        switch (handshakeType)
-        {
-            case 1: return "ClientHello";
-            case 2: return "ServerHello";
-            case 11: return "Certificate";
-            case 12: return "ServerKeyExchange";
-            case 14: return "ServerHelloDone";
-            case 16: return "ClientKeyExchange";
-            case 20: return "Finished";
-            default: return null;
-        }
     }
 
     // =========================================================================
@@ -1988,13 +1905,18 @@ public static class PacketLineFormatter
 
         for (int i = 0; i < count; i++)
         {
-            lineCounter++;
-            // Snapshot the buffer position so we can roll back on skip. FormatSinglePacketInto
-            // (and its inner *Into helpers) may append a partial line before deciding to bail
-            // — they leave whatever they wrote in place and return false; we truncate.
+            // Compute a *tentative* line counter and pass it to the formatter.
+            // Application-layer predicates can reject the packet (returning false
+            // from FormatSinglePacketInto with the StringBuilder rolled back to
+            // its pre-call length), and rejected packets must not consume a
+            // counter slot — otherwise the alternating-color choice in the
+            // formatter (which keys on lineCounter parity) gets gaps that look
+            // like a color-skipping bug. Only commit the increment on emit.
+            int tentativeCounter = lineCounter + 1;
             int lenBefore = sb.Length;
-            if (FormatSinglePacketInto(sb, ref buffer[i], lineCounter))
+            if (FormatSinglePacketInto(sb, ref buffer[i], tentativeCounter))
             {
+                lineCounter = tentativeCounter;
                 sb.Append('\n');
             }
             else if (sb.Length > lenBefore)
@@ -2071,6 +1993,14 @@ public static class PacketLineFormatter
     /// </summary>
     private static bool FormatSinglePacketInto(StringBuilder batchSb, ref PSPacketData pkt, int lineCounter)
     {
+        // Invalidate any thread-static app-layer parse cache from the previous packet
+        // so a stale context from a packet that took an unusual code path can't be
+        // consumed by Detect*AppDetailed on a non-matching packet.
+        _dnsCtxCacheValid  = false;
+        _tlsCtxCacheValid  = false;
+        _httpCtxCacheValid = false;
+        _dhcpCtxCacheValid = false;
+
         byte[] data = pkt.Data;
         // Use the packet's valid DataSize (not Data.Length) to avoid leaking pool slack
         // when Data is an oversized buffer rented from PacketBytePool.
@@ -2292,6 +2222,185 @@ public static class PacketLineFormatter
                 icmpType, icmpCode, icmpId, icmpSeq,
                 transportPayload, raw, rawOffset, rawLength);
         }
+
+        // App-layer display predicate gate — Detailed/+ only.
+        // IPv4 UDP DNS fast path: srcPort/dstPort/transportPayload are already populated
+        // by the IPv4 transport switch above (NeedsUdpPayload returns true for port 53/5353).
+        // Rejecting here short-circuits all detail-format work for the packet; accepted
+        // packets stash the parsed DnsContext for re-use by DetectUdpAppDetailed.
+        // IPv6 DNS is gated later inside DetectUdpAppDetailed via the FilteredByPredicate
+        // sentinel because the IPv6 transport parse lives inside FormatDetailedLineInto.
+        if (_detailLevel >= 1
+            && _dnsPredicate != null
+            && etherType == 0x0800
+            && protoKind == 3 /* UDP */
+            && transportPayload != null
+            && DnsParser.IsDnsPort(srcPort, dstPort))
+        {
+            DnsContext dctx;
+            if (DnsParser.TryParseDns(transportPayload, srcPort, dstPort, out dctx))
+            {
+                if (!_dnsPredicate.Evaluate(ref dctx)) return false;
+                _dnsCtxCache = dctx;
+                _dnsCtxCacheValid = true;
+            }
+            else if (!_dnsPredicate.MatchTruncated)
+            {
+                return false;
+            }
+        }
+
+        // IPv4 UDP DHCP fast path. NeedsUdpPayload already covers ports 67/68
+        // (DHCPv4) and 546/547 (DHCPv6) so transportPayload is allocated when
+        // the predicate is in play. IPv6 DHCP rides on the FilteredByPredicate
+        // sentinel from DetectUdpAppDetailed because the IPv6 transport parse
+        // lives later inside FormatDetailedLineInto.
+        if (_detailLevel >= 1
+            && _dhcpPredicate != null
+            && etherType == 0x0800
+            && protoKind == 3 /* UDP */
+            && transportPayload != null
+            && DhcpParser.IsDhcpPort(srcPort, dstPort))
+        {
+            DhcpContext dhctx;
+            if (DhcpParser.TryParseDhcp(transportPayload, srcPort, dstPort, out dhctx))
+            {
+                if (!_dhcpPredicate.Evaluate(ref dhctx)) return false;
+                _dhcpCtxCache = dhctx;
+                _dhcpCtxCacheValid = true;
+            }
+            else if (!_dhcpPredicate.MatchTruncated)
+            {
+                return false;
+            }
+        }
+
+        // IPv4 TCP TLS fast path. Same architecture as the DNS gate above; the
+        // IPv4 transport switch populates srcPort/dstPort/transportPayload for any
+        // TCP packet on a NeedsTcpPayload port (which already covers TLS ports).
+        // IPv6 TLS rides on the FilteredByPredicate sentinel returned from
+        // DetectTcpAppDetailed because the IPv6 transport parse lives later inside
+        // FormatDetailedLineInto.
+        if (_detailLevel >= 1
+            && _tlsPredicate != null
+            && etherType == 0x0800
+            && protoKind == 2 /* TCP */
+            && transportPayload != null
+            && (TlsParser.IsTlsPort(srcPort) || TlsParser.IsTlsPort(dstPort)))
+        {
+            TlsContext tctx;
+            if (TlsParser.TryParseTls(transportPayload, out tctx))
+            {
+                if (!_tlsPredicate.Evaluate(ref tctx)) return false;
+                _tlsCtxCache = tctx;
+                _tlsCtxCacheValid = true;
+            }
+            // If TryParseTls fails the payload isn't a TLS record at all (e.g. a
+            // mid-stream packet) — leave the cache invalid and let the format path
+            // render whatever it can. The predicate is intentionally not applied
+            // here because there is no TLS context to compare against.
+        }
+
+        // IPv4 TCP HTTP fast path. Same architecture; the transport switch already
+        // allocated transportPayload for any TCP packet on a NeedsTcpPayload port,
+        // which covers IsHttpPort. Mid-stream / non-first packets won't satisfy
+        // LooksLikeHttp and TryParseHttp will return false — leave the cache invalid
+        // and let the format path render whatever it can.
+        if (_detailLevel >= 1
+            && _httpPredicate != null
+            && etherType == 0x0800
+            && protoKind == 2 /* TCP */
+            && transportPayload != null
+            && (HttpParser.IsHttpPort(srcPort) || HttpParser.IsHttpPort(dstPort)))
+        {
+            HttpContext hctx;
+            if (HttpParser.TryParseHttp(transportPayload, out hctx))
+            {
+                if (!_httpPredicate.Evaluate(ref hctx)) return false;
+                _httpCtxCache = hctx;
+                _httpCtxCacheValid = true;
+            }
+        }
+
+        // IPv4 TCP SMB2 fast path. NeedsTcpPayload covers port 445 so transportPayload
+        // is allocated whenever the predicate could match. The legacy SMB2 formatters
+        // (FormatSmb2Segment / FormatSmb2Detailed) take the byte buffer directly and
+        // do their own per-command extraction, so this gate doesn't bother caching —
+        // on accept the formatter re-parses with its richer code path (~200 ns
+        // duplicate cost on matching packets, a deliberate trade-off to avoid
+        // refactoring the large per-command formatter functions).
+        if (_detailLevel >= 1
+            && _smb2Predicate != null
+            && etherType == 0x0800
+            && protoKind == 2 /* TCP */
+            && transportPayload != null
+            && (srcPort == 445 || dstPort == 445))
+        {
+            Smb2Context sctx;
+            if (Smb2Parser.TryParseSmb2Header(transportPayload, srcPort, dstPort, out sctx))
+            {
+                if (!_smb2Predicate.Evaluate(ref sctx)) return false;
+            }
+            else if (!_smb2Predicate.MatchTruncated)
+            {
+                // Not a recognisable SMB2 packet (e.g. mid-stream TCP segment).
+                // Drop unless the user opted into truncated matches.
+                return false;
+            }
+        }
+
+        // ICMP / ICMPv6 / NDP gate. Both families are handled here so a single
+        // user-supplied predicate can mix -IcmpType and -Icmpv6Type. Non-ICMP
+        // packets pass — the predicate is intentionally scoped to its protocol
+        // and doesn't drop e.g. TCP traffic merely because an ICMP filter is set.
+        if (_detailLevel >= 1 && _icmpPredicate != null)
+        {
+            if (etherType == 0x0800 && protoKind == 1)
+            {
+                // IPv4 ICMP: type/code already extracted by the IPv4 transport switch.
+                IcmpContext ictx;
+                ictx.Valid     = true;
+                ictx.IsV6      = false;
+                ictx.Type      = icmpType;
+                ictx.Code      = icmpCode;
+                ictx.NdpTarget = null;
+                if (!_icmpPredicate.Evaluate(ref ictx)) return false;
+            }
+            else if (etherType == 0x86DD)
+            {
+                // IPv6: walk extension headers to find the ICMPv6 type byte.
+                // Mirrors ShouldDropForIcmpFilter's approach but extends to NDP target
+                // extraction for NS (135) / NA (136). Non-ICMPv6 IPv6 packets pass.
+                int upperProto, upperOff;
+                if (rawLength >= ipOffset + 40
+                    && PacketParseHelper.FindIPv6UpperLayer(raw, rawOffset + ipOffset, rawOffset + rawLength, out upperProto, out upperOff)
+                    && upperProto == 58
+                    && rawOffset + rawLength > upperOff + 4)
+                {
+                    IcmpContext ictx;
+                    ictx.Valid     = true;
+                    ictx.IsV6      = true;
+                    ictx.Type      = raw[upperOff];
+                    ictx.Code      = raw[upperOff + 1];
+                    ictx.NdpTarget = null;
+                    // NS / NA body: 4-byte reserved/flags then 16-byte target address.
+                    // upperOff points at the ICMPv6 type byte, so the target sits at
+                    // upperOff + 4 (header) + 4 (reserved) = upperOff + 8.
+                    if ((ictx.Type == 135 || ictx.Type == 136)
+                        && rawOffset + rawLength >= upperOff + 8 + 16)
+                    {
+                        byte[] addr = new byte[16];
+                        Buffer.BlockCopy(raw, upperOff + 8, addr, 0, 16);
+                        ictx.NdpTarget = new System.Net.IPAddress(addr).ToString();
+                    }
+                    if (!_icmpPredicate.Evaluate(ref ictx)) return false;
+                }
+                // Non-ICMPv6 IPv6 packets (or packets where the extension-header
+                // walk failed) pass — the predicate is ICMP-scoped.
+            }
+            // Non-IP packets pass — same rationale.
+        }
+
         if (_detailLevel >= 1)
         {
             if ((_icmpEchoOnly || _icmpNdpOnly) && IsIcmpFiltered(etherType, protoKind, icmpType, raw, rawOffset, rawLength, ipOffset))

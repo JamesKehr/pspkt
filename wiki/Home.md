@@ -8,7 +8,7 @@
 - **Zero per-packet PowerShell overhead.** A native callback writes into a lock-free SPSC ring buffer; a single PS consumer loop calls a C# bulk formatter and `[Console]::Write`s the result.
 - **Pooled packet buffers**, **AutoResetEvent signaling**, and **cache-line padded** ring indices keep allocation rate and lock contention low.
 - **Quick filters** (`-DNS`, `-SMB`, `-Ping`, etc.) plus a single `-IPAddress` AND-merge that combines into every filter.
-- **VM-scoped capture** via `-VM` / `-VMName` (auto-adds MAC filters per vmNIC).
+- **VM-scoped capture** via `-VM` / `-VMName`. Every quick filter and application-layer predicate is AND-combined with each vmNIC MAC, so capture stays inside the VM's network data path.
 - **Drop triggers** (pause/stop on drop reason or location).
 - **pcapng file write** in async mode with optional **rotation** (`-FileSize` + `-NumFiles`).
 
@@ -59,6 +59,7 @@ pspkt -WriteFile capture.pcapng -FileSize 100 -NumFiles 5
 | [Display](./Display.md) | Detail level, spacing, timestamps, component map, capture header |
 | [Color Profiles](./Color-Profiles.md) | Manage and preview ANSI color schemes |
 | [Quick Filters](./Quick-Filters.md) | Reference of all `-DNS`/`-SMB`/`-Ping`/etc. switches |
+| [Application Filters](./Application-Filters.md) | Display-side payload filters (DNS name, RCODE, etc.) |
 | [Drop Triggers](./Drop-Triggers.md) | Pause/stop on drop reason or location |
 | [Architecture](./Architecture.md) | How pspkt works internally |
 | [Examples](./Examples.md) | Common workflows and recipes |

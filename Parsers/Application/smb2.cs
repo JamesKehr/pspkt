@@ -7,6 +7,44 @@ using System.Collections.Generic;
 using System.Text;
 
 /// <summary>
+/// Parsed SMB2 header snapshot used by application-layer display predicates
+/// (<see cref="Smb2AppPredicate"/>). Populated by
+/// <see cref="Smb2Parser.TryParseSmb2Header"/>.
+///
+/// Only header fields plus per-command Filename (Create) / TreePath
+/// (TreeConnect) are extracted; everything else needed for display continues
+/// to come from the legacy <see cref="Smb2Parser.FormatSmb2Segment"/> /
+/// <see cref="Smb2Parser.FormatSmb2Detailed"/> formatters.
+/// </summary>
+public struct Smb2Context
+{
+    /// <summary>True when the SMB2 header (or Transform header) was parsed successfully.</summary>
+    public bool   Valid;
+    /// <summary>True when the per-command body extraction (filename / tree path) was started but couldn't be completed within data.Length.</summary>
+    public bool   Truncated;
+    /// <summary>True for SMB2 Transform-header (encrypted) packets. Other fields are largely unavailable when set.</summary>
+    public bool   IsEncrypted;
+    /// <summary>True when the FLAGS field has SMB2_FLAGS_SERVER_TO_REDIR set.</summary>
+    public bool   IsResponse;
+    /// <summary>True when this packet starts a compounded chain (NextCommand &gt; 0).</summary>
+    public bool   IsCompounded;
+    /// <summary>SMB2 command code (e.g. 0x05 = Create, 0x09 = Write).</summary>
+    public int    Command;
+    /// <summary>NT status code from the header. 0 = SUCCESS.</summary>
+    public uint   Status;
+    /// <summary>SMB2 MessageId (informational, not filtered).</summary>
+    public ulong  MessageId;
+    /// <summary>Session ID from the header.</summary>
+    public ulong  SessionId;
+    /// <summary>Tree ID from the header.</summary>
+    public uint   TreeId;
+    /// <summary>Filename extracted from a Create request body. Null otherwise.</summary>
+    public string Filename;
+    /// <summary>Share path extracted from a TreeConnect request body. Null otherwise.</summary>
+    public string TreePath;
+}
+
+/// <summary>
 /// High-performance MS-SMB2 parser. All methods are static for zero-allocation hot-path usage.
 /// Handles compounded requests, async responses, and extracts key fields per command type.
 /// </summary>
@@ -940,5 +978,123 @@ public static class Smb2Parser
                ((ulong)data[offset + 2] << 16) | ((ulong)data[offset + 3] << 24) |
                ((ulong)data[offset + 4] << 32) | ((ulong)data[offset + 5] << 40) |
                ((ulong)data[offset + 6] << 48) | ((ulong)data[offset + 7] << 56);
+    }
+
+    /// <summary>
+    /// Parses just the SMB2 (or Transform) header plus the minimum body needed
+    /// by the application-layer predicate: filename for Create requests, share
+    /// path for TreeConnect requests. Returns false when the payload isn't a
+    /// recognisable SMB2 packet for the given ports.
+    ///
+    /// Designed to be cheap enough to run on every TCP/445 packet when an SMB2
+    /// predicate is configured. The legacy <see cref="FormatSmb2Segment"/> /
+    /// <see cref="FormatSmb2Detailed"/> formatters take the byte buffer directly
+    /// and re-do their own per-command extraction; the small re-parse cost on
+    /// matching packets is a deliberate trade-off to avoid refactoring the
+    /// large per-command formatter functions.
+    /// </summary>
+    public static bool TryParseSmb2Header(byte[] data, int srcPort, int dstPort, out Smb2Context ctx)
+    {
+        ctx = default(Smb2Context);
+        if (!IsSmb2Packet(data, srcPort, dstPort)) return false;
+
+        // Same Direct TCP framing skip as the formatters.
+        int offset = 0;
+        if (data[0] == 0x00 && data.Length >= 8)
+        {
+            uint probe = (uint)(data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24));
+            if (probe == SMB2_MAGIC || probe == SMB2_TRANSFORM_MAGIC)
+                offset = 4;
+        }
+        if (data.Length < offset + 4) return false;
+        uint headerMagic = (uint)(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24));
+
+        // Transform header — only the session ID is reachable; everything else
+        // is encrypted. Mark IsEncrypted and stop.
+        if (headerMagic == SMB2_TRANSFORM_MAGIC)
+        {
+            ctx.IsEncrypted = true;
+            if (data.Length >= offset + 52)
+            {
+                ctx.SessionId = ReadUInt64LE(data, offset + 44);
+            }
+            ctx.Valid = true;
+            return true;
+        }
+
+        if (headerMagic != SMB2_MAGIC) return false;
+        if (data.Length < offset + 64) return false;
+        ushort structSize = ReadUInt16LE(data, offset + 4);
+        if (structSize != 64) return false;
+
+        ctx.Status       = ReadUInt32LE(data, offset + 8);
+        ctx.Command      = ReadUInt16LE(data, offset + 12);
+        uint flags       = ReadUInt32LE(data, offset + 16);
+        uint nextCommand = ReadUInt32LE(data, offset + 20);
+        ctx.MessageId    = ReadUInt64LE(data, offset + 24);
+        ctx.TreeId       = ReadUInt32LE(data, offset + 36);
+        ctx.SessionId    = ReadUInt64LE(data, offset + 40);
+        ctx.IsResponse   = (flags & 0x00000001) != 0;
+        ctx.IsCompounded = nextCommand != 0;
+
+        int bodyOff = offset + 64;
+        int bodyLen = data.Length - bodyOff;
+
+        // Per-command extraction for the only two predicate-relevant fields.
+        // Layouts mirror the existing formatter extractions verbatim so behavior
+        // stays consistent.
+        if (!ctx.IsResponse)
+        {
+            if (ctx.Command == 0x0005 && bodyLen >= 56) // CREATE request
+            {
+                ushort nameOffset = ReadUInt16LE(data, bodyOff + 44);
+                ushort nameLength = ReadUInt16LE(data, bodyOff + 46);
+                int absStart = offset + nameOffset;
+                if (nameLength > 0 && absStart >= 0 && absStart + nameLength <= data.Length)
+                {
+                    ctx.Filename = DecodeUtf16Le(data, absStart, nameLength);
+                }
+                else if (nameLength > 0)
+                {
+                    ctx.Truncated = true;
+                }
+            }
+            else if (ctx.Command == 0x0003 && bodyLen >= 8) // TREE_CONNECT request
+            {
+                ushort pathOffset = ReadUInt16LE(data, bodyOff + 4);
+                ushort pathLength = ReadUInt16LE(data, bodyOff + 6);
+                int absStart = offset + pathOffset;
+                if (pathLength > 0 && absStart >= 0 && absStart + pathLength <= data.Length)
+                {
+                    ctx.TreePath = DecodeUtf16Le(data, absStart, pathLength);
+                }
+                else if (pathLength > 0)
+                {
+                    ctx.Truncated = true;
+                }
+            }
+        }
+
+        ctx.Valid = true;
+        return true;
+    }
+
+    // Standalone UTF-16LE decoder — does not require access to ExtractUnicodeString's
+    // private state. Stops on first NUL pair to match the existing formatter behavior.
+    private static string DecodeUtf16Le(byte[] data, int offset, int length)
+    {
+        if (data == null || length <= 0) return null;
+        if (offset < 0 || offset + length > data.Length) return null;
+        // Length is in bytes; ensure even.
+        int byteLen = length & ~1;
+        if (byteLen == 0) return string.Empty;
+        try
+        {
+            return Encoding.Unicode.GetString(data, offset, byteLen);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

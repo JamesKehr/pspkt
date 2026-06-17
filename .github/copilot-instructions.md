@@ -26,11 +26,12 @@ This module must remain compatible with **Windows PowerShell 5.1**. Avoid PS 7+-
    - Utility classes: `BitUtils` (big-endian helpers), `PAUtils` (MAC address conversion)
    - Enums: `pspktEnum.psm1` (protocol numbers, ICMP types, pktmon direction/drop enums)
 3. **Real-time formatters** (`Parsers/`) – The hot-path display/file-write pipeline:
-   - `Parsers/parserCommon.cs` + `Parsers/packetLineFormatter.cs` + protocol-specific `.cs` files (`Transport/tcp.cs`, `Application/dns.cs`, `Application/smb2.cs`) – compiled by `Add-Type` inside `Parsers/libParser.psm1`. `PacketLineFormatter.FormatBatch` is the C# entry point the consumer loop calls.
+   - `Parsers/parserCommon.cs` + `Parsers/packetLineFormatter.cs` + protocol-specific `.cs` files (`Transport/tcp.cs`, `Network/ndp.cs`, `Application/dns.cs`, `Application/tls.cs`, `Application/http.cs`, `Application/dhcp.cs`, `Application/smb2.cs`, `Application/icmp.cs`) – compiled by `Add-Type` inside `Parsers/libParser.psm1`. `PacketLineFormatter.FormatBatch` is the C# entry point the consumer loop calls.
    - `Parsers/{DataLink,Network,Transport,Application}/*.psm1` – per-protocol PowerShell helpers loaded by `libParser.psm1` (ethernet, ipv4/ipv6, icmp, ndp, arp, tcp, dns, dhcp, http, smb2).
+   - `Parsers/Filter/*.cs` – application-layer display predicates (e.g. `DnsAppPredicate`, `TlsAppPredicate`, `HttpAppPredicate`, `DhcpAppPredicate`, `Smb2AppPredicate`, `IcmpAppPredicate`). Evaluated on the consumer thread when `_detailLevel >= 1` (Detailed/VeryDetailed). Set via `[PacketLineFormatter]::SetDnsPredicate(...)` / `SetTlsPredicate` / `SetHttpPredicate` / `SetDhcpPredicate` / `SetSmb2Predicate` / `SetIcmpPredicate`, cleared via `::ClearAppPredicates()`. Always cleared in `Start-Pspkt`'s finally block so predicate state never leaks across captures.
    - `Parsers/libParser.psm1` – owns display state (`$script:DetailLevel`, `$script:ShowTimestamp`, `$script:ColorScheme`, `$script:ComponentMap`) and exports the `*-Pspkt*ColorProfile`, `*-PspktDetail*`, `*-PspktShowTimestamp`, `*-PspktComponentMap`, and `Get-PspktCaptureHeader` cmdlets.
    - `Parsers/ColorProfiles/*.psd1` – built-in color schemes; `active.txt` records the currently active profile name.
-4. **Public functions** (`function/*.psm1`) – Verb-Noun cmdlets (`New-`, `Get-`, `Set-`, `Add-`, `Remove-`) for Filter, Component, and Session, plus `Start-Pspkt` / `Stop-Pspkt`. These are the user-facing capture/management API.
+4. **Public functions** (`function/*.psm1`) – Verb-Noun cmdlets (`New-`, `Get-`, `Set-`, `Add-`, `Remove-`) for Filter, Component, and Session, plus `Start-Pspkt` / `Stop-Pspkt` (`function/PspktSession.psm1` owns the capture consumer loop). These are the user-facing capture/management API. Note: `ConvertTo-PspktIpAddress` is defined inline at the bottom of `pspkt.psm1`, not under `function/`.
 
 ### Hot path: no PowerShell per packet
 
@@ -112,8 +113,11 @@ pwsh -File .\tests\Invoke-Tests.ps1 -Mode Precheck
 # Run only unit tests (requires elevated shell)
 pwsh -File .\tests\Invoke-Tests.ps1 -Mode Unit
 
-# Run a single test by name
-Invoke-Pester -Path .\tests -Filter @{ FullName = '*converts IPv4*' }
+# Run a single test by name (Pester 5 uses -FullNameFilter, not -Filter)
+Invoke-Pester -Path .\tests -FullNameFilter '*converts IPv4*'
+
+# Run a single test by tag
+Invoke-Pester -Path .\tests -TagFilter 'Precheck'
 ```
 
 - **Precheck** tests validate file presence, function definitions, help blocks, and the exported command list – no admin needed.
@@ -124,3 +128,11 @@ Invoke-Pester -Path .\tests -Filter @{ FullName = '*converts IPv4*' }
 ## CI
 
 GitHub Actions workflows in `.github/workflows/` use a matrix of `pwsh` (PS 7+) and `powershell` (Windows PS 5.1) shells to validate both editions. `ci-precheck.yml` runs Precheck tests on `windows-latest` for pushes and PRs. Unit tests require an elevated runner (see `ci-unit-elevated-example.yml`).
+
+## Build and install
+
+There is **no build step** – the module is pure source. `Add-Type` compiles the embedded C# at module-import time, so any change to `class/pspkt.cs` or any `Parsers/*.cs` file takes effect on the next `Import-Module pspkt -Force` in a fresh PowerShell session (compiled assemblies cannot be unloaded from a running process; restart the shell after C# edits). For local install, copy the repo root into `$HOME\Documents\PowerShell\Modules\pspkt` (Core) or `$HOME\Documents\WindowsPowerShell\Modules\pspkt` (Desktop). The manifest (`pspkt.psd1`) only formally exports `ConvertTo-PspktIpAddress` via `FunctionsToExport`; everything else is surfaced through `Export-ModuleMember` in `pspkt.psm1` because the module is loaded via `Import-Module` on the `.psm1` directly during development.
+
+## User-facing documentation
+
+`wiki/*.md` (rendered on the GitHub wiki) is the canonical end-user reference for cmdlet behavior, quick filters, color profiles, drop triggers, and capture examples. When changing user-visible behavior of an exported cmdlet, update the corresponding wiki page (e.g., `wiki/Start-Pspkt.md`, `wiki/Filters.md`, `wiki/Quick-Filters.md`) in the same change.
