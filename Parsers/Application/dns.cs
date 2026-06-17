@@ -5,6 +5,45 @@ using System;
 using System.Text;
 
 /// <summary>
+/// Parsed DNS packet snapshot. Populated by <see cref="DnsParser.TryParseDns"/>
+/// and consumed both by the formatter (<see cref="DnsParser.FormatDnsFromContext"/>)
+/// and by application-layer display predicates (<see cref="DnsAppPredicate"/>).
+///
+/// Storing parsed fields in a struct (rather than re-parsing for the predicate
+/// and again for the formatter) keeps the consumer hot path to a single DNS
+/// parse per matching packet.
+/// </summary>
+public struct DnsContext
+{
+    /// <summary>True when the DNS header was parsed successfully (>= 12 bytes).</summary>
+    public bool   Valid;
+    /// <summary>True when the source/dest port indicates mDNS (5353).</summary>
+    public bool   IsMdns;
+    /// <summary>True when the question section couldn't be fully read (packet truncation).</summary>
+    public bool   Truncated;
+    /// <summary>DNS transaction ID.</summary>
+    public ushort TxId;
+    /// <summary>0 = query, 1 = response.</summary>
+    public int    Qr;
+    /// <summary>RCODE from the response flags. 0 (NoError) for queries.</summary>
+    public int    Rcode;
+    /// <summary>First-question QTYPE (e.g. 1 = A, 28 = AAAA). 0 when no question.</summary>
+    public int    QType;
+    /// <summary>First-question QNAME with trailing dot, e.g. "example.com.".</summary>
+    public string QName;
+    /// <summary>Question/answer/authority/additional counts.</summary>
+    public ushort QdCount;
+    /// <summary>Question/answer/authority/additional counts.</summary>
+    public ushort AnCount;
+    /// <summary>Question/answer/authority/additional counts.</summary>
+    public ushort NsCount;
+    /// <summary>Question/answer/authority/additional counts.</summary>
+    public ushort ArCount;
+    /// <summary>Pre-formatted first-answer string (e.g. "host.example.com. A 1.2.3.4"); null if none.</summary>
+    public string FirstAnswer;
+}
+
+/// <summary>
 /// DNS protocol parser. Provides fast C# parsing of DNS headers, name decompression,
 /// and tcpdump-style formatting for real-time packet display.
 /// </summary>
@@ -118,74 +157,100 @@ public static class DnsParser
     }
 
     /// <summary>
+    /// Parses a DNS packet payload into a structured <see cref="DnsContext"/>.
+    /// Performs header decode, first-question name+type extraction (with compression
+    /// pointer support), and — for responses — first-answer formatting.
+    /// Returns false when the buffer is too short to contain a DNS header.
+    /// On a partial parse (truncated question section), returns true and sets
+    /// <see cref="DnsContext.Truncated"/>.
+    /// </summary>
+    public static bool TryParseDns(byte[] data, int srcPort, int dstPort, out DnsContext ctx)
+    {
+        ctx = default(DnsContext);
+        if (data == null || data.Length < 12) return false;
+
+        ctx.IsMdns  = (srcPort == 5353 || dstPort == 5353);
+        ctx.TxId    = PacketParseHelper.ReadUInt16BE(data, 0);
+        ushort flags = PacketParseHelper.ReadUInt16BE(data, 2);
+        ctx.Qr      = (flags >> 15) & 1;
+        ctx.Rcode   = flags & 0xF;
+        ctx.QdCount = PacketParseHelper.ReadUInt16BE(data, 4);
+        ctx.AnCount = PacketParseHelper.ReadUInt16BE(data, 6);
+        ctx.NsCount = PacketParseHelper.ReadUInt16BE(data, 8);
+        ctx.ArCount = PacketParseHelper.ReadUInt16BE(data, 10);
+
+        int pos = 12;
+        if (ctx.QdCount > 0 && pos < data.Length)
+        {
+            int nameBytes;
+            ctx.QName = ReadName(data, pos, out nameBytes);
+            pos += nameBytes;
+            if (pos + 4 <= data.Length)
+            {
+                ctx.QType = PacketParseHelper.ReadUInt16BE(data, pos);
+                pos += 4; // skip QTYPE + QCLASS
+            }
+            else
+            {
+                ctx.Truncated = true;
+            }
+        }
+        else
+        {
+            ctx.QName = ".";
+        }
+
+        // For responses, try to extract the first answer record for display.
+        if (ctx.Qr == 1 && ctx.AnCount > 0 && pos < data.Length)
+        {
+            ctx.FirstAnswer = ExtractFirstAnswer(data, pos);
+        }
+
+        ctx.Valid = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Formats a previously parsed <see cref="DnsContext"/> into a tcpdump-style
+    /// one-liner. Equivalent to <see cref="FormatDnsSegment"/> but avoids re-parsing.
+    /// </summary>
+    public static string FormatDnsFromContext(ref DnsContext ctx, int payloadLen)
+    {
+        if (!ctx.Valid) return null;
+        string prefix = ctx.IsMdns ? "mDNS" : "DNS";
+        string qTypeName = GetTypeName(ctx.QType);
+
+        if (ctx.Qr == 0)
+        {
+            return string.Concat(prefix, " ", ctx.TxId.ToString(), "+ ", qTypeName, "? ", ctx.QName, " (", payloadLen.ToString(), ")");
+        }
+
+        string rcodePart = (ctx.Rcode != 0) ? GetRcodeName(ctx.Rcode) + " " : "";
+        string counts = ctx.AnCount.ToString() + "/" + ctx.NsCount.ToString() + "/" + ctx.ArCount.ToString();
+
+        if (ctx.FirstAnswer != null)
+        {
+            return string.Concat(prefix, " ", ctx.TxId.ToString(), " ", rcodePart, counts, " ", ctx.FirstAnswer, " (", payloadLen.ToString(), ")");
+        }
+        return string.Concat(prefix, " ", ctx.TxId.ToString(), " ", rcodePart, counts, " ", qTypeName, " ", ctx.QName, " (", payloadLen.ToString(), ")");
+    }
+
+    /// <summary>
     /// Formats a DNS packet payload into a tcpdump-style one-liner.
     /// Query:    "DNS 1234+ A? www.example.com. (45)"
     /// Response: "DNS 1234 1/0/0 A 93.184.216.34 (62)"
     /// Returns null if data is too short.
+    ///
+    /// Kept as a single-call convenience wrapper around
+    /// <see cref="TryParseDns"/> + <see cref="FormatDnsFromContext"/> so the
+    /// Default-tier formatters that don't need access to the parsed context
+    /// can continue to use one call.
     /// </summary>
     public static string FormatDnsSegment(byte[] data, int srcPort, int dstPort)
     {
-        if (data == null || data.Length < 12) return null;
-
-        bool isMdns = (srcPort == 5353 || dstPort == 5353);
-        string prefix = isMdns ? "mDNS" : "DNS";
-        int payloadLen = data.Length;
-
-        // DNS header: ID(2) Flags(2) QDCOUNT(2) ANCOUNT(2) NSCOUNT(2) ARCOUNT(2)
-        ushort txId = PacketParseHelper.ReadUInt16BE(data, 0);
-        ushort flags = PacketParseHelper.ReadUInt16BE(data, 2);
-        int qr = (flags >> 15) & 1;
-        int rcode = flags & 0xF;
-        ushort qdCount = PacketParseHelper.ReadUInt16BE(data, 4);
-        ushort anCount = PacketParseHelper.ReadUInt16BE(data, 6);
-        ushort nsCount = PacketParseHelper.ReadUInt16BE(data, 8);
-        ushort arCount = PacketParseHelper.ReadUInt16BE(data, 10);
-
-        int pos = 12;
-
-        // Parse first question.
-        string qName = "?";
-        int qType = 0;
-        if (qdCount > 0 && pos < data.Length)
-        {
-            int nameBytes;
-            qName = ReadName(data, pos, out nameBytes);
-            pos += nameBytes;
-            if (pos + 4 <= data.Length)
-            {
-                qType = PacketParseHelper.ReadUInt16BE(data, pos);
-                pos += 4; // skip QTYPE + QCLASS
-            }
-        }
-        string qTypeName = GetTypeName(qType);
-
-        // Query format.
-        if (qr == 0)
-        {
-            return string.Concat(prefix, " ", txId.ToString(), "+ ", qTypeName, "? ", qName, " (", payloadLen.ToString(), ")");
-        }
-
-        // Response format.
-        string rcodePart = "";
-        if (rcode != 0)
-        {
-            rcodePart = GetRcodeName(rcode) + " ";
-        }
-
-        string counts = anCount.ToString() + "/" + nsCount.ToString() + "/" + arCount.ToString();
-
-        // Try to extract first answer.
-        string firstAnswer = null;
-        if (anCount > 0 && pos < data.Length)
-        {
-            firstAnswer = ExtractFirstAnswer(data, pos);
-        }
-
-        if (firstAnswer != null)
-        {
-            return string.Concat(prefix, " ", txId.ToString(), " ", rcodePart, counts, " ", firstAnswer, " (", payloadLen.ToString(), ")");
-        }
-        return string.Concat(prefix, " ", txId.ToString(), " ", rcodePart, counts, " ", qTypeName, " ", qName, " (", payloadLen.ToString(), ")");
+        DnsContext ctx;
+        if (!TryParseDns(data, srcPort, dstPort, out ctx)) return null;
+        return FormatDnsFromContext(ref ctx, data.Length);
     }
 
     /// <summary>

@@ -2,7 +2,11 @@
 
 Quick filters are switch parameters on [`Start-Pspkt`](./Start-Pspkt.md) that auto-create one or more pktmon capture filters for common protocols. Multiple quick filters can be combined — pktmon filters are OR'd at the driver level, so `-DNS -SMB` captures DNS **or** SMB traffic.
 
-When [`-IPAddress` (`-i`)](./Start-Pspkt.md#parameters) is supplied alongside a quick filter, the IP is **AND-merged into every** quick filter (not added as a separate OR filter). So `-DNS -i 1.1.1.1` becomes "DNS to/from 1.1.1.1" rather than "DNS OR 1.1.1.1". The same applies to [`-VM` / `-VMName`](./Start-Pspkt.md#parameters) MAC filters.
+When [`-IPAddress` (`-i`)](./Start-Pspkt.md#parameters) is supplied alongside a quick filter, the IP is **AND-merged into every** quick filter (not added as a separate OR filter). So `-DNS -i 1.1.1.1` becomes "DNS to/from 1.1.1.1" rather than "DNS OR 1.1.1.1".
+
+When [`-VM` / `-VMName`](./Start-Pspkt.md#parameters) is used together with one or more quick filters, every quick filter is **AND-combined with each vmNIC MAC** — the filter set is expanded into the cartesian product `quickFilters × vmNICs`, so all capture is constrained to the VM's network data path. For example, `pspkt -VMName 'Win11' -DNS` becomes "(MAC=vmNIC1 AND DNS) OR (MAC=vmNIC2 AND DNS)". When `-VM` / `-VMName` is used alone (no quick filter), a standalone MAC filter per vmNIC is added so all VM traffic is captured.
+
+`-VM` / `-VMName` works for VMs in **any power state**. For Running / Starting / Paused VMs, capture attaches to the live vmNIC components. For Off / Saved VMs (where pktmon has no live vmNIC components) the MAC list is still discovered via the Hyper-V cmdlets and the capture attaches to host NIC components — the MAC filter takes over scoping as soon as the VM resumes / starts. If the VM has no discoverable MAC (a never-started dynamic-MAC VM) `Start-Pspkt` errors out instead of silently capturing host-wide traffic.
 
 ## Reference
 
@@ -63,8 +67,12 @@ If you don't set `-PacketSize` explicitly, `Start-Pspkt` auto-increases it to th
 # DNS to 1.1.1.1 (no other traffic)
 pspkt -DNS -i 1.1.1.1
 
-# SMB inside a VM (VM MAC filter + SMB port filter)
+# SMB inside a VM — (MAC=vmNIC AND TCP/445) per vmNIC, so only the VM's SMB traffic.
 pspkt -VMName 'Win11-Dev' -SMB
+
+# Multiple quick filters inside a VM — each AND-combined with each vmNIC MAC.
+# pktmon: (MAC=nic AND ARP) OR (MAC=nic AND DNS-UDP) OR (MAC=nic AND DNS-TCP) per vmNIC
+pspkt -VMName 'Win11-Dev' -ARP -DNS
 
 # All auto-address protocols on a specific NIC
 pspkt -AA -comp 5

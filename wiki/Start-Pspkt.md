@@ -14,10 +14,21 @@ Start-Pspkt [-Name <string>] [-CaptureType <PspktCaptureType>] [-PacketSize <uin
             [-ARP] [-NDP] [-AA] [-AAv4] [-AAv6] [-DHCP] [-DHCPv6] [-DNS] [-DNSoverHTTPS] [-DNSoverTLS]
             [-SMB] [-SMBoverQUIC] [-SMBoverQuicAltPort <uint16>] [-SSH] [-RDP] [-RPC] [-RCP]
             [-HTTP] [-HTTPS] [-WinRM] [-WinRMS] [-Ping] [-Ping4] [-Ping6]
+            [-DnsName <string[]>] [-DnsType <string[]>] [-DnsRcode <string[]>] [-DnsId <int[]>]
+            [-DnsQR <Query|Response|Any>] [-DnsMatchTruncated]
+            [-TlsSni <string[]>] [-TlsVersion <string[]>] [-TlsContentType <string[]>]
+            [-TlsHandshakeType <string[]>] [-TlsMatchTruncated]
+            [-HttpMethod <string[]>] [-HttpHost <string[]>] [-HttpPath <string[]>]
+            [-HttpStatus <string[]>] [-HttpContentType <string[]>] [-HttpMatchTruncated]
+            [-DhcpMessageType <string[]>] [-DhcpClientMac <string[]>]
+            [-DhcpFamily <Any|V4|V6>] [-DhcpMatchTruncated]
+            [-SmbCommand <string[]>] [-SmbDirection <Any|Request|Response>] [-SmbStatus <string[]>]
+            [-SmbFilename <string[]>] [-SmbTreePath <string[]>] [-SmbMatchEncrypted] [-SmbMatchTruncated]
+            [-IcmpType <string[]>] [-Icmpv6Type <string[]>] [-Icmpv6NdpTarget <string[]>]
             [-Pause] [-PauseOnDrop] [-PauseOnLocation <string>] [-PauseOnReason <string>]
             [-StopOnDrop] [-StopOnLocation <string>] [-StopOnReason <string>]
             [-WriteFile <string>] [-RealTime] [-FileSize <uint32>] [-FlushDisk] [-NumFiles <int>]
-            [-WriteEtl <string>]
+            [-WriteEtl <string>] [-NoWarning]
 
 Start-Pspkt -Session <pspktSession> [common parameters]
 ```
@@ -36,7 +47,7 @@ Recent (post-perf) behavior:
 - `-FileSize` + `-NumFiles` together enable pcapng file rotation (`foo.001.pcapng` → `foo.002.pcapng` → ... → wrap). Rotation is no longer tied to `-FlushDisk`.
 - `-BufferSizeMultiplier` scales both the pktmon driver buffer **and** the user-mode SPSC ring (base 1M entries × N).
 
-Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture filters automatically. When combined with `-IPAddress`, the IP is **AND-merged** into every quick filter (so `-DNS -i 1.1.1.1` becomes "DNS to/from 1.1.1.1" rather than "DNS OR 1.1.1.1"). With `-VM`/`-VMName`, a MAC filter is added per vmNIC so capture is constrained to the VM's traffic.
+Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture filters automatically. When combined with `-IPAddress`, the IP is **AND-merged** into every quick filter (so `-DNS -i 1.1.1.1` becomes "DNS to/from 1.1.1.1" rather than "DNS OR 1.1.1.1"). With `-VM`/`-VMName`, every quick filter and every application-layer auto-imply filter is also **AND-combined with each vmNIC MAC** (one filter per quick-filter × vmNIC pair) so all capture is constrained to the VM's network data path — for example `pspkt -VM <vm> -SmbCommand Create` only matches SMB packets traversing the VM's vmNICs. When `-VM`/`-VMName` is used alone (no quick filter, no app-layer predicate), a standalone MAC filter per vmNIC is added so all VM traffic is captured.
 
 ## Parameter sets
 
@@ -71,15 +82,16 @@ Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture 
 | `-ParsingLevel` (`-pl`) | `PspktParsingLevel` | `Default` | Display detail: `Minimal`, `Default`, `Detailed`, or `VeryDetailed`. |
 | `-Spaced` | `switch` | — | Adds a blank line between formatted packet lines. |
 | `-Timestamp` (`-t`) | `switch` | — | Prefixes each line with the high-resolution local timestamp. |
+| `-NoWarning` | `switch` | — | Suppresses non-fatal setup warnings (auto-bumps from application-layer filters, missing-MAC vmNIC skip, non-numeric component value). Does **not** suppress pcapng data-loss / writer-error warnings — those indicate actual data loss. For full suppression of every `Write-Warning` use `-WarningAction SilentlyContinue`. |
 
 ### Capture scope
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `-Component` (`-comp`) | `string[]` | `@('All')` | Components to capture from. Accepts `'All'`, `'NICs'`, or numeric IDs. |
-| `-VM` | `object` | — | Hyper-V VM object (from `Get-VM`). Overrides `-Component`. Also adds one MAC capture filter per vmNIC. |
-| `-VMName` | `string` | — | Hyper-V VM name (string). Same behavior as `-VM` including per-vmNIC MAC filters. |
-| `-IPAddress` (`-i`) | `string` | — | Quick IP filter. Accepts an IPv4 or IPv6 address. When supplied alongside quick filters or `-VM`/`-VMName`, the IP is AND-merged into each generated filter. Alone, creates a standalone IP filter. |
+| `-VM` | `object` | — | Hyper-V VM object (from `Get-VM`). Overrides `-Component`. Every quick filter and app-layer auto-imply filter is AND-combined with each vmNIC MAC (one filter per quick-filter × vmNIC). Used alone, adds a standalone MAC filter per vmNIC. **Works for VMs in any power state** (Running / Off / Saved / Paused / Starting): MACs are read via the Hyper-V cmdlets, and OFF/Saved VMs whose vmNICs aren't currently bound to a vmSwitch fall back to host NIC components so capture begins matching as soon as the VM resumes / starts. |
+| `-VMName` | `string` | — | Hyper-V VM name (string). Same behavior as `-VM`. |
+| `-IPAddress` (`-i`) | `string` | — | Quick IP filter. Accepts an IPv4 or IPv6 address. When supplied alongside quick filters or `-VM`/`-VMName`, the IP is AND-merged into each generated filter. With `-VM` + a quick filter, the result is MAC AND IP AND protocol within each expanded filter. Alone, creates a standalone IP filter. |
 | `-DumpInterfaces` (`-D`) | `switch` | — | Prints the NIC component table (`Id`, `Name`) and exits without starting a capture. Wrapper for `Get-PspktComponent -NIC \| Select Id, Name \| Format-Table`. |
 
 ### Quick filters
@@ -112,6 +124,21 @@ See [Quick Filters](./Quick-Filters.md) for the full reference. Briefly:
 | `-Ping` | ICMPv4 + ICMPv6 (post-capture filtered to echo types only: 0/8, 128/129) |
 | `-Ping4` | ICMPv4 (post-capture filtered to echo types 0/8) |
 | `-Ping6` | ICMPv6 (post-capture filtered to echo types 128/129) |
+
+### Application-layer filters
+
+Display-side filters that match against parsed packet payload (e.g. DNS QNAME). They run only at `-ParsingLevel Detailed` or higher and **affect only console output** — the pcapng file written via `-WriteFile` always contains every packet the driver-level filters accepted. See [Application Filters](./Application-Filters.md) for cross-protocol semantics and the per-protocol reference for each supported protocol.
+
+| Protocol | Parameters | Reference |
+|---|---|---|
+| DNS / mDNS | `-DnsName`, `-DnsType`, `-DnsRcode`, `-DnsId`, `-DnsQR`, `-DnsMatchTruncated` | [Application-Filters-DNS](./Application-Filters-DNS.md) |
+| TLS / SNI | `-TlsSni`, `-TlsVersion`, `-TlsContentType`, `-TlsHandshakeType`, `-TlsMatchTruncated` | [Application-Filters-TLS](./Application-Filters-TLS.md) |
+| HTTP / HTTP/1.x | `-HttpMethod`, `-HttpHost`, `-HttpPath`, `-HttpStatus`, `-HttpContentType`, `-HttpMatchTruncated` | [Application-Filters-HTTP](./Application-Filters-HTTP.md) |
+| DHCP | `-DhcpMessageType`, `-DhcpClientMac`, `-DhcpFamily`, `-DhcpMatchTruncated` | [Application-Filters-DHCP](./Application-Filters-DHCP.md) |
+| SMB2 / SMB3 | `-SmbCommand`, `-SmbDirection`, `-SmbStatus`, `-SmbFilename`, `-SmbTreePath`, `-SmbMatchEncrypted`, `-SmbMatchTruncated` | [Application-Filters-SMB2](./Application-Filters-SMB2.md) |
+| ICMP / ICMPv6 / NDP | `-IcmpType`, `-Icmpv6Type`, `-Icmpv6NdpTarget` | [Application-Filters-ICMP](./Application-Filters-ICMP.md) |
+
+Setting any of these parameters auto-bumps `-ParsingLevel` to `Detailed` (with a warning), auto-bumps `-PacketSize` where the protocol needs more payload (1500 for DNS and SMB2, 2048 for TLS / HTTP, 590 for DHCP; ICMP doesn't need a bump), and implies the corresponding quick filter when no existing capture filter already covers the predicate's target protocol — so combining with an unrelated filter (e.g. `-ARP -Icmpv6Type NA,NS` captures both ARP and ICMPv6). Specifically: DNS predicates imply UDP/TCP 53; TLS predicates imply TCP 443; HTTP predicates imply TCP 80; SMB2 predicates imply TCP 445; DHCP predicates imply UDP 67/68 and/or 546/547 narrowed by `-DhcpFamily`; ICMP predicates imply IPv4 ICMP and/or IPv6 ICMPv6 based on which families are enabled.
 
 ### Drop triggers
 
@@ -169,13 +196,92 @@ pspkt -DNS -i 1.1.1.1
 ```
 
 ```powershell
-# SMB constrained to a single VM's vmNIC MAC addresses
+# SMB constrained to a single VM's vmNIC MAC addresses.
+# pktmon filter is "(MAC=vmNIC1 AND TCP/445) OR (MAC=vmNIC2 AND TCP/445)"
+# so only the VM's SMB traffic is captured.
 pspkt -VMName 'Win11-Dev' -SMB
+```
+
+```powershell
+# VM SMB Create operations only — app-layer predicate AND-combined with vmNIC MAC.
+# All other VM traffic (and all non-VM SMB) is dropped at the driver.
+pspkt -VMName 'Win11-Dev' -SmbCommand Create
 ```
 
 ```powershell
 # Auto-pause when packets are dropped with a specific reason
 pspkt -Ping -Pause -PauseOnReason 'INET_EndpointNotFound'
+```
+
+```powershell
+# DNS application-layer filter: show only AAAA queries for any *.contoso.com
+# (auto-bumps -ParsingLevel to Detailed and -PacketSize to 1500).
+pspkt -DnsName '\.contoso\.com$' -DnsType AAAA -DnsQR Query
+```
+
+```powershell
+# DNS failures (NXDomain / ServFail) to/from 1.1.1.1 only.
+pspkt -DnsRcode NXDomain,ServFail -i 1.1.1.1
+```
+
+```powershell
+# TLS application-layer filter: show only ClientHello records for any
+# subdomain of contoso.com. Auto-bumps -ParsingLevel to Detailed, -PacketSize
+# to 2048, and implies -HTTPS (TCP 443).
+pspkt -TlsSni '\.contoso\.com$'
+```
+
+```powershell
+# Investigate TLS alerts (failed handshakes, certificate problems, etc).
+pspkt -TlsContentType Alert
+```
+
+```powershell
+# HTTP application-layer filter: show only GET/POST requests to paths under
+# /api/. Auto-bumps -ParsingLevel to Detailed, -PacketSize to 2048, and implies
+# -HTTP (TCP 80).
+pspkt -HttpMethod GET,POST -HttpPath '^/api/'
+```
+
+```powershell
+# Investigate HTTP server failures (5xx).
+pspkt -HttpStatus 5xx
+```
+
+```powershell
+# DHCP application-layer filter: show only v4 Discover/Offer/Ack from a
+# specific MAC. Auto-bumps -ParsingLevel to Detailed, -PacketSize to 590,
+# and implies -DHCP / -DHCPv6 quick filters when no other capture filter set.
+pspkt -DhcpMessageType Discover,Offer,Ack -DhcpClientMac '^aa-bb-cc'
+```
+
+```powershell
+# DHCPv6 only — show every v6 message regardless of type.
+pspkt -DhcpFamily V6
+```
+
+```powershell
+# SMB2 application-layer filter: show only Create requests for .doc/.docx
+# files. Auto-bumps -ParsingLevel to Detailed, -PacketSize to 1500, and
+# implies -SMB (TCP 445) when no other capture filter is set.
+pspkt -SmbCommand Create -SmbFilename '\.docx?$'
+```
+
+```powershell
+# Investigate SMB2 access-denied / sharing-violation failures.
+pspkt -SmbStatus ACCESS_DENIED,SHARING_VIOLATION
+```
+
+```powershell
+# ICMP filter: show only echo requests (pings sent out) on both IPv4 and IPv6.
+# Auto-implies -ICMPv4 and -ICMPv6 capture filters.
+pspkt -IcmpType EchoRequest -Icmpv6Type EchoRequest
+```
+
+```powershell
+# NDP target lookup: every Neighbor Solicitation / Advertisement for a specific
+# link-local address.
+pspkt -Icmpv6NdpTarget '^fe80::a1b2'
 ```
 
 ```powershell
