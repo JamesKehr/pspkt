@@ -2,6 +2,10 @@
 
 A **pspkt component** wraps a pktmon data source — a NIC, a virtual switch, a Windows networking driver, or a virtual NIC inside a Hyper-V VM. Capture is constrained to specific components by attaching them to a session.
 
+Think of components as _where_ pktmonapi will collect network data. This can be a network adapter (NIC), transport layer (TCP/IP), WFP (network filtering like firewall), Hyper-V vmSwitch, and more.
+
+Please be aware that pktmonapi can only capture from registered components. This is almost exclusively Windows-native networking subsystems. Security applications — including third-party antivirus and even Microsoft Defender — typically use WFP callout drivers that do not register as pktmon components. This can result in packets "disappearing" from the network stack in unexpected places without a DROP event. This behavior is most commonly caused by WFP callout drivers intercepting or absorbing the traffic.
+
 | Command | Purpose |
 |---|---|
 | [`Get-PspktComponent`](#get-pspktcomponent) | Enumerate components by NIC, VM, group, type, or name |

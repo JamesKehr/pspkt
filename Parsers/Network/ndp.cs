@@ -291,21 +291,11 @@ public static class NdpParser
 
     private static string FormatIPv6(byte[] data, int offset)
     {
-        if (data == null || data.Length < offset + 16) return string.Empty;
-        byte[] addr = new byte[16];
-        Buffer.BlockCopy(data, offset, addr, 0, 16);
-        return new System.Net.IPAddress(addr).ToString();
+        return PacketParseHelper.FormatIPv6(data, offset);
     }
 
     private static string FormatMac(byte[] data, int offset)
     {
-        if (data == null || data.Length < offset + 6) return string.Empty;
-        return string.Concat(
-            data[offset].ToString("x2"), "-",
-            data[offset + 1].ToString("x2"), "-",
-            data[offset + 2].ToString("x2"), "-",
-            data[offset + 3].ToString("x2"), "-",
-            data[offset + 4].ToString("x2"), "-",
-            data[offset + 5].ToString("x2"));
+        return PacketParseHelper.FormatMac(data, offset);
     }
 }

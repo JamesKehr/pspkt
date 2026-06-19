@@ -139,7 +139,13 @@ public static class DnsParser
             if (pos + labelLen > data.Length) break;
 
             if (sb.Length > 0) sb.Append('.');
-            sb.Append(Encoding.ASCII.GetString(data, pos, labelLen));
+            // Append label chars directly — DNS labels are ASCII-only so
+            // (char)byte is sufficient and avoids Encoding.GetString allocation.
+            for (int i = 0; i < labelLen; i++)
+            {
+                byte b = data[pos + i];
+                sb.Append(b >= 0x20 && b < 0x7F ? (char)b : '?');
+            }
             pos += labelLen;
         }
 
@@ -166,8 +172,17 @@ public static class DnsParser
     /// </summary>
     public static bool TryParseDns(byte[] data, int srcPort, int dstPort, out DnsContext ctx)
     {
+        return TryParseDns(data, data != null ? data.Length : 0, srcPort, dstPort, out ctx);
+    }
+
+    /// <summary>
+    /// Overload accepting an explicit data length, allowing callers to pass a reusable
+    /// buffer larger than the actual payload without the parser reading past valid bytes.
+    /// </summary>
+    public static bool TryParseDns(byte[] data, int dataLength, int srcPort, int dstPort, out DnsContext ctx)
+    {
         ctx = default(DnsContext);
-        if (data == null || data.Length < 12) return false;
+        if (data == null || dataLength < 12) return false;
 
         ctx.IsMdns  = (srcPort == 5353 || dstPort == 5353);
         ctx.TxId    = PacketParseHelper.ReadUInt16BE(data, 0);
@@ -180,12 +195,12 @@ public static class DnsParser
         ctx.ArCount = PacketParseHelper.ReadUInt16BE(data, 10);
 
         int pos = 12;
-        if (ctx.QdCount > 0 && pos < data.Length)
+        if (ctx.QdCount > 0 && pos < dataLength)
         {
             int nameBytes;
             ctx.QName = ReadName(data, pos, out nameBytes);
             pos += nameBytes;
-            if (pos + 4 <= data.Length)
+            if (pos + 4 <= dataLength)
             {
                 ctx.QType = PacketParseHelper.ReadUInt16BE(data, pos);
                 pos += 4; // skip QTYPE + QCLASS
@@ -201,7 +216,7 @@ public static class DnsParser
         }
 
         // For responses, try to extract the first answer record for display.
-        if (ctx.Qr == 1 && ctx.AnCount > 0 && pos < data.Length)
+        if (ctx.Qr == 1 && ctx.AnCount > 0 && pos < dataLength)
         {
             ctx.FirstAnswer = ExtractFirstAnswer(data, pos);
         }
@@ -219,10 +234,11 @@ public static class DnsParser
         if (!ctx.Valid) return null;
         string prefix = ctx.IsMdns ? "mDNS" : "DNS";
         string qTypeName = GetTypeName(ctx.QType);
+        string txIdHex = "0x" + ctx.TxId.ToString("x4");
 
         if (ctx.Qr == 0)
         {
-            return string.Concat(prefix, " ", ctx.TxId.ToString(), "+ ", qTypeName, "? ", ctx.QName, " (", payloadLen.ToString(), ")");
+            return string.Concat(prefix, " ", txIdHex, "+ ", qTypeName, "? ", ctx.QName, " (", payloadLen.ToString(), ")");
         }
 
         string rcodePart = (ctx.Rcode != 0) ? GetRcodeName(ctx.Rcode) + " " : "";
@@ -230,9 +246,9 @@ public static class DnsParser
 
         if (ctx.FirstAnswer != null)
         {
-            return string.Concat(prefix, " ", ctx.TxId.ToString(), " ", rcodePart, counts, " ", ctx.FirstAnswer, " (", payloadLen.ToString(), ")");
+            return string.Concat(prefix, " ", txIdHex, " ", rcodePart, counts, " ", ctx.FirstAnswer, " (", payloadLen.ToString(), ")");
         }
-        return string.Concat(prefix, " ", ctx.TxId.ToString(), " ", rcodePart, counts, " ", qTypeName, " ", ctx.QName, " (", payloadLen.ToString(), ")");
+        return string.Concat(prefix, " ", txIdHex, " ", rcodePart, counts, " ", qTypeName, " ", ctx.QName, " (", payloadLen.ToString(), ")");
     }
 
     /// <summary>
@@ -254,118 +270,82 @@ public static class DnsParser
     }
 
     /// <summary>
-    /// Extracts the first answer record type and data from a DNS response.
+    /// Walks the answer section and extracts a display string. When the first
+    /// answer is a CNAME, continues walking to find a following A/AAAA record
+    /// so the resolved IP is shown alongside the alias chain.
+    /// Example: "www.example.com. CNAME cdn.example.net. A 93.184.216.34"
+    /// Cap: walks at most 16 answer records to bound loop time.
     /// </summary>
     private static string ExtractFirstAnswer(byte[] data, int offset)
     {
         int pos = offset;
-        if (pos >= data.Length) return null;
+        int dataLength = data.Length;
+        if (pos >= dataLength) return null;
 
-        int nameBytes;
-        string rrName = ReadName(data, pos, out nameBytes);
-        pos += nameBytes;
+        string cnameResult = null;
+        int maxRecords = 16;
 
-        if (pos + 10 > data.Length) return null;
-        ushort rType = PacketParseHelper.ReadUInt16BE(data, pos);
-        pos += 2; // TYPE
-        pos += 2; // CLASS
-        pos += 4; // TTL
-        ushort rdLength = PacketParseHelper.ReadUInt16BE(data, pos);
-        pos += 2;
-
-        string typeName = GetTypeName(rType);
-        if (pos + rdLength > data.Length) return rrName + " " + typeName + " (truncated)";
-
-        // Format RDATA for common types.
-        switch (rType)
+        while (maxRecords-- > 0 && pos < dataLength)
         {
-            case 1: // A record
-                if (rdLength >= 4)
-                {
-                    string ip = data[pos].ToString() + "." + data[pos + 1].ToString() + "." +
-                                data[pos + 2].ToString() + "." + data[pos + 3].ToString();
-                    return rrName + " " + typeName + " " + ip;
-                }
-                break;
+            int nameBytes;
+            string rrName = ReadName(data, pos, out nameBytes);
+            pos += nameBytes;
 
-            case 28: // AAAA record
-                if (rdLength >= 16)
-                {
-                    StringBuilder sb = new StringBuilder(40);
-                    for (int i = 0; i < 16; i += 2)
+            if (pos + 10 > dataLength) break;
+            ushort rType = PacketParseHelper.ReadUInt16BE(data, pos);
+            pos += 2; // TYPE
+            pos += 2; // CLASS
+            pos += 4; // TTL
+            ushort rdLength = PacketParseHelper.ReadUInt16BE(data, pos);
+            pos += 2;
+
+            string typeName = GetTypeName(rType);
+            if (pos + rdLength > dataLength)
+            {
+                string truncResult = rrName + " " + typeName + " (truncated)";
+                return cnameResult != null ? cnameResult + " " + truncResult : truncResult;
+            }
+
+            switch (rType)
+            {
+                case 1: // A record
+                    if (rdLength >= 4)
                     {
-                        if (i > 0) sb.Append(':');
-                        sb.AppendFormat("{0:x4}", PacketParseHelper.ReadUInt16BE(data, pos + i));
+                        string ip = PacketParseHelper.FormatIPv4(data, pos);
+                        string aResult = rrName + " " + typeName + " " + ip;
+                        return cnameResult != null ? cnameResult + " " + aResult : aResult;
                     }
-                    // Simple zero compression: replace longest run of :0000 groups.
-                    string ip6 = sb.ToString();
-                    ip6 = CompressIPv6(ip6);
-                    return rrName + " " + typeName + " " + ip6;
-                }
-                break;
+                    break;
 
-            case 5: // CNAME
-            case 12: // PTR
-            case 2: // NS
-                int cnameBytes;
-                string target = ReadName(data, pos, out cnameBytes);
-                return rrName + " " + typeName + " " + target;
+                case 28: // AAAA record
+                    if (rdLength >= 16)
+                    {
+                        string ip6 = PacketParseHelper.FormatIPv6(data, pos);
+                        string aaaaResult = rrName + " " + typeName + " " + ip6;
+                        return cnameResult != null ? cnameResult + " " + aaaaResult : aaaaResult;
+                    }
+                    break;
+
+                case 5: // CNAME — record it and keep walking for the A/AAAA that follows
+                    int cnameBytes;
+                    string target = ReadName(data, pos, out cnameBytes);
+                    cnameResult = rrName + " " + typeName + " " + target;
+                    pos += rdLength;
+                    continue;
+
+                case 12: // PTR
+                case 2:  // NS
+                    int ptrBytes;
+                    string ptrTarget = ReadName(data, pos, out ptrBytes);
+                    string ptrResult = rrName + " " + typeName + " " + ptrTarget;
+                    return cnameResult != null ? cnameResult + " " + ptrResult : ptrResult;
+            }
+
+            // For non-CNAME types we didn't handle, return what we have.
+            string fallback = rrName + " " + typeName;
+            return cnameResult != null ? cnameResult + " " + fallback : fallback;
         }
 
-        return rrName + " " + typeName;
-    }
-
-    /// <summary>
-    /// Simple IPv6 zero compression: replaces longest run of ":0000" with "::".
-    /// </summary>
-    private static string CompressIPv6(string fullAddr)
-    {
-        // Split by ':' and find longest run of "0000" groups.
-        string[] groups = fullAddr.Split(':');
-        int bestStart = -1, bestLen = 0;
-        int curStart = -1, curLen = 0;
-
-        for (int i = 0; i < groups.Length; i++)
-        {
-            if (groups[i] == "0000")
-            {
-                if (curStart < 0) curStart = i;
-                curLen++;
-                if (curLen > bestLen)
-                {
-                    bestStart = curStart;
-                    bestLen = curLen;
-                }
-            }
-            else
-            {
-                curStart = -1;
-                curLen = 0;
-            }
-        }
-
-        if (bestLen < 2) return fullAddr;
-
-        // Rebuild with :: at bestStart.
-        StringBuilder sb = new StringBuilder(40);
-        for (int i = 0; i < groups.Length; i++)
-        {
-            if (i == bestStart)
-            {
-                if (i == 0) sb.Append("::");
-                else sb.Append(':');
-                i += bestLen - 1;
-                if (i == groups.Length - 1) { /* trailing :: already appended */ }
-            }
-            else
-            {
-                if (sb.Length > 0 && sb[sb.Length - 1] != ':') sb.Append(':');
-                // Strip leading zeros from group.
-                string g = groups[i].TrimStart('0');
-                if (g.Length == 0) g = "0";
-                sb.Append(g);
-            }
-        }
-        return sb.ToString();
+        return cnameResult;
     }
 }

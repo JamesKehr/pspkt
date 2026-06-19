@@ -1511,22 +1511,30 @@ function Get-PspktCaptureHeader {
     $scheme = Get-PspktColorScheme
     $reset = "$($script:ESC)[$($scheme.Reset)m"
 
+    # The component prefix is fixed at 36 characters:
+    # "227:235 (TCP/IPv4 - L2       )[ In]: " = 36 + ": " separator
+    # Pad "Group:Component" to 38 chars (36 content + 2 for ": ") so "Data Link"
+    # starts exactly where the data-link segment begins in packet output.
     $layers = @(
-        @{ Label = 'Group:Component'; Layer = 'Component'; Sep = "`t`t" }
-        @{ Label = 'Data Link';       Layer = 'DataLink';  Sep = "`t" }
-        @{ Label = 'Network';         Layer = 'Network';   Sep = "`t`t" }
-        @{ Label = 'Transport';       Layer = 'Transport'; Sep = "`t" }
-        @{ Label = 'Application';     Layer = 'Application'; Sep = '' }
+        @{ Label = 'Group:Component'; Layer = 'Component'; Width = 37 }
+        @{ Label = 'Data Link';       Layer = 'DataLink';  Width = 16 }
+        @{ Label = 'Network';         Layer = 'Network';   Width = 16 }
+        @{ Label = 'Transport';       Layer = 'Transport'; Width = 16 }
+        @{ Label = 'Application';     Layer = 'Application'; Width = 0 }
     )
 
     $parts = @()
     foreach ($item in $layers) {
         $layerScheme = $scheme[$item.Layer]
+        $label = $item.Label
+        if ($item.Width -gt 0 -and $label.Length -lt $item.Width) {
+            $label = $label + (' ' * ($item.Width - $label.Length))
+        }
         if ($null -ne $layerScheme) {
             $sgr = $layerScheme['Bright']
-            $parts += "$($script:ESC)[$($sgr)m$($item.Label)$reset$($item.Sep)"
+            $parts += "$($script:ESC)[$($sgr)m$label$reset"
         } else {
-            $parts += "$($item.Label)$($item.Sep)"
+            $parts += $label
         }
     }
 
