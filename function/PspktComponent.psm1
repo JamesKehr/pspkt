@@ -548,7 +548,7 @@ Returns the session object.
 function Add-PspktComponent {
     [CmdletBinding(DefaultParameterSetName = 'ByComponent')]
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
