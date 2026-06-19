@@ -57,7 +57,12 @@ public static class TlsParser
     /// </summary>
     public static bool LooksLikeTls(byte[] data)
     {
-        if (data == null || data.Length < 5) return false;
+        return LooksLikeTls(data, data != null ? data.Length : 0);
+    }
+
+    public static bool LooksLikeTls(byte[] data, int dataLength)
+    {
+        if (data == null || dataLength < 5) return false;
         int contentType = data[0];
         if (contentType < 20 || contentType > 23) return false;
         int version = (data[1] << 8) | data[2];
@@ -73,8 +78,16 @@ public static class TlsParser
     /// </summary>
     public static bool TryParseTls(byte[] data, out TlsContext ctx)
     {
+        return TryParseTls(data, data != null ? data.Length : 0, out ctx);
+    }
+
+    /// <summary>
+    /// Overload accepting explicit data length for reusable-buffer callers.
+    /// </summary>
+    public static bool TryParseTls(byte[] data, int dataLength, out TlsContext ctx)
+    {
         ctx = default(TlsContext);
-        if (!LooksLikeTls(data)) return false;
+        if (!LooksLikeTls(data, dataLength)) return false;
 
         ctx.ContentType = data[0];
         ctx.Version     = (data[1] << 8) | data[2];
@@ -82,13 +95,13 @@ public static class TlsParser
         ctx.Valid       = true;
 
         // Handshake — pull the first byte of the body to identify the message type.
-        if (ctx.ContentType == 22 && data.Length >= 6)
+        if (ctx.ContentType == 22 && dataLength >= 6)
         {
             ctx.HandshakeType = data[5];
             if (ctx.HandshakeType == 1) // ClientHello — try SNI extraction.
             {
                 bool truncated;
-                ctx.Sni = ExtractSni(data, out truncated);
+                ctx.Sni = ExtractSni(data, dataLength, out truncated);
                 ctx.Truncated = truncated;
             }
         }
@@ -203,15 +216,20 @@ public static class TlsParser
     // is returned. Truncation at any stage is reported via the out parameter.
     private static string ExtractSni(byte[] data, out bool truncated)
     {
+        return ExtractSni(data, data != null ? data.Length : 0, out truncated);
+    }
+
+    private static string ExtractSni(byte[] data, int dataLength, out bool truncated)
+    {
         truncated = false;
         // Minimum viable ClientHello with SNI: 5+4+34+1+2+1+2+... ~43 bytes.
-        if (data == null || data.Length < 43 || data[0] != 22 || data[5] != 1)
+        if (data == null || dataLength < 43 || data[0] != 22 || data[5] != 1)
         {
             return null;
         }
 
         int recordLen = PacketParseHelper.ReadUInt16BE(data, 3);
-        int recordEnd = Math.Min(data.Length, 5 + recordLen);
+        int recordEnd = Math.Min(dataLength, 5 + recordLen);
         // Skip TLS record header (5) + handshake type (1) + handshake length (3) = 9.
         // Then ClientHello body starts: protocol version (2) + random (32).
         int pos = 9;

@@ -161,6 +161,25 @@ public static class PacketLineFormatter
     [ThreadStatic] private static DhcpContext _dhcpCtxCache;
     [ThreadStatic] private static bool _dhcpCtxCacheValid;
 
+    // Thread-static reusable payload buffer. Eliminates per-packet byte[] allocations
+    // for TCP/UDP transport payloads passed to app-layer parsers. Grown to max observed
+    // size and reused across packets (safe: consumer thread processes one packet at a time).
+    [ThreadStatic] private static byte[] _payloadBuf;
+    private static byte[] RentPayloadBuffer(int minSize)
+    {
+        byte[] buf = _payloadBuf;
+        if (buf == null || buf.Length < minSize)
+        {
+            // Round up to next power of 2 (min 256) to reduce re-allocations
+            // for varying payload sizes across the session.
+            int cap = 256;
+            while (cap < minSize) cap <<= 1;
+            buf = new byte[cap];
+            _payloadBuf = buf;
+        }
+        return buf;
+    }
+
     // Sentinel returned by DetectUdpAppDetailed when an app-layer predicate rejects
     // the packet. Reference-equality compared in callers so an actual DNS response
     // that happens to render as the same characters won't collide.
@@ -729,12 +748,16 @@ public static class PacketLineFormatter
                 transProto = "TCP";
                 spStr = "." + srcPort.ToString();
                 dpStr = "." + dstPort.ToString();
+                string hint = GetAppProtocolHint(6, srcPort, dstPort);
+                if (hint != null) appStr = hint;
             }
             else if (protoKind == 3) // UDP
             {
                 transProto = "UDP";
                 spStr = "." + srcPort.ToString();
                 dpStr = "." + dstPort.ToString();
+                string hint = GetAppProtocolHint(17, srcPort, dstPort);
+                if (hint != null) appStr = hint;
             }
             else if (protoKind == 1) // ICMP
             {
@@ -756,12 +779,8 @@ public static class PacketLineFormatter
             int ipv6Off = (linkKind == 2) ? GetWifiPayloadOffset(rawPacketData, rawOffset, rawLength) : 14;
             if (rawLength >= ipv6Off + 40)
             {
-                byte[] srcB = new byte[16];
-                byte[] dstB = new byte[16];
-                Buffer.BlockCopy(rawPacketData, rawOffset + ipv6Off + 8, srcB, 0, 16);
-                Buffer.BlockCopy(rawPacketData, rawOffset + ipv6Off + 24, dstB, 0, 16);
-                srcAddr = new System.Net.IPAddress(srcB).ToString();
-                dstAddr = new System.Net.IPAddress(dstB).ToString();
+                srcAddr = PacketParseHelper.FormatIPv6(rawPacketData, rawOffset + ipv6Off + 8);
+                dstAddr = PacketParseHelper.FormatIPv6(rawPacketData, rawOffset + ipv6Off + 24);
                 int nextHdr, transOff;
                 // Absolute coordinates: feed FindIPv6UpperLayer the absolute IPv6 header
                 // offset (rawOffset+ipv6Off) and the absolute end-of-valid-bytes
@@ -789,8 +808,12 @@ public static class PacketLineFormatter
                         transProto = "TCP";
                         if (rawOffset + rawLength >= transOff + 4)
                         {
-                            spStr = "." + PacketParseHelper.ReadUInt16BE(rawPacketData, transOff).ToString();
-                            dpStr = "." + PacketParseHelper.ReadUInt16BE(rawPacketData, transOff + 2).ToString();
+                            int sp6 = PacketParseHelper.ReadUInt16BE(rawPacketData, transOff);
+                            int dp6 = PacketParseHelper.ReadUInt16BE(rawPacketData, transOff + 2);
+                            spStr = "." + sp6.ToString();
+                            dpStr = "." + dp6.ToString();
+                            string hint = GetAppProtocolHint(6, sp6, dp6);
+                            if (hint != null) appStr = hint;
                         }
                     }
                     else if (nextHdr == 17)
@@ -798,8 +821,12 @@ public static class PacketLineFormatter
                         transProto = "UDP";
                         if (rawOffset + rawLength >= transOff + 4)
                         {
-                            spStr = "." + PacketParseHelper.ReadUInt16BE(rawPacketData, transOff).ToString();
-                            dpStr = "." + PacketParseHelper.ReadUInt16BE(rawPacketData, transOff + 2).ToString();
+                            int sp6 = PacketParseHelper.ReadUInt16BE(rawPacketData, transOff);
+                            int dp6 = PacketParseHelper.ReadUInt16BE(rawPacketData, transOff + 2);
+                            spStr = "." + sp6.ToString();
+                            dpStr = "." + dp6.ToString();
+                            string hint = GetAppProtocolHint(17, sp6, dp6);
+                            if (hint != null) appStr = hint;
                         }
                     }
                 }
@@ -1013,7 +1040,7 @@ public static class PacketLineFormatter
                     && NeedsTcpPayload(ipv6SrcPort, ipv6DstPort))
                 {
                     int payloadLen = Math.Min(ipv6DataLen, rawEnd - ipv6TransportOffset - ipv6DataOffset);
-                    ipv6Payload = new byte[payloadLen];
+                    ipv6Payload = RentPayloadBuffer(payloadLen);
                     Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + ipv6DataOffset, ipv6Payload, 0, payloadLen);
                 }
                 appDetail = DetectTcpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload);
@@ -1030,7 +1057,7 @@ public static class PacketLineFormatter
                     && NeedsUdpPayload(ipv6SrcPort, ipv6DstPort))
                 {
                     int payloadLen = Math.Min(ipv6DataLen, rawEnd - ipv6TransportOffset - 8);
-                    ipv6Payload = new byte[payloadLen];
+                    ipv6Payload = RentPayloadBuffer(payloadLen);
                     Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + 8, ipv6Payload, 0, payloadLen);
                 }
                 appDetail = DetectUdpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload);
@@ -1205,6 +1232,14 @@ public static class PacketLineFormatter
             if (suffix == null)
             {
                 suffix = PacketParseHelper.FormatTcpSegment(tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen);
+                // No active parser produced app content — add a protocol hint if the port
+                // maps to a well-known service so the user can identify traffic at a glance.
+                string hint = GetAppProtocolHint(6, srcPort, dstPort);
+                if (hint != null)
+                {
+                    suffix = hint + ": " + suffix;
+                    appLayer = 4;
+                }
             }
 
             return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
@@ -1230,9 +1265,14 @@ public static class PacketLineFormatter
                     return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
             }
 
-            StringBuilder usb = new StringBuilder(16);
+            StringBuilder usb = new StringBuilder(32);
+            string udpHint = GetAppProtocolHint(17, srcPort, dstPort);
+            if (udpHint != null)
+            {
+                usb.Append(udpHint).Append(": ");
+            }
             usb.Append("UDP, len ").Append(dataLen);
-            return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, usb.ToString(), 3, lineCounter);
+            return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
         }
 
         // Fallback
@@ -1316,6 +1356,12 @@ public static class PacketLineFormatter
                         }
                     }
                 }
+
+                // App protocol hint for traffic on well-known ports that no active
+                // parser handled (e.g. SSH, SMTP, LDAP).
+                string v6Hint = GetAppProtocolHint(nextHeader, sp, dp);
+                if (v6Hint != null)
+                    return PacketFormatter.FormatTransportLine(src, sp, dst, dp, v6Hint + ": " + protoName, 4, lineCounter);
 
                 return PacketFormatter.FormatTransportLine(src, sp, dst, dp, protoName, 3, lineCounter);
             }
@@ -1464,6 +1510,66 @@ public static class PacketLineFormatter
         if (srcPort == 67 || srcPort == 68 || dstPort == 67 || dstPort == 68) return true;
         if (srcPort == 546 || srcPort == 547 || dstPort == 546 || dstPort == 547) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Returns a short application-protocol name hint based on well-known port numbers.
+    /// Used by Minimal and Default tiers to label traffic when no active parser produced
+    /// app-layer detail. Returns null when no common protocol matches.
+    /// </summary>
+    private static string GetAppProtocolHint(int transportProto, int srcPort, int dstPort)
+    {
+        // transportProto: 6=TCP, 17=UDP
+        if (transportProto == 17) // UDP
+        {
+            if (srcPort == 53    || dstPort == 53)    return "DNS";
+            if (srcPort == 5353  || dstPort == 5353)  return "mDNS";
+            if (srcPort == 67    || dstPort == 67 ||
+                srcPort == 68    || dstPort == 68)    return "DHCP";
+            if (srcPort == 546   || dstPort == 546 ||
+                srcPort == 547   || dstPort == 547)   return "DHCPv6";
+            if (srcPort == 443   || dstPort == 443)   return "QUIC";
+            if (srcPort == 123   || dstPort == 123)   return "NTP";
+            if (srcPort == 500   || dstPort == 500)   return "IKE";
+            if (srcPort == 4500  || dstPort == 4500)  return "IKE-NAT";
+            if (srcPort == 1900  || dstPort == 1900)  return "SSDP";
+            if (srcPort == 5355  || dstPort == 5355)  return "LLMNR";
+            if (srcPort == 137   || dstPort == 137)   return "NetBIOS-NS";
+            if (srcPort == 138   || dstPort == 138)   return "NetBIOS-DGM";
+            if (srcPort == 3343  || dstPort == 3343)  return "CSVFS-RCP";
+            if (srcPort == 3389  || dstPort == 3389)  return "RDP-UDP";
+        }
+        else if (transportProto == 6) // TCP
+        {
+            if (srcPort == 53    || dstPort == 53)    return "DNS";
+            if (srcPort == 80    || dstPort == 80)    return "HTTP";
+            if (srcPort == 443   || dstPort == 443)   return "HTTPS";
+            if (srcPort == 445   || dstPort == 445)   return "SMB";
+            if (srcPort == 22    || dstPort == 22)    return "SSH";
+            if (srcPort == 23    || dstPort == 23)    return "Telnet";
+            if (srcPort == 25    || dstPort == 25)    return "SMTP";
+            if (srcPort == 88    || dstPort == 88)    return "Kerberos";
+            if (srcPort == 110   || dstPort == 110)   return "POP3";
+            if (srcPort == 135   || dstPort == 135)   return "RPC";
+            if (srcPort == 139   || dstPort == 139)   return "NetBIOS-SSN";
+            if (srcPort == 143   || dstPort == 143)   return "IMAP";
+            if (srcPort == 389   || dstPort == 389)   return "LDAP";
+            if (srcPort == 636   || dstPort == 636)   return "LDAPS";
+            if (srcPort == 853   || dstPort == 853)   return "DoT";
+            if (srcPort == 993   || dstPort == 993)   return "IMAPS";
+            if (srcPort == 995   || dstPort == 995)   return "POP3S";
+            if (srcPort == 3306  || dstPort == 3306)  return "MySQL";
+            if (srcPort == 3389  || dstPort == 3389)  return "RDP";
+            if (srcPort == 5432  || dstPort == 5432)  return "PostgreSQL";
+            if (srcPort == 5985  || dstPort == 5985)  return "WinRM";
+            if (srcPort == 5986  || dstPort == 5986)  return "WinRM-S";
+            if (srcPort == 8080  || dstPort == 8080)  return "HTTP-ALT";
+            if (srcPort == 8443  || dstPort == 8443)  return "HTTPS-ALT";
+            if (srcPort == 3343  || dstPort == 3343)  return "CSVFS-RCP";
+            if (srcPort == 465   || dstPort == 465)   return "SMTPS";
+            if (srcPort == 587   || dstPort == 587)   return "SMTP-SUB";
+        }
+        return null;
     }
 
     private static string DetectHttpContent(byte[] data, int dataLen, int srcPort, int dstPort)
@@ -1819,11 +1925,7 @@ public static class PacketLineFormatter
 
     private static string FormatIPv6Address(byte[] data, int offset)
     {
-        if (data == null || data.Length < offset + 16)
-            return string.Empty;
-        byte[] addr = new byte[16];
-        Buffer.BlockCopy(data, offset, addr, 0, 16);
-        return new System.Net.IPAddress(addr).ToString();
+        return PacketParseHelper.FormatIPv6(data, offset);
     }
 
     // =========================================================================
@@ -2168,8 +2270,10 @@ public static class PacketLineFormatter
                                     if (payloadStart < rawLength)
                                     {
                                         int copyLen = Math.Min(dataLen, rawLength - payloadStart);
-                                        transportPayload = new byte[copyLen];
+                                        transportPayload = RentPayloadBuffer(copyLen);
                                         Buffer.BlockCopy(raw, rawOffset + payloadStart, transportPayload, 0, copyLen);
+                                        // Store actual length for parsers that accept dataLength parameter.
+                                        dataLen = copyLen;
                                     }
                                 }
                             }
@@ -2190,8 +2294,9 @@ public static class PacketLineFormatter
                                 && NeedsUdpPayload(srcPort, dstPort))
                             {
                                 int copyLen = Math.Min(dataLen, rawLength - transportOffset - 8);
-                                transportPayload = new byte[copyLen];
+                                transportPayload = RentPayloadBuffer(copyLen);
                                 Buffer.BlockCopy(raw, rawOffset + transportOffset + 8, transportPayload, 0, copyLen);
+                                dataLen = copyLen;
                             }
                         }
                         break;
@@ -2238,7 +2343,7 @@ public static class PacketLineFormatter
             && DnsParser.IsDnsPort(srcPort, dstPort))
         {
             DnsContext dctx;
-            if (DnsParser.TryParseDns(transportPayload, srcPort, dstPort, out dctx))
+            if (DnsParser.TryParseDns(transportPayload, dataLen, srcPort, dstPort, out dctx))
             {
                 if (!_dnsPredicate.Evaluate(ref dctx)) return false;
                 _dnsCtxCache = dctx;
@@ -2389,9 +2494,7 @@ public static class PacketLineFormatter
                     if ((ictx.Type == 135 || ictx.Type == 136)
                         && rawOffset + rawLength >= upperOff + 8 + 16)
                     {
-                        byte[] addr = new byte[16];
-                        Buffer.BlockCopy(raw, upperOff + 8, addr, 0, 16);
-                        ictx.NdpTarget = new System.Net.IPAddress(addr).ToString();
+                        ictx.NdpTarget = PacketParseHelper.FormatIPv6(raw, upperOff + 8);
                     }
                     if (!_icmpPredicate.Evaluate(ref ictx)) return false;
                 }

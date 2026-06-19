@@ -1,8 +1,30 @@
 # Filters
 
-A **pspkt filter** wraps the pktmon native capture-constraint struct. Filters are OR-combined at the pktmon driver level: any packet matching at least one attached filter is captured.
+A **pspkt filter** is called a [Constraint](https://learn.microsoft.com/en-us/windows/win32/pktmon/packetmonitor/nf-packetmonitor-packetmonitoraddcaptureconstraint) in the pktmonapi documentation. pspkt follows the pktmon.exe, and other packet capture tools, term: Filter.
+
+Think of a filter as _what_ network data pktmon will collect. A filter is the familiar concept of capturing or displaying a subset of network data used by tools like tcpdump, Wireshark, etc.; however, pktmon does filtering slightly different because there is no filter language with pktmon.
+
+Multiple filters are OR-combined at the pktmon driver level: any packet matching at least one attached filter is captured.
 
 Within a single filter, all set fields are AND-combined (e.g. one filter with `TransportProtocol=TCP`, `Port1=443`, `Ip1=10.0.0.5` matches only TCP/443 to/from 10.0.0.5). This is how [`Start-Pspkt`](./Start-Pspkt.md) combines `-IPAddress` with quick filters — by AND-merging the IP into each generated filter.
+
+For example, this display filter in Wireshark will capture HTTPS traffic to Microsoft.com (150.171.109.118) or DNS traffic to Cloudflare (1.1.1.1).
+
+```
+(tcp.port==443 && ip.addr==150.171.109.118) || (udp.port==53 && ip.addr==1.1.1.1) || (tcp.port==53 && ip.addr==1.1.1.1)
+```
+
+With pktmon and pspkt, add three filters to the session to achieve the same behavior. The settings in each filter are automatically AND-combined, and the individual filters are OR-combined.
+
+```
+Filter01 (TCP AND 443 AND 150.171.109.118)
+OR
+Filter02 (UDP AND 53 AND 1.1.1.1)
+OR
+Filter03 (TCP AND 53 AND 1.1.1.1)
+```
+
+# Functions
 
 | Command | Purpose |
 |---|---|

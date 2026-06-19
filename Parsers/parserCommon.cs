@@ -28,13 +28,14 @@ public static class PacketParseHelper
 
     /// <summary>
     /// Formats 6 bytes starting at offset into a MAC address string (lowercase, dash-separated).
+    /// Uses string.Concat to avoid intermediate string allocations from chained + operators.
     /// </summary>
     public static string FormatMac(byte[] data, int offset)
     {
         if (data == null || data.Length < offset + 6) return "";
-        return HexBytes[data[offset]] + "-" + HexBytes[data[offset+1]] + "-" +
-               HexBytes[data[offset+2]] + "-" + HexBytes[data[offset+3]] + "-" +
-               HexBytes[data[offset+4]] + "-" + HexBytes[data[offset+5]];
+        return string.Concat(HexBytes[data[offset]], "-", HexBytes[data[offset+1]], "-",
+               HexBytes[data[offset+2]], "-", HexBytes[data[offset+3]], "-",
+               HexBytes[data[offset+4]], "-", HexBytes[data[offset+5]]);
     }
 
     /// <summary>
@@ -60,8 +61,78 @@ public static class PacketParseHelper
     public static string FormatIPv4(byte[] data, int offset)
     {
         if (data == null || data.Length < offset + 4) return "";
-        return DecBytes[data[offset]] + "." + DecBytes[data[offset+1]] + "." +
-               DecBytes[data[offset+2]] + "." + DecBytes[data[offset+3]];
+        return string.Concat(DecBytes[data[offset]], ".", DecBytes[data[offset+1]], ".",
+               DecBytes[data[offset+2]], ".", DecBytes[data[offset+3]]);
+    }
+
+    // Pre-computed hex word lookup for IPv6 formatting (0000-ffff).
+    // Lazy-initialized on first FormatIPv6 call to save ~2.5 MB when captures
+    // never encounter IPv6 traffic.
+    private static string[] HexWords;
+
+    /// <summary>
+    /// Formats an IPv6 address from 16 bytes at the given offset using RFC 5952 compressed
+    /// notation, without allocating any temporary byte[] or IPAddress objects.
+    /// </summary>
+    public static string FormatIPv6(byte[] data, int offset)
+    {
+        if (data == null || data.Length < offset + 16) return "";
+
+        // Lazy-init the lookup table. Single-threaded consumer means no lock needed;
+        // worst case on a race is double-init (harmless, same data).
+        if (HexWords == null)
+        {
+            var table = new string[65536];
+            for (int i = 0; i < 65536; i++)
+                table[i] = i.ToString("x");
+            HexWords = table;
+        }
+
+        // Read 8 groups as 16-bit words.
+        int g0 = (data[offset]     << 8) | data[offset + 1];
+        int g1 = (data[offset + 2] << 8) | data[offset + 3];
+        int g2 = (data[offset + 4] << 8) | data[offset + 5];
+        int g3 = (data[offset + 6] << 8) | data[offset + 7];
+        int g4 = (data[offset + 8] << 8) | data[offset + 9];
+        int g5 = (data[offset + 10] << 8) | data[offset + 11];
+        int g6 = (data[offset + 12] << 8) | data[offset + 13];
+        int g7 = (data[offset + 14] << 8) | data[offset + 15];
+
+        // Find the longest run of consecutive zero groups for :: compression.
+        int bestStart = -1, bestLen = 0;
+        int curStart = -1, curLen = 0;
+        int[] groups = { g0, g1, g2, g3, g4, g5, g6, g7 };
+        for (int i = 0; i < 8; i++)
+        {
+            if (groups[i] == 0)
+            {
+                if (curStart < 0) curStart = i;
+                curLen++;
+                if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+            }
+            else
+            {
+                curStart = -1;
+                curLen = 0;
+            }
+        }
+        // RFC 5952: only compress runs of length >= 2.
+        if (bestLen < 2) { bestStart = -1; bestLen = 0; }
+
+        // Build the string. Worst case is "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" = 39 chars.
+        var sb = new StringBuilder(39);
+        for (int i = 0; i < 8; i++)
+        {
+            if (i == bestStart)
+            {
+                sb.Append("::");
+                i += bestLen - 1;
+                continue;
+            }
+            if (i > 0 && !(i == bestStart + bestLen && bestStart >= 0)) sb.Append(':');
+            sb.Append(HexWords[groups[i]]);
+        }
+        return sb.ToString();
     }
 
     /// <summary>
