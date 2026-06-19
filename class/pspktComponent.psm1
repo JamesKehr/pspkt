@@ -121,6 +121,14 @@ class pspktComponent {
     [PhysicalAddress]
     $MacAddress
 
+    # VM scoping: populated by Get-PspktComponent -VM/-VMName so downstream
+    # cmdlets (Add-PspktComponent) can set session VM scoping from the pipeline.
+    [string]
+    $VMName
+
+    [string]
+    $VMMacAddress
+
     # a couple of hidden properties needed for pktmonapi
     hidden
     [int]

@@ -240,6 +240,36 @@ function Get-PspktComponent {
                     }
                 }
 
+                # Stamp VMName and VMMacAddress on every returned component so
+                # downstream cmdlets (Add-PspktComponent) can set session VM
+                # scoping from the pipeline without re-resolving the VM.
+                $vmMacs = @()
+                $vmAdapters = Get-VMNetworkAdapter -VM $vmObj -ErrorAction SilentlyContinue
+                if ($null -ne $vmAdapters) {
+                    foreach ($adapter in $vmAdapters) {
+                        $rawMac = "$($adapter.MacAddress)"
+                        if (-not [string]::IsNullOrEmpty($rawMac) -and $rawMac -ne '000000000000') {
+                            $vmMacs += ($rawMac -replace '(.{2})(?=.)', '$1-')
+                        }
+                    }
+                }
+
+                foreach ($comp in $results) {
+                    $comp.VMName = "$($vmObj.Name)"
+                    # Set VMMacAddress on vmNIC components (those whose Name matches the VM).
+                    # Non-vmNIC data-path components (vmSwitch, VMS ExtMp, ptNIC) get the VM
+                    # name but not a MAC — they're not the MAC source.
+                    if ($comp.Name -eq $vmObj.Name -and $vmMacs.Count -gt 0) {
+                        # Each vmNIC component's own MAC from pktmon; fall back to first Hyper-V MAC.
+                        $compMacStr = "$($comp.MacAddress)"
+                        if (-not [string]::IsNullOrEmpty($compMacStr) -and $compMacStr -ne '000000000000') {
+                            $comp.VMMacAddress = $compMacStr -replace '(.{2})(?=.)', '$1-'
+                        } elseif ($vmMacs.Count -gt 0) {
+                            $comp.VMMacAddress = $vmMacs[0]
+                        }
+                    }
+                }
+
                 # all done! return the virtual data path components
                 return $results
             }
@@ -632,19 +662,15 @@ function Add-PspktComponent {
         if ($PSCmdlet.ParameterSetName -eq 'ByComponent') {
             $Session.AddSingleDataSourceToSession($Component)
 
-            # Detect vmNIC components by their non-zero MAC address. pktmon vmNIC
-            # components carry the VM name in $Component.Name and the vmNIC MAC in
-            # $Component.MacAddress. Collect these so end{} can set VM scoping.
-            if ($null -ne $Component.MacAddress) {
-                $macBytes = $Component.MacAddress.GetAddressBytes()
-                $nonZero = $false
-                foreach ($b in $macBytes) { if ($b -ne 0) { $nonZero = $true; break } }
-                if ($nonZero -and $macBytes.Length -ge 6) {
-                    $macStr = ($macBytes | ForEach-Object { $_.ToString('X2') }) -join '-'
-                    $null = $script:pipedVmMacs.Add($macStr)
-                    # The vmNIC component's Name is the VM name.
-                    if ($null -eq $script:pipedVmName) {
-                        $script:pipedVmName = $Component.Name
+            # Detect VM components via the VMName/VMMacAddress properties stamped
+            # by Get-PspktComponent -VM/-VMName. Collect for end{} VM scoping.
+            if (-not [string]::IsNullOrEmpty($Component.VMName)) {
+                if ($null -eq $script:pipedVmName) {
+                    $script:pipedVmName = $Component.VMName
+                }
+                if (-not [string]::IsNullOrEmpty($Component.VMMacAddress)) {
+                    if (-not $script:pipedVmMacs.Contains($Component.VMMacAddress)) {
+                        $null = $script:pipedVmMacs.Add($Component.VMMacAddress)
                     }
                 }
             }
