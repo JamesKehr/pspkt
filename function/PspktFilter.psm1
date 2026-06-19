@@ -650,7 +650,7 @@ System.Boolean or pspktSession when PassThru is used.
 function Remove-PspktFilter {
     [CmdletBinding(DefaultParameterSetName = 'ByFilter')]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
@@ -704,7 +704,7 @@ pspktFilter
 function Get-PspktFilter {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session

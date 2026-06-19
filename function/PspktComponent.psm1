@@ -706,7 +706,7 @@ System.Boolean or pspktSession when PassThru is used.
 function Remove-PspktComponent {
     [CmdletBinding(DefaultParameterSetName = 'ByComponent')]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,

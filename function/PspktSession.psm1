@@ -1042,7 +1042,7 @@ Session object to update.
 function Update-PspktSessionInternal {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
@@ -1292,7 +1292,7 @@ pspktSession
 function Set-PspktSession {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
@@ -1807,7 +1807,7 @@ capture filter is set. See wiki/Application-Filters-ICMP.md.
 function Start-Pspkt {
     [CmdletBinding(DefaultParameterSetName = 'Default')]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = 'WithSession')]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = 'WithSession', Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
@@ -3562,7 +3562,7 @@ pspktSession (without -Teardown) or nothing (with -Teardown).
 function Stop-Pspkt {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
