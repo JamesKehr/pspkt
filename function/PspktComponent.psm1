@@ -521,13 +521,14 @@ function Set-PspktComponent {
 Adds a component to a session.
 
 .DESCRIPTION
-Adds a data source component to a pspktSession. When -VM or -VMName is supplied,
+Adds data source components to a pspktSession. When -VM or -VMName is supplied,
 resolves all VM data-path components and sets the session's VM scoping (VMName +
 VMMacAddresses) so all current and future filters on the session are automatically
 AND-combined with the VM's MAC addresses.
 
-Accepts pspktComponent objects from the pipeline (e.g. Get-PspktComponent -VM $vm |
-Add-PspktComponent -Session $s).
+Accepts pspktComponent objects from the pipeline. When piped components contain
+vmNIC objects (components with a non-zero MAC address), VM scoping is automatically
+set on the session from the vmNIC data — no need to specify -VMName separately.
 
 .PARAMETER Session
 Session that receives the component.
@@ -540,14 +541,19 @@ Hyper-V VM object (from Get-VM). Resolves all data-path components and sets VM
 scoping on the session.
 
 .PARAMETER VMName
-Hyper-V VM name string. When used with -VM (ByVM/ByVMName sets), resolves all
-data-path components and sets VM scoping. When used alongside pipeline components
-(ByComponent set), sets VM scoping without re-resolving components — use this form
-with `Get-PspktComponent -VMName 'X' | Add-PspktComponent $s -VMName 'X'` to pipe
-components and enable VM MAC scoping in one step.
+Hyper-V VM name string. Same behavior as -VM.
 
 .PARAMETER PassThru
 Returns the session object.
+
+.EXAMPLE
+$s = New-PspktSession -Name 'vm'
+Get-PspktComponent -VMName 'Win11Dev' | Add-PspktComponent $s
+# Session now has VM components added and VM scoping (VMName + VMMacAddresses) set.
+
+.EXAMPLE
+Add-PspktComponent -Session $s -VMName 'Win11Dev'
+# Resolves VM data-path components and sets VM scoping in one call.
 #>
 function Add-PspktComponent {
     [CmdletBinding(DefaultParameterSetName = 'ByComponent')]
@@ -567,7 +573,6 @@ function Add-PspktComponent {
         $VM,
 
         [Parameter(Mandatory = $true, ParameterSetName = 'ByVMName')]
-        [Parameter(Mandatory = $false, ParameterSetName = 'ByComponent')]
         [ValidateNotNullOrEmpty()]
         [string]
         $VMName,
@@ -578,10 +583,9 @@ function Add-PspktComponent {
     )
 
     begin {
-        # Track whether VM scoping needs to be resolved in the end block.
-        # When -VMName is supplied alongside pipeline components (ByComponent set),
-        # we defer VM scoping to end{} so all piped components are added first.
-        $script:deferVmScoping = $false
+        # Collect vmNIC MACs from piped components to auto-set VM scoping.
+        $script:pipedVmName = $null
+        $script:pipedVmMacs = [System.Collections.ArrayList]::new()
 
         if ($PSCmdlet.ParameterSetName -eq 'ByVM' -or $PSCmdlet.ParameterSetName -eq 'ByVMName') {
             # Direct -VM / -VMName invocation (no pipeline). Resolve components + VM scoping now.
@@ -622,31 +626,36 @@ function Add-PspktComponent {
                 }
             }
         }
-        elseif ($PSCmdlet.ParameterSetName -eq 'ByComponent' -and -not [string]::IsNullOrEmpty($VMName)) {
-            # Pipeline + -VMName: defer VM scoping to end{} after all components are added.
-            $script:deferVmScoping = $true
-        }
     }
 
     process {
         if ($PSCmdlet.ParameterSetName -eq 'ByComponent') {
             $Session.AddSingleDataSourceToSession($Component)
+
+            # Detect vmNIC components by their non-zero MAC address. pktmon vmNIC
+            # components carry the VM name in $Component.Name and the vmNIC MAC in
+            # $Component.MacAddress. Collect these so end{} can set VM scoping.
+            if ($null -ne $Component.MacAddress) {
+                $macBytes = $Component.MacAddress.GetAddressBytes()
+                $nonZero = $false
+                foreach ($b in $macBytes) { if ($b -ne 0) { $nonZero = $true; break } }
+                if ($nonZero -and $macBytes.Length -ge 6) {
+                    $macStr = ($macBytes | ForEach-Object { $_.ToString('X2') }) -join '-'
+                    $null = $script:pipedVmMacs.Add($macStr)
+                    # The vmNIC component's Name is the VM name.
+                    if ($null -eq $script:pipedVmName) {
+                        $script:pipedVmName = $Component.Name
+                    }
+                }
+            }
         }
     }
 
     end {
-        # Resolve VM scoping when -VMName was supplied alongside pipeline components,
-        # OR auto-detect: if piped components came from Get-PspktComponent -VMName,
-        # check whether any added component's Name matches a running VM.
-        if ($script:deferVmScoping -and -not [string]::IsNullOrEmpty($VMName)) {
-            $subMod = Get-Module PspktSession
-            $macList = & $subMod {
-                param($vmNameParam)
-                Get-PspktVMMacList -VMName $vmNameParam
-            } $VMName
-
-            $Session.VMName = $VMName
-            $Session.VMMacAddresses = $macList
+        # Auto-set VM scoping from piped vmNIC components.
+        if ($PSCmdlet.ParameterSetName -eq 'ByComponent' -and $script:pipedVmMacs.Count -gt 0) {
+            $Session.VMName = $script:pipedVmName
+            $Session.VMMacAddresses = [string[]]$script:pipedVmMacs.ToArray()
         }
 
         if ($PassThru.IsPresent) {
