@@ -349,6 +349,14 @@ class pspktComponent {
     [string]
     $MacAddress
 
+    # VM scoping: populated by Get-PspktComponent -VM/-VMName so downstream
+    # cmdlets (Add-PspktComponent) can set session VM scoping from the pipeline.
+    [string]
+    $VMName
+
+    [string]
+    $VMMacAddress
+
     # a couple of hidden properties needed for pktmonapi
     hidden
     [int]
@@ -1020,6 +1028,11 @@ class pspktSession {
     [string]           $FileName
     [bool]             $CountersOnly
 
+    # VM scoping: when set, every filter added to this session is AND-combined
+    # with each vmNIC MAC address so capture stays in the VM's network data path.
+    [string]   $VMName
+    [string[]] $VMMacAddresses
+
     hidden
     [pspkt] $Pspkt
 
@@ -1090,6 +1103,9 @@ class pspktSession {
     }
 
     # Stores a filter for later commit. Validates the filter can produce a constraint.
+    # When VM scoping is active (VMMacAddresses is populated), expands the filter into
+    # one clone per vmNIC MAC with Mac1 set, so the pktmon OR-combined filter set
+    # effectively AND-combines "VM MAC" with the filter's protocol scope.
     [void] AddFilter([pspktFilter] $filter)
     {
         if ($null -eq $filter) { throw "Filter cannot be null." }
@@ -1097,11 +1113,48 @@ class pspktSession {
         # Validate the filter can produce a valid constraint now, fail early.
         $null = $filter.ToProtocolConstraint()
 
-        $null = $this.Filters.Add($filter)
+        if ($null -ne $this.VMMacAddresses -and $this.VMMacAddresses.Count -gt 0 -and
+            ($null -eq $filter.Mac1 -or $filter.Mac1.Length -lt 6))
+        {
+            # VM-scoped session: expand filter × MAC list.
+            # Skip expansion if the filter already has a 6-byte MAC set (caller pre-stamped).
+            foreach ($macStr in $this.VMMacAddresses)
+            {
+                $clone = [pspktFilter]::new()
+                $clone.Name              = "$($filter.Name)-VM-$macStr"
+                if ($null -ne $filter.Mac1) { $clone.Mac1 = [byte[]]$filter.Mac1.Clone() }
+                if ($null -ne $filter.Mac2) { $clone.Mac2 = [byte[]]$filter.Mac2.Clone() }
+                $clone.VlanId            = $filter.VlanId
+                $clone.EtherType         = $filter.EtherType
+                $clone.DSCP              = $filter.DSCP
+                $clone.TransportProtocol = $filter.TransportProtocol
+                if ($null -ne $filter.Ip1) { $clone.Ip1 = $filter.Ip1 }
+                if ($null -ne $filter.Ip2) { $clone.Ip2 = $filter.Ip2 }
+                $clone.PrefixLength1     = $filter.PrefixLength1
+                $clone.PrefixLength2     = $filter.PrefixLength2
+                $clone.Port1             = $filter.Port1
+                $clone.Port2             = $filter.Port2
+                $clone.TCPFlags          = $filter.TCPFlags
+                $clone.VxLanPort         = $filter.VxLanPort
+                $clone.EncapType         = $filter.EncapType
+                $clone.SetMac1($macStr)
 
-        # If the session is already active, commit the new filter immediately.
-        if ($this.Active) {
-            $this.CommitFilter($filter, $this.Filters.Count - 1)
+                $null = $clone.ToProtocolConstraint()
+                $null = $this.Filters.Add($clone)
+
+                if ($this.Active) {
+                    $this.CommitFilter($clone, $this.Filters.Count - 1)
+                }
+            }
+        }
+        else
+        {
+            $null = $this.Filters.Add($filter)
+
+            # If the session is already active, commit the new filter immediately.
+            if ($this.Active) {
+                $this.CommitFilter($filter, $this.Filters.Count - 1)
+            }
         }
     }
 

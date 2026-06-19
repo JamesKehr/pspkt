@@ -457,26 +457,116 @@ function Set-PspktFilter {
 Adds a filter to a session.
 
 .DESCRIPTION
-Attaches a pspktFilter to a pspktSession via the session AddFilter method.
+Attaches one or more pspktFilter objects to a pspktSession. Accepts either a
+pre-built filter via -Filter (pipeline-bindable) or one or more quick-filter
+switches (-DNS, -SMB, -ARP, etc.) that auto-create the corresponding capture
+filters — the same ones Start-Pspkt generates.
+
+When the session has VM scoping set (VMName/VMMacAddresses), all added filters
+are automatically AND-combined with each vmNIC MAC.
 
 .PARAMETER Session
-Session that receives the filter.
+Session that receives the filter(s).
 
 .PARAMETER Filter
-Filter to add.
+Pre-built pspktFilter to add (accepts pipeline input).
+
+.PARAMETER ARP
+Quick filter: EtherType ARP.
+
+.PARAMETER NDP
+Quick filter: IPv6 ICMPv6 (NDP types 133-137).
+
+.PARAMETER DHCP
+Quick filter: UDP/IPv4 ports 67+68.
+
+.PARAMETER DHCPv6
+Quick filter: UDP/IPv6 ports 546+547.
+
+.PARAMETER DNS
+Quick filter: TCP+UDP port 53.
+
+.PARAMETER DNSoverHTTPS
+Quick filter: TCP port 443.
+
+.PARAMETER DNSoverTLS
+Quick filter: TCP port 853.
+
+.PARAMETER SMB
+Quick filter: TCP ports 445+88.
+
+.PARAMETER HTTP
+Quick filter: TCP port 80.
+
+.PARAMETER HTTPS
+Quick filter: TCP port 443.
+
+.PARAMETER SSH
+Quick filter: TCP port 22.
+
+.PARAMETER RDP
+Quick filter: TCP port 3389.
+
+.PARAMETER RPC
+Quick filter: TCP port 135.
+
+.PARAMETER Ping
+Quick filter: ICMPv4+ICMPv6.
+
+.PARAMETER Ping4
+Quick filter: ICMPv4 only.
+
+.PARAMETER Ping6
+Quick filter: ICMPv6 only.
+
+.PARAMETER WinRM
+Quick filter: TCP port 5985.
+
+.PARAMETER WinRMS
+Quick filter: TCP port 5986.
+
+.PARAMETER IPAddress
+Quick IP filter. AND-merged into each generated filter.
+
+.PARAMETER PassThru
+Returns the session object.
 #>
 function Add-PspktFilter {
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'ByFilter')]
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
 
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = 'ByFilter')]
         [ValidateNotNull()]
         [pspktFilter]
         $Filter,
+
+        # Quick-filter switches
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$ARP,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$NDP,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$DHCP,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$DHCPv6,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$DNS,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$DNSoverHTTPS,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$DNSoverTLS,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$SMB,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$HTTP,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$HTTPS,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$SSH,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$RDP,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$RPC,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$Ping,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$Ping4,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$Ping6,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$WinRM,
+        [Parameter(ParameterSetName = 'QuickFilter')][switch]$WinRMS,
+
+        [Parameter(ParameterSetName = 'QuickFilter')]
+        [Alias('i')]
+        [string]$IPAddress,
 
         [Parameter(Mandatory = $false)]
         [switch]
@@ -484,7 +574,59 @@ function Add-PspktFilter {
     )
 
     process {
-        $Session.AddFilter($Filter)
+        if ($PSCmdlet.ParameterSetName -eq 'ByFilter') {
+            $Session.AddFilter($Filter)
+        }
+        elseif ($PSCmdlet.ParameterSetName -eq 'QuickFilter') {
+            $quickFilters = [System.Collections.ArrayList]::new()
+
+            if ($ARP.IsPresent)         { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-ARP' -EtherType 'ARP')) }
+            if ($NDP.IsPresent)         { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-NDP' -EtherType 'IPv6' -TransportProtocol 'IPv6_ICMP')) }
+            if ($DHCP.IsPresent)        {
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-DHCP-Client' -TransportProtocol 'UDP' -EtherType 'IPv4' -Port1 68))
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-DHCP-Server' -TransportProtocol 'UDP' -EtherType 'IPv4' -Port1 67))
+            }
+            if ($DHCPv6.IsPresent)      {
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-DHCPv6-Client' -TransportProtocol 'UDP' -EtherType 'IPv6' -Port1 546))
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-DHCPv6-Server' -TransportProtocol 'UDP' -EtherType 'IPv6' -Port1 547))
+            }
+            if ($DNS.IsPresent)         {
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-DNS-UDP' -TransportProtocol 'UDP' -Port1 53))
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-DNS-TCP' -TransportProtocol 'TCP' -Port1 53))
+            }
+            if ($DNSoverHTTPS.IsPresent) { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-DoH' -TransportProtocol 'TCP' -Port1 443)) }
+            if ($DNSoverTLS.IsPresent)   { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-DoT' -TransportProtocol 'TCP' -Port1 853)) }
+            if ($SMB.IsPresent)         {
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-SMB' -TransportProtocol 'TCP' -Port1 445))
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-Kerberos' -TransportProtocol 'TCP' -Port1 88))
+            }
+            if ($HTTP.IsPresent)        { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-HTTP' -TransportProtocol 'TCP' -Port1 80)) }
+            if ($HTTPS.IsPresent)       { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-HTTPS' -TransportProtocol 'TCP' -Port1 443)) }
+            if ($SSH.IsPresent)         { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-SSH' -TransportProtocol 'TCP' -Port1 22)) }
+            if ($RDP.IsPresent)         { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-RDP' -TransportProtocol 'TCP' -Port1 3389)) }
+            if ($RPC.IsPresent)         { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-RPC' -TransportProtocol 'TCP' -Port1 135)) }
+            if ($Ping.IsPresent)        {
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-ICMPv4' -EtherType 'IPv4' -TransportProtocol 'ICMP'))
+                $null = $quickFilters.Add((New-PspktFilter -Name 'QF-ICMPv6' -EtherType 'IPv6' -TransportProtocol 'IPv6_ICMP'))
+            }
+            if ($Ping4.IsPresent)       { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-ICMPv4' -EtherType 'IPv4' -TransportProtocol 'ICMP')) }
+            if ($Ping6.IsPresent)       { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-ICMPv6' -EtherType 'IPv6' -TransportProtocol 'IPv6_ICMP')) }
+            if ($WinRM.IsPresent)       { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-WinRM' -TransportProtocol 'TCP' -Port1 5985)) }
+            if ($WinRMS.IsPresent)      { $null = $quickFilters.Add((New-PspktFilter -Name 'QF-WinRMS' -TransportProtocol 'TCP' -Port1 5986)) }
+
+            # AND-merge IP address into each filter.
+            if (-not [string]::IsNullOrEmpty($IPAddress)) {
+                $parsedIP = [System.Net.IPAddress]::Parse($IPAddress)
+                foreach ($qf in $quickFilters) {
+                    $qf.SetIp1($parsedIP)
+                }
+            }
+
+            # Add all filters to the session (VM MAC expansion happens inside AddFilter).
+            foreach ($qf in $quickFilters) {
+                $Session.AddFilter($qf)
+            }
+        }
 
         if ($PassThru.IsPresent) {
             return $Session
@@ -508,7 +650,7 @@ System.Boolean or pspktSession when PassThru is used.
 function Remove-PspktFilter {
     [CmdletBinding(DefaultParameterSetName = 'ByFilter')]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
@@ -562,7 +704,7 @@ pspktFilter
 function Get-PspktFilter {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidateNotNull()]
         [pspktSession]
         $Session
