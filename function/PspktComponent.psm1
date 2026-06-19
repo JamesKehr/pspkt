@@ -521,35 +521,107 @@ function Set-PspktComponent {
 Adds a component to a session.
 
 .DESCRIPTION
-Adds a data source component to a pspktSession.
+Adds a data source component to a pspktSession. When -VM or -VMName is supplied,
+resolves all VM data-path components and sets the session's VM scoping (VMName +
+VMMacAddresses) so all current and future filters on the session are automatically
+AND-combined with the VM's MAC addresses.
+
+Accepts pspktComponent objects from the pipeline (e.g. Get-PspktComponent -VM $vm |
+Add-PspktComponent -Session $s).
 
 .PARAMETER Session
 Session that receives the component.
 
 .PARAMETER Component
-Component to add.
+Component to add (accepts pipeline input).
+
+.PARAMETER VM
+Hyper-V VM object (from Get-VM). Resolves all data-path components and sets VM
+scoping on the session.
+
+.PARAMETER VMName
+Hyper-V VM name string. Same behavior as -VM.
+
+.PARAMETER PassThru
+Returns the session object.
 #>
 function Add-PspktComponent {
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'ByComponent')]
     param(
         [Parameter(Mandatory = $true)]
         [ValidateNotNull()]
         [pspktSession]
         $Session,
 
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = 'ByComponent')]
         [ValidateNotNull()]
         [pspktComponent]
         $Component,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'ByVM')]
+        [object]
+        $VM,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'ByVMName')]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $VMName,
 
         [Parameter(Mandatory = $false)]
         [switch]
         $PassThru
     )
 
-    process {
-        $Session.AddSingleDataSourceToSession($Component)
+    begin {
+        if ($PSCmdlet.ParameterSetName -eq 'ByVM' -or $PSCmdlet.ParameterSetName -eq 'ByVMName') {
+            # Resolve VM components.
+            $vmComps = $null
+            if ($PSCmdlet.ParameterSetName -eq 'ByVM') {
+                $vmComps = Get-PspktComponent -VM $VM
+            } else {
+                $vmComps = Get-PspktComponent -VMName $VMName
+            }
 
+            # Resolve MAC addresses and set VM scoping on the session.
+            $subMod = Get-Module PspktSession
+            $macList = & $subMod {
+                param($vmParam, $vmNameParam)
+                Get-PspktVMMacList -VM $vmParam -VMName $vmNameParam
+            } $VM $VMName
+
+            $vmLabel = if ($PSCmdlet.ParameterSetName -eq 'ByVM') { "$($VM.Name)" } else { $VMName }
+            $Session.VMName = $vmLabel
+            $Session.VMMacAddresses = $macList
+
+            # Add components.
+            if ($null -ne $vmComps) {
+                foreach ($comp in $vmComps) {
+                    if ($null -ne $comp -and $comp.Pointer -ne [IntPtr]::Zero) {
+                        $Session.AddSingleDataSourceToSession($comp)
+                    }
+                }
+            } elseif ($macList.Count -gt 0) {
+                # OFF/Saved VM fallback: no live vmNIC components but MACs are known.
+                # Attach host NIC components; MAC filter will scope the capture.
+                $nicComps = $Session.Pspkt.EnumPktmonDataSources($true, 1)
+                if ($null -ne $nicComps) {
+                    foreach ($comp in $nicComps) {
+                        if ($null -ne $comp -and $comp.Pointer -ne [IntPtr]::Zero) {
+                            $Session.AddSingleDataSourceToSession($comp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    process {
+        if ($PSCmdlet.ParameterSetName -eq 'ByComponent') {
+            $Session.AddSingleDataSourceToSession($Component)
+        }
+    }
+
+    end {
         if ($PassThru.IsPresent) {
             return $Session
         }

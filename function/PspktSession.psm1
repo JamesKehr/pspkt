@@ -2504,6 +2504,14 @@ function Start-Pspkt {
         $vmScopingActive = ($vmMacList.Count -gt 0)
         $vmExpansionApplied = $false
 
+        # Persist VM scoping on the session object so any subsequent Add-PspktFilter
+        # calls (outside Start-Pspkt) also auto-MAC-stamp their filters.
+        if ($vmScopingActive) {
+            $vmLabel = if ($PSBoundParameters.ContainsKey('VM')) { "$($VM.Name)" } else { $VMName }
+            $Session.VMName = $vmLabel
+            $Session.VMMacAddresses = $vmMacList
+        }
+
         # Apply quick filters — create and add filters for each active switch.
         $quickFilters = [System.Collections.ArrayList]::new()
 
