@@ -1511,12 +1511,12 @@ function Get-PspktCaptureHeader {
     $scheme = Get-PspktColorScheme
     $reset = "$($script:ESC)[$($scheme.Reset)m"
 
-    # The component prefix is fixed at 36 characters:
-    # "227:235 (TCP/IPv4 - L2       )[ In]: " = 36 + ": " separator
-    # Pad "Group:Component" to 38 chars (36 content + 2 for ": ") so "Data Link"
-    # starts exactly where the data-link segment begins in packet output.
+    # Component prefix format: "GGG:CCC[dir edge](CompName20chars   ):"
+    # Fixed width (always exactly 34 chars: 7 + 4 + 1 + 20 + 2):
+    #   "GGG:CCC" (7) + "[de]" (4) + "(" (1) + 20-char name (20) + "):" (2) = 34
+    # Name is always padded/truncated to 20 chars so this width never varies.
     $layers = @(
-        @{ Label = 'Group:Component'; Layer = 'Component'; Width = 37 }
+        @{ Label = 'Group:Component'; Layer = 'Component'; Width = 34 }
         @{ Label = 'Data Link';       Layer = 'DataLink';  Width = 16 }
         @{ Label = 'Network';         Layer = 'Network';   Width = 16 }
         @{ Label = 'Transport';       Layer = 'Transport'; Width = 16 }

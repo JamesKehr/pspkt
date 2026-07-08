@@ -3243,6 +3243,29 @@ function Start-Pspkt {
             Write-Host "File writer started: $pcapngPath ($modeLabel)$rotInfo" -ForegroundColor DarkCyan
         }
 
+        # The real-time consumer loop writes formatted output directly via
+        # [Console]::Write, bypassing PowerShell's normal output pipeline. That
+        # bypass means the packet line's Unicode characters (component prefix
+        # arrows, box-drawing, etc.) are encoded using [Console]::OutputEncoding
+        # — which on many Windows Powershell 5.1 hosts defaults to a legacy OEM
+        # codepage that can't represent those characters, causing them to print
+        # as '?' or vanish. Force UTF-8 for the duration of the capture and
+        # restore the previous encoding in the finally block below. Wrapped in
+        # try/catch because the setter throws when stdout is redirected/piped
+        # (no console to reconfigure) — in that case leave encoding untouched.
+        $originalOutputEncoding = $null
+        try {
+            $originalOutputEncoding = [Console]::OutputEncoding
+            if ($originalOutputEncoding.CodePage -ne [System.Text.Encoding]::UTF8.CodePage) {
+                [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+            } else {
+                $originalOutputEncoding = $null
+            }
+        } catch {
+            $originalOutputEncoding = $null
+            Write-Verbose "Could not set console output encoding to UTF-8: $_"
+        }
+
         try {
           if ($useRealTime) {
             # Determine if pause/stop features are active.
@@ -3481,6 +3504,15 @@ function Start-Pspkt {
         }
         finally {
             $script:ComponentRefreshLocked = $false
+
+            # Restore the console's original output encoding if we changed it.
+            if ($null -ne $originalOutputEncoding) {
+                try {
+                    [Console]::OutputEncoding = $originalOutputEncoding
+                } catch {
+                    Write-Verbose "Could not restore console output encoding: $_"
+                }
+            }
 
             # Clear any application-layer predicate so it can't leak into a later capture.
             [PacketLineFormatter]::ClearAppPredicates()

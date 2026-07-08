@@ -165,6 +165,10 @@ public static class PacketLineFormatter
     // for TCP/UDP transport payloads passed to app-layer parsers. Grown to max observed
     // size and reused across packets (safe: consumer thread processes one packet at a time).
     [ThreadStatic] private static byte[] _payloadBuf;
+
+    // Per-packet direction value (set in FormatSinglePacketInto, read by
+    // FormatComponentPrefixInternal). 1=In, 2=Out, 0=unspecified.
+    [ThreadStatic] private static int _currentDirection;
     private static byte[] RentPayloadBuffer(int minSize)
     {
         byte[] buf = _payloadBuf;
@@ -1144,7 +1148,7 @@ public static class PacketLineFormatter
             parentId = info.ParentId;
         }
 
-        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId);
+        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection);
     }
 
     private static string FormatDataLinkInternal(int linkKind, string srcMac, string dstMac, int etherType, int rawLen)
@@ -2115,17 +2119,22 @@ public static class PacketLineFormatter
         // --- Extract metadata ---
         int compId = 0, edgeId = 0, dropReason = 0, dropLocation = 0;
         int packetType = 0; // 0=Ethernet, 1=WiFi
+        int direction = 0;  // 1=In, 2=Out
         long metaTimestamp = 0;
 
         if (pktDataSize >= metaOffset + 40)
         {
             compId = BitConverter.ToUInt16(data, metaOffset + 16);
             edgeId = BitConverter.ToUInt16(data, metaOffset + 18);
+            direction = BitConverter.ToUInt16(data, metaOffset + 12);
             dropReason = (int)BitConverter.ToUInt32(data, metaOffset + 22);
             dropLocation = (int)BitConverter.ToUInt32(data, metaOffset + 26);
             packetType = BitConverter.ToUInt16(data, metaOffset + 14);
             metaTimestamp = BitConverter.ToInt64(data, metaOffset + 32);
         }
+
+        // Store direction for the component prefix formatter.
+        _currentDirection = direction;
 
         // --- Compute timestamp ---
         long streamTimestamp;

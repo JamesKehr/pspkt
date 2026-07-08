@@ -427,25 +427,59 @@ public static class PacketFormatter
     /// </summary>
     public static string FormatComponentPrefix(int parentId, int compId, string compName, int lineCounter, int edgeId)
     {
+        return FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, 0);
+    }
+
+    /// <summary>
+    /// Formats the component prefix with Unicode arrow indicators for direction and edge.
+    /// Format: "GGG:CCC[↑←](CompName        ):" — CompName is always padded/truncated to a
+    /// fixed width so the prefix length (and therefore where Data Link content starts) is
+    /// identical for every packet, regardless of component name length.
+    ///   Direction: ↑ = In (1), ↓ = Out (2), space = unspecified
+    ///   Edge: → = Ingress (1), ← = Egress (2), space = unspecified
+    /// </summary>
+    public static string FormatComponentPrefix(int parentId, int compId, string compName, int lineCounter, int edgeId, int direction)
+    {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
-        int cacheKey = (compId << 3) | (edgeId << 1) | variant;
+
+        // Cache key bit layout (must not overlap — direction/edgeId are read directly from
+        // raw pktmon metadata and can carry values beyond the 1/2 documented here, so each
+        // gets a full 4-bit field regardless). Overlapping bits previously caused different
+        // (direction, edgeId, compId) combinations to collide on the same cache key, which
+        // silently returned another component's cached — and therefore wrong — prefix string.
+        //   bit 0      : variant   (1 bit,  0-1)
+        //   bits 1-4   : direction (4 bits, 0-15)
+        //   bits 5-8   : edgeId    (4 bits, 0-15)
+        //   bits 9+    : compId
+        int cacheKey = variant | ((direction & 0xF) << 1) | ((edgeId & 0xF) << 5) | (compId << 9);
         string[] cached;
         if (_compCache.TryGetValue(cacheKey, out cached))
         {
             return cached[0];
         }
 
-        // Format: "PPP:CCC (Name                )[ In|Out]"
+        // Fixed-width component name field (20 chars) so the prefix is always the same
+        // length regardless of the actual component name — required for column alignment.
+        const int nameWidth = 20;
         if (compName == null) compName = "";
-        if (compName.Length > 20) compName = compName.Substring(0, 20);
-        else if (compName.Length < 20) compName = compName.PadRight(20);
+        if (compName.Length > nameWidth) compName = compName.Substring(0, nameWidth);
+        else if (compName.Length < nameWidth) compName = compName.PadRight(nameWidth);
 
-        // Edge suffix after closing paren: 1=Ingress→[ In], 2=Egress→[Out]
-        string edgeSuffix = "";
-        if (edgeId == 1) edgeSuffix = "[ In]";
-        else if (edgeId == 2) edgeSuffix = "[Out]";
+        // Direction arrow: ↑=In, ↓=Out
+        char dirArrow = ' ';
+        if (direction == 1) dirArrow = '\u2191';       // ↑
+        else if (direction == 2) dirArrow = '\u2193';  // ↓
 
-        string raw = parentId.ToString("D3") + ":" + compId.ToString("D3") + " (" + compName + ")" + edgeSuffix;
+        // Edge arrow: →=Ingress, ←=Egress
+        char edgeArrow = ' ';
+        if (edgeId == 1) edgeArrow = '\u2192';         // →
+        else if (edgeId == 2) edgeArrow = '\u2190';    // ←
+
+        string raw = string.Concat(
+            parentId.ToString("D3"), ":", compId.ToString("D3"),
+            "[", dirArrow.ToString(), edgeArrow.ToString(), "]",
+            "(", compName, "):");
+
         string prefix = _prefixes[LAYER_COMPONENT, variant];
         string result;
         if (prefix != null)
@@ -462,11 +496,11 @@ public static class PacketFormatter
     }
 
     /// <summary>
-    /// Overload for backward compatibility (edgeId defaults to 0).
+    /// Overload for backward compatibility (edgeId and direction default to 0).
     /// </summary>
     public static string FormatComponentPrefix(int parentId, int compId, string compName, int lineCounter)
     {
-        return FormatComponentPrefix(parentId, compId, compName, lineCounter, 0);
+        return FormatComponentPrefix(parentId, compId, compName, lineCounter, 0, 0);
     }
 
     /// <summary>
