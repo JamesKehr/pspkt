@@ -465,20 +465,28 @@ public static class PacketFormatter
         if (compName.Length > nameWidth) compName = compName.Substring(0, nameWidth);
         else if (compName.Length < nameWidth) compName = compName.PadRight(nameWidth);
 
-        // Direction arrow: ↑=In, ↓=Out
+        // Direction arrow (from PKTMON_DIRECTION_TAG at metadata offset 12):
+        //   Incoming  = In(1) / Rx(3) / Ingress(5)  -> ↑
+        //   Outgoing  = Out(2) / Tx(4) / Egress(6)  -> ↓
+        //   Unspecified(0) or unknown                -> space
+        // pktmon reports the direction tag as Ingress/Egress for many WFP and NIC
+        // components rather than the plain In/Out tags, so all three incoming and all
+        // three outgoing tags must be handled — checking only In(1)/Out(2) left the
+        // arrow blank for those components.
         char dirArrow = ' ';
-        if (direction == 1) dirArrow = '\u2191';       // ↑
-        else if (direction == 2) dirArrow = '\u2193';  // ↓
+        if (direction == 1 || direction == 3 || direction == 5) dirArrow = '\u2191';       // ↑ In
+        else if (direction == 2 || direction == 4 || direction == 6) dirArrow = '\u2193';  // ↓ Out
 
-        // Edge arrow: →=Ingress, ←=Egress
+        // Edge arrow (from EdgeId at metadata offset 18): →=Ingress(1), ←=Egress(2)
         char edgeArrow = ' ';
         if (edgeId == 1) edgeArrow = '\u2192';         // →
         else if (edgeId == 2) edgeArrow = '\u2190';    // ←
 
+        // Note: no trailing ':' here — callers append ": " after the prefix.
         string raw = string.Concat(
             parentId.ToString("D3"), ":", compId.ToString("D3"),
             "[", dirArrow.ToString(), edgeArrow.ToString(), "]",
-            "(", compName, "):");
+            "(", compName, ")");
 
         string prefix = _prefixes[LAYER_COMPONENT, variant];
         string result;

@@ -1511,12 +1511,12 @@ function Get-PspktCaptureHeader {
     $scheme = Get-PspktColorScheme
     $reset = "$($script:ESC)[$($scheme.Reset)m"
 
-    # Component prefix format: "GGG:CCC[dir edge](CompName20chars   ):"
-    # Fixed width (always exactly 34 chars: 7 + 4 + 1 + 20 + 2):
-    #   "GGG:CCC" (7) + "[de]" (4) + "(" (1) + 20-char name (20) + "):" (2) = 34
+    # Component prefix format: "GGG:CCC[dir edge](CompName20chars   )" + ": " from caller
+    # Fixed width (always exactly 35 chars before Data Link content):
+    #   "GGG:CCC" (7) + "[de]" (4) + "(" (1) + 20-char name (20) + ")" (1) + ": " (2) = 35
     # Name is always padded/truncated to 20 chars so this width never varies.
     $layers = @(
-        @{ Label = 'Group:Component'; Layer = 'Component'; Width = 34 }
+        @{ Label = 'Group:Component'; Layer = 'Component'; Width = 35 }
         @{ Label = 'Data Link';       Layer = 'DataLink';  Width = 16 }
         @{ Label = 'Network';         Layer = 'Network';   Width = 16 }
         @{ Label = 'Transport';       Layer = 'Transport'; Width = 16 }
