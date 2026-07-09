@@ -1566,8 +1566,15 @@ function Invoke-PspktAnalysisLoop {
         # Position the cursor on the input row inside the box and read a line.
         $inputRow = $ovTop + 3
         [Console]::Write("$ESC[$inputRow;$($ovLeft + 2)H" + [BoxyBox.ScreenRegion]::ShowCursor())
+        # Temporarily restore processed-input mode so the OS console handles line editing
+        # (Backspace, etc.) during ReadLine. The loop runs with TreatControlCAsInput = true
+        # (for the Shift+Ctrl+C copy hotkey), which clears ENABLE_PROCESSED_INPUT and would
+        # otherwise make Backspace insert a literal 0x08 instead of erasing.
+        $savedCtrlC = $true
+        try { $savedCtrlC = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $false } catch { }
         $fname = $null
         try { $fname = [Console]::ReadLine() } catch { $fname = $null }
+        try { [Console]::TreatControlCAsInput = $savedCtrlC } catch { }
         [Console]::Write([BoxyBox.ScreenRegion]::HideCursor())
         if ([string]::IsNullOrWhiteSpace($fname)) { return 'Save cancelled' }
         try {
