@@ -1340,19 +1340,69 @@ function Set-PspktSession {
 }
 
 # --------------------------------------------------------------------------
-# Analysis mode consumer loop (BoxyBox TUI). Phase 2: live scrolling Text Box.
+# Analysis mode consumer loop (BoxyBox TUI).
 # --------------------------------------------------------------------------
 
 <#
 .SYNOPSIS
-Runs the BoxyBox Analysis-mode consumer loop: a live scrolling Text Box.
+Loads a BoxyBox TUI menu definition (JSON) for a box, honoring user overrides.
+
+.DESCRIPTION
+Menus are JSON files of {Name, DisplayName, Hotkey} items rendered as
+"[Hotkey]DisplayName". A user copy at $HOME\.pspkt\menus\<Box>.json overrides the
+shipped default at TUI\BoxyBox\menus\<Box>.json, allowing custom text/hotkeys and
+localization. Returns a BoxyBox.MenuDefinition (empty on any load failure).
+
+.PARAMETER Box
+Menu name: TextLive, TextFocus, or Details.
+
+.OUTPUTS
+BoxyBox.MenuDefinition
+#>
+function Get-PspktTuiMenu {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $Box
+    )
+
+    $def = [BoxyBox.MenuDefinition]::new($Box)
+    $userPath    = Join-Path $HOME ".pspkt\menus\$Box.json"
+    $shippedPath = Join-Path $PSScriptRoot "..\TUI\BoxyBox\menus\$Box.json"
+    $path = if (Test-Path -LiteralPath $userPath) { $userPath }
+            elseif (Test-Path -LiteralPath $shippedPath) { $shippedPath }
+            else { $null }
+
+    if ($null -ne $path) {
+        try {
+            $json = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $json.Box) { $def.Box = $json.Box }
+            foreach ($m in $json.Menu) {
+                $null = $def.AddItem([string]$m.Name, [string]$m.DisplayName, [string]$m.Hotkey)
+            }
+        } catch {
+            Write-Verbose "Failed to load TUI menu '$Box' from $path : $_"
+        }
+    }
+    return $def
+}
+
+<#
+.SYNOPSIS
+Runs the BoxyBox Analysis-mode consumer loop: a live scrolling Text Box, with a
+focus mode that opens a Details box and supports copy/save.
 
 .DESCRIPTION
 Internal helper invoked by Start-Pspkt when -ParsingLevel is Analysis. Drains the
 real-time ring, formats each packet into the compact Text Box line (Default-level
 parse with the component name omitted), and feeds them into a scrolling BoxyBox
-TextBox rendered to a fixed console region (no console scroll). Phase 2 supports
-live scrolling plus the 's' hotkey to stop; Focus/Details arrive in later phases.
+TextBox rendered to a fixed console region (no console scroll). Focus ('f') splits
+the screen into a Text box + Details box (Wireshark-style JIT parse tree), 'r'
+resumes, 's' stops. Shift+Ctrl+C copies the selection; the Save hotkey writes the
+capture buffer to a file via an overlay prompt. Menus are JSON-driven and switch
+between Full (hotkey+text) and Simple (hotkey only) by console width.
 
 .PARAMETER Session
 The active pspkt session whose OutputStream[0] ring is drained.
@@ -1396,10 +1446,15 @@ function Invoke-PspktAnalysisLoop {
     $areaTop    = 2
     $areaHeight = [Math]::Max(6, $consoleHeight - 1)
 
+    # JSON-driven menus (Full = hotkey+text, Simple = hotkey-only, auto by width).
+    $liveMenuDef    = Get-PspktTuiMenu -Box 'TextLive'
+    $focusMenuDef   = Get-PspktTuiMenu -Box 'TextFocus'
+    $detailsMenuDef = Get-PspktTuiMenu -Box 'Details'
+
     # Live layout: a single Text Box fills the whole area.
     $textBox = [BoxyBox.TextBox]::new($boxWidth, $areaHeight, 200000)
     $liveBox = [BoxyBox.Box]::new($boxWidth, $areaHeight)
-    $liveBox.MenuOptions = [System.Collections.Generic.List[string]]@('(F)ocus', '(S)top', 'Save to (F)ile')
+    $liveBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($liveMenuDef, $boxWidth)
     $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
 
     # Focus layout: Text Box (top half) + Details Box (bottom half).
@@ -1407,13 +1462,10 @@ function Invoke-PspktAnalysisLoop {
     $detailsHeight   = $areaHeight - $textFocusHeight
     $textFocusBox = [BoxyBox.Box]::new($boxWidth, $textFocusHeight)
     $textFocusBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Mid
-    $textFocusBox.MenuOptions = [System.Collections.Generic.List[string]]@('(R)esume', '(S)top', 'Save to (F)ile', '[Tab] switch', '[Shift+Ctrl+C]opy')
+    $textFocusBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($focusMenuDef, $boxWidth)
     $textFocusRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $textFocusHeight)
     $detailsBox = [BoxyBox.DetailsBox]::new($boxWidth, $detailsHeight)
-    $detailsBox.MenuOptions = [System.Collections.Generic.List[string]]@(
-        "[$([char]0x2192)] Expand", "[$([char]0x2190)] Collapse",
-        "[Ctrl+$([char]0x2192)] Expand all", "[Ctrl+$([char]0x2190)] Collapse all",
-        "[Ctrl+$([char]0x2191)$([char]0x2193)] Prev|Next pkt")
+    $detailsBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($detailsMenuDef, $boxWidth)
     $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
 
     # JIT detail store: retain the last 20,000 packets' raw bytes for on-demand parsing.
@@ -1449,9 +1501,48 @@ function Invoke-PspktAnalysisLoop {
         $detailsBox.SetTree($roots)
     }
 
+    # --- Transient notification overlay state (e.g. "Copied to clipboard") ---
+    $notifyText = $null
+    $notifyUntil = [DateTime]::MinValue
+
+    # Writes the full text buffer to a file via a blocking overlay prompt. Returns a status
+    # string for the notification. Restores the cursor state around the ReadLine.
+    $saveToFile = {
+        $body = [System.Collections.Generic.List[string]]::new()
+        $null = $body.Add('')
+        $null = $body.Add(' Enter file path to save the capture text (blank = cancel):')
+        $null = $body.Add('')
+        $null = $body.Add('')
+        $ovW = [Math]::Min(70, $consoleWidth - 4)
+        $ovTop = 0; $ovLeft = 0
+        $ovLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $ovW, ' Save Capture ', $body, [ref]$ovTop, [ref]$ovLeft)
+        $ovRegion = [BoxyBox.ScreenRegion]::new($ovTop, $ovLeft, $ovW, $ovLines.Count)
+        [Console]::Write($ovRegion.BuildFrame($ovLines))
+        # Position the cursor on the input row inside the box and read a line.
+        $inputRow = $ovTop + 3
+        [Console]::Write("$ESC[$inputRow;$($ovLeft + 2)H" + [BoxyBox.ScreenRegion]::ShowCursor())
+        $fname = $null
+        try { $fname = [Console]::ReadLine() } catch { $fname = $null }
+        [Console]::Write([BoxyBox.ScreenRegion]::HideCursor())
+        if ([string]::IsNullOrWhiteSpace($fname)) { return 'Save cancelled' }
+        try {
+            $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($fname.Trim())
+            $lines = $textBox.GetWindow($textBox.BaseSeq, [int]($textBox.TotalSeq - $textBox.BaseSeq))
+            $plain = foreach ($l in $lines) { [BoxyBox.AnsiText]::StripAnsi($l) }
+            Set-Content -LiteralPath $resolved -Value $plain -Encoding UTF8
+            return "Saved $($lines.Count) lines to $resolved"
+        } catch {
+            return "Save failed: $($_.Exception.Message)"
+        }
+    }
+
     # Cap render rate (~30 fps).
     $frameWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $frameIntervalMs = 33
+
+    # Capture Shift+Ctrl+C as input (for the copy hotkey) rather than terminating; 's' stops.
+    $prevTreatCtrlC = $false
+    try { $prevTreatCtrlC = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $true } catch { }
 
     [PktMonApi]::SetCaptureActive($true)
     [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen() + [BoxyBox.ScreenRegion]::HideCursor())
@@ -1468,6 +1559,34 @@ function Invoke-PspktAnalysisLoop {
                 $ch = [char]::ToLower($key.KeyChar)
                 $ctrl  = ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0
                 $shift = ($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
+
+                # Shift+Ctrl+C: copy the selected Text line + all visible Details lines.
+                if ($ctrl -and $shift -and $key.Key -eq [ConsoleKey]::C) {
+                    if ($focused) {
+                        $copyLines = [System.Collections.Generic.List[string]]::new()
+                        $selLine = $textBox.GetLineBySeq($selectedSeq)
+                        if ($null -ne $selLine) { $null = $copyLines.Add([BoxyBox.AnsiText]::StripAnsi($selLine)) }
+                        foreach ($d in $detailsBox.GetVisibleText()) { $null = $copyLines.Add($d) }
+                        try {
+                            ($copyLines -join "`r`n") | Set-Clipboard -ErrorAction Stop
+                            $notifyText = "Copied packet ($($copyLines.Count) lines) to clipboard"
+                        } catch {
+                            $notifyText = "Clipboard copy failed"
+                        }
+                        $notifyUntil = [DateTime]::UtcNow.AddSeconds(2)
+                        $dirty = $true
+                    }
+                    continue
+                }
+
+                # Save hotkey ('w'): blocking file-save overlay prompt.
+                if ($ch -eq 'w') {
+                    $notifyText = & $saveToFile
+                    $notifyUntil = [DateTime]::UtcNow.AddSeconds(3)
+                    [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
+                    $dirty = $true
+                    continue
+                }
 
                 if ($ch -eq 's') { $stopRequested = $true; continue }
 
@@ -1602,13 +1721,30 @@ function Invoke-PspktAnalysisLoop {
                 if ($status.Length -gt $boxWidth) { $status = $status.Substring(0, $boxWidth) }
                 $statusLine = "$ESC[1;1H$ESC[2K$status"
                 [Console]::Write($statusLine + $frame)
+
+                # Transient notification overlay (copy/save results) on top of the frame.
+                if ($null -ne $notifyText -and [DateTime]::UtcNow -lt $notifyUntil) {
+                    $nbody = [System.Collections.Generic.List[string]]::new()
+                    $null = $nbody.Add('')
+                    $null = $nbody.Add(' ' + $notifyText)
+                    $null = $nbody.Add('')
+                    $nW = [Math]::Min([Math]::Max(24, $notifyText.Length + 6), $consoleWidth - 4)
+                    $nTop = 0; $nLeft = 0
+                    $nLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $nW, ' pspkt ', $nbody, [ref]$nTop, [ref]$nLeft)
+                    $nRegion = [BoxyBox.ScreenRegion]::new($nTop, $nLeft, $nW, $nLines.Count)
+                    [Console]::Write($nRegion.BuildFrame($nLines))
+                }
+
                 $frameWatch.Restart()
                 $dirty = $false
+                # Keep refreshing while a notification is visible, even when idle.
+                if ($null -ne $notifyText -and [DateTime]::UtcNow -lt $notifyUntil) { $dirty = $true }
             }
         }
     }
     finally {
         # Restore console + formatter state.
+        try { [Console]::TreatControlCAsInput = $prevTreatCtrlC } catch { }
         [Console]::Write([BoxyBox.ScreenRegion]::ShowCursor())
         $belowRow = $areaTop + $areaHeight
         [Console]::Write("$ESC[$belowRow;1H`n")

@@ -1,0 +1,8 @@
+{
+  "Box": "TextLive",
+  "Menu": [
+    { "Name": "Focus", "DisplayName": "Focus", "Hotkey": "F" },
+    { "Name": "Stop", "DisplayName": "Stop", "Hotkey": "S" },
+    { "Name": "Save", "DisplayName": "Save to file", "Hotkey": "W" }
+  ]
+}

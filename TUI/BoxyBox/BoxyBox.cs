@@ -1002,5 +1002,150 @@ namespace BoxyBox
             if (selectedRow < 0 || selectedRow >= rows) selectedRow = -1;
             return _box.Render(window, selectedRow, highlightOn, highlightOff);
         }
+
+        /// <summary>
+        /// Returns the plain-text (ANSI-stripped) content of all currently visible rows —
+        /// used by the Shift+Ctrl+C copy action to capture what the user sees in the box.
+        /// </summary>
+        public List<string> GetVisibleText()
+        {
+            int rows = ContentRows;
+            var lines = new List<string>(rows);
+            for (int i = 0; i < rows; i++)
+            {
+                int idx = _top + i;
+                if (idx < _rows.Count) lines.Add(AnsiText.StripAnsi(_rows[idx].Display));
+            }
+            return lines;
+        }
+    }
+
+    /// <summary>A single menu entry. Rendered as "[Hotkey]DisplayName" (Full) or "[Hotkey]" (Simple).</summary>
+    public sealed class MenuItem
+    {
+        public string Name;        // logical id (matched by the loop's key handler)
+        public string DisplayName; // shown text (may include a leading space)
+        public string Hotkey;      // key label shown in brackets
+
+        public MenuItem() { }
+        public MenuItem(string name, string displayName, string hotkey)
+        {
+            Name = name; DisplayName = displayName; Hotkey = hotkey;
+        }
+    }
+
+    /// <summary>A named menu (one per box), loadable/exportable as JSON for customization.</summary>
+    public sealed class MenuDefinition
+    {
+        public string Box;
+        public List<MenuItem> Menu;
+
+        public MenuDefinition() { Menu = new List<MenuItem>(); }
+        public MenuDefinition(string box) { Box = box; Menu = new List<MenuItem>(); }
+
+        public MenuDefinition AddItem(string name, string displayName, string hotkey)
+        {
+            Menu.Add(new MenuItem(name, displayName, hotkey));
+            return this;
+        }
+    }
+
+    /// <summary>
+    /// Renders menu definitions into the option strings a <see cref="MenuBar"/> consumes.
+    /// Full mode shows "[Hotkey]DisplayName"; Simple mode (used when Full won't fit the bar)
+    /// shows just "[Hotkey]". <see cref="FullFits"/> decides which mode a given width allows.
+    /// </summary>
+    public static class MenuRenderer
+    {
+        public static List<string> BuildOptions(MenuDefinition def, bool full)
+        {
+            var list = new List<string>();
+            if (def == null || def.Menu == null) return list;
+            for (int i = 0; i < def.Menu.Count; i++)
+            {
+                MenuItem it = def.Menu[i];
+                if (it == null) continue;
+                string hk = it.Hotkey ?? string.Empty;
+                if (full) list.Add("[" + hk + "]" + (it.DisplayName ?? string.Empty));
+                else list.Add("[" + hk + "]");
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// True when the Full-mode options fit within a menu bar of <paramref name="width"/>
+        /// columns (2 cap chars + "══" rule before each option).
+        /// </summary>
+        public static bool FullFits(MenuDefinition def, int width)
+        {
+            var opts = BuildOptions(def, true);
+            int used = 2; // caps
+            for (int i = 0; i < opts.Count; i++) used += 2 + AnsiText.VisibleLength(opts[i]);
+            return used <= width;
+        }
+
+        /// <summary>Builds Full options if they fit the width, otherwise Simple.</summary>
+        public static List<string> BuildAuto(MenuDefinition def, int width)
+        {
+            return BuildOptions(def, FullFits(def, width));
+        }
+    }
+
+    /// <summary>
+    /// A centered overlay box for notifications and prompts (e.g. "Copied to clipboard",
+    /// "Save capture to file"). Renders a bordered box with a title row and body lines and
+    /// reports its absolute top/left so the caller can position it over the current screen.
+    /// </summary>
+    public static class OverlayBox
+    {
+        /// <summary>
+        /// Builds a centered overlay. <paramref name="top"/>/<paramref name="left"/> receive the
+        /// 1-based console position of the box's first row/column. Body lines are left-fitted to
+        /// the inner width. The title is centered in the top border.
+        /// </summary>
+        public static string[] Build(int screenWidth, int screenHeight, int boxWidth, string title, IList<string> body, out int top, out int left)
+        {
+            if (boxWidth < 8) boxWidth = 8;
+            if (boxWidth > screenWidth) boxWidth = screenWidth;
+            int bodyCount = body != null ? body.Count : 0;
+            int height = bodyCount + 2; // top border + body + bottom border
+            if (height < 3) height = 3;
+            if (height > screenHeight) height = screenHeight;
+
+            left = Math.Max(1, (screenWidth - boxWidth) / 2 + 1);
+            top = Math.Max(1, (screenHeight - height) / 2 + 1);
+
+            var lines = new List<string>(height);
+            // Top border with centered title.
+            string t = title ?? string.Empty;
+            if (t.Length > boxWidth - 4) t = t.Substring(0, Math.Max(0, boxWidth - 4));
+            int inner = boxWidth - 2;
+            int titleRoom = inner - t.Length;
+            int leftFill = Math.Max(0, titleRoom / 2);
+            int rightFill = Math.Max(0, titleRoom - leftFill);
+            var tb = new StringBuilder(boxWidth);
+            tb.Append(BoxChars.TopLeft);
+            tb.Append(new string(BoxChars.Horizontal, leftFill));
+            tb.Append(t);
+            tb.Append(new string(BoxChars.Horizontal, rightFill));
+            tb.Append(BoxChars.TopRight);
+            lines.Add(tb.ToString());
+
+            int bodyRows = height - 2;
+            for (int i = 0; i < bodyRows; i++)
+            {
+                string text = (body != null && i < body.Count) ? body[i] : string.Empty;
+                string fit = TextJustify.Fit(text ?? string.Empty, inner, Justify.Left);
+                lines.Add(BoxChars.Vertical.ToString() + fit + BoxChars.Vertical.ToString());
+            }
+
+            var bb = new StringBuilder(boxWidth);
+            bb.Append(BoxChars.BottomLeft);
+            bb.Append(new string(BoxChars.Horizontal, inner));
+            bb.Append(BoxChars.BottomRight);
+            lines.Add(bb.ToString());
+
+            return lines.ToArray();
+        }
     }
 }

@@ -1,0 +1,10 @@
+{
+  "Box": "Details",
+  "Menu": [
+    { "Name": "Expand", "DisplayName": "Expand", "Hotkey": "\u2192" },
+    { "Name": "Collapse", "DisplayName": "Collapse", "Hotkey": "\u2190" },
+    { "Name": "ExpandAll", "DisplayName": "Expand all", "Hotkey": "Shift+\u2192" },
+    { "Name": "CollapseAll", "DisplayName": "Collapse all", "Hotkey": "Shift+\u2190" },
+    { "Name": "PrevNext", "DisplayName": "Prev|Next pkt", "Hotkey": "Ctrl+\u2191\u2193" }
+  ]
+}

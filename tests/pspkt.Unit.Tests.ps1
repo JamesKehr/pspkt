@@ -2676,6 +2676,79 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots[0].Text | Should -Match 'too short'
         }
     }
+
+    Context 'MenuRenderer + MenuDefinition' {
+        BeforeAll {
+            $script:def = [BoxyBox.MenuDefinition]::new('Details')
+            $null = $script:def.AddItem('Expand',   'Expand',   "$([char]0x2192)")
+            $null = $script:def.AddItem('Collapse', 'Collapse', "$([char]0x2190)")
+        }
+        It 'renders Full options as [Hotkey]DisplayName' {
+            $opts = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $true)
+            $opts[0] | Should -Be "[$([char]0x2192)]Expand"
+            $opts[1] | Should -Be "[$([char]0x2190)]Collapse"
+        }
+        It 'renders Simple options as [Hotkey] only' {
+            $opts = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $false)
+            $opts[0] | Should -Be "[$([char]0x2192)]"
+        }
+        It 'FullFits is true for a wide bar and false for a narrow one' {
+            [BoxyBox.MenuRenderer]::FullFits($script:def, 120) | Should -BeTrue
+            [BoxyBox.MenuRenderer]::FullFits($script:def, 8)   | Should -BeFalse
+        }
+        It 'BuildAuto picks Simple when Full will not fit' {
+            $auto = [BoxyBox.MenuRenderer]::BuildAuto($script:def, 8)
+            $auto[0] | Should -Be "[$([char]0x2192)]"   # simple (hotkey only)
+        }
+        It 'BuildAuto picks Full when there is room' {
+            $auto = [BoxyBox.MenuRenderer]::BuildAuto($script:def, 120)
+            $auto[0] | Should -Be "[$([char]0x2192)]Expand"
+        }
+    }
+
+    Context 'Get-PspktTuiMenu' {
+        BeforeAll {
+            $script:mod = Get-Module PspktSession
+        }
+        It 'loads the shipped Details menu with 5 items' {
+            $def = & $script:mod { Get-PspktTuiMenu -Box 'Details' }
+            $def.Box | Should -Be 'Details'
+            $def.Menu.Count | Should -Be 5
+            $def.Menu[0].Name | Should -Be 'Expand'
+        }
+        It 'loads TextLive and TextFocus menus' {
+            $live  = & $script:mod { Get-PspktTuiMenu -Box 'TextLive' }
+            $focus = & $script:mod { Get-PspktTuiMenu -Box 'TextFocus' }
+            $live.Menu.Count  | Should -BeGreaterThan 0
+            $focus.Menu.Count | Should -BeGreaterThan 0
+            ($focus.Menu | Where-Object { $_.Name -eq 'Copy' }).Count | Should -Be 1
+        }
+        It 'returns an empty definition for an unknown box' {
+            $def = & $script:mod { Get-PspktTuiMenu -Box 'DoesNotExist' }
+            $def.Menu.Count | Should -Be 0
+        }
+    }
+
+    Context 'OverlayBox' {
+        It 'builds a centered bordered box with a title and body' {
+            $body = [System.Collections.Generic.List[string]]@('hello', 'world')
+            $top = 0; $left = 0
+            $lines = [BoxyBox.OverlayBox]::Build(80, 24, 30, ' Title ', $body, [ref]$top, [ref]$left)
+            $lines.Count | Should -Be 4   # top border + 2 body + bottom border
+            [int]$lines[0][0]  | Should -Be ([int][char]0x250c)   # top-left corner
+            [int]$lines[0][-1] | Should -Be ([int][char]0x2510)   # top-right corner
+            $lines[0].Contains('Title') | Should -BeTrue
+            $lines[1].Contains('hello') | Should -BeTrue
+            # centered on an 80x24 screen
+            $left | Should -Be 26   # (80-30)/2 + 1
+        }
+        It 'clamps box width to the screen width' {
+            $body = [System.Collections.Generic.List[string]]@('x')
+            $top = 0; $left = 0
+            $lines = [BoxyBox.OverlayBox]::Build(20, 10, 100, 'T', $body, [ref]$top, [ref]$left)
+            $lines[0].Length | Should -Be 20
+        }
+    }
 }
 
 Describe 'pspkt test prechecks' -Tag 'Precheck' {

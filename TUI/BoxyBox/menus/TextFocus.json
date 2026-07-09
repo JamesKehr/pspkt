@@ -1,0 +1,10 @@
+{
+  "Box": "TextFocus",
+  "Menu": [
+    { "Name": "Resume", "DisplayName": "Resume", "Hotkey": "R" },
+    { "Name": "Stop", "DisplayName": "Stop", "Hotkey": "S" },
+    { "Name": "Save", "DisplayName": "Save to file", "Hotkey": "W" },
+    { "Name": "Switch", "DisplayName": "Switch boxes", "Hotkey": "Tab" },
+    { "Name": "Copy", "DisplayName": "Copy pkt", "Hotkey": "Shift+Ctrl+C" }
+  ]
+}
