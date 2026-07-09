@@ -2513,6 +2513,82 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $compact.Contains('[') | Should -BeTrue
         }
     }
+
+    Context 'TreeNode + TreeFlattener' {
+        It 'flattens expandable nodes with +/- and leaf children with connectors' {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
+            $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
+            $null = $roots.Add($ipv4)
+            $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
+            $rows.Count | Should -Be 3
+            $rows[0].Display.TrimStart().StartsWith('-IPv4') | Should -BeTrue
+            $rows[1].Display.Contains([char]0x251c) | Should -BeTrue   # ├ (mid child)
+            $rows[2].Display.Contains([char]0x2514) | Should -BeTrue   # └ (last child)
+        }
+        It 'collapsed nodes hide their children and show +' {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $eth = [BoxyBox.TreeNode]::new('Eth', 'Eth', $false)
+            $null = $eth.AddLeaf('x')
+            $null = $roots.Add($eth)
+            $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
+            $rows.Count | Should -Be 1
+            $rows[0].Display.TrimStart().StartsWith('+Eth') | Should -BeTrue
+        }
+    }
+
+    Context 'DetailsBox' {
+        BeforeAll {
+            $script:ESC = [char]27
+            $script:on = "$($script:ESC)[7m"; $script:off = "$($script:ESC)[0m"
+            function New-SampleTree {
+                $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+                $comp = [BoxyBox.TreeNode]::new('Component', 'Component', $false); $null = $comp.AddLeaf('c1')
+                $eth  = [BoxyBox.TreeNode]::new('Eth', 'Eth', $false); $null = $eth.AddLeaf('e1')
+                $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true); $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
+                $null = $roots.Add($comp); $null = $roots.Add($eth); $null = $roots.Add($ipv4)
+                return ,$roots
+            }
+        }
+        It 'shows Component/Eth collapsed and IPv4 expanded by default' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $db.RowCount | Should -Be 5   # Component(+) Eth(+) IPv4(-) Src Dst
+        }
+        It 'CollapseSelected hides children; ExpandSelected restores them' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $db.MoveDown(); $db.MoveDown()   # select IPv4
+            $db.SelectedIndex | Should -Be 2
+            $db.CollapseSelected()
+            $db.RowCount | Should -Be 3
+            $db.ExpandSelected()
+            $db.RowCount | Should -Be 5
+        }
+        It 'ExpandAll / CollapseAll toggle every node' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $db.ExpandAll()
+            $db.RowCount | Should -Be 7   # all three parents + their 4 leaves
+            $db.CollapseAll()
+            $db.RowCount | Should -Be 3   # three collapsed parents
+        }
+        It 'persists expand/collapse state by key across packets' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $db.MoveDown(); $db.MoveDown()   # IPv4
+            $db.CollapseSelected()           # persist IPv4 = collapsed
+            $db.SetTree((New-SampleTree))    # new packet, IPv4 default-expanded
+            $db.RowCount | Should -Be 3      # IPv4 stays collapsed via persistence
+        }
+        It 'renders the selected row highlighted' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $frame = $db.Render($script:on, $script:off)
+            # first content row (Component) is selected by default
+            $frame[1].Contains($script:on) | Should -BeTrue
+        }
+    }
 }
 
 Describe 'pspkt test prechecks' -Tag 'Precheck' {

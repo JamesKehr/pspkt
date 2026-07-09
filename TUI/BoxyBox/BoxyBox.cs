@@ -667,4 +667,308 @@ namespace BoxyBox
             return _box.Render(window, selectedRow, highlightOn, highlightOff);
         }
     }
+
+    /// <summary>
+    /// A node in a Wireshark-style detail tree. Leaf nodes are single fields; parent nodes
+    /// group children under a header (protocol name) that can be expanded or collapsed.
+    /// An optional <see cref="Key"/> lets a <see cref="DetailsBox"/> persist expand/collapse
+    /// state across packets (e.g. keep IPv4 expanded and Eth collapsed as you step through).
+    /// </summary>
+    public sealed class TreeNode
+    {
+        public string Text;
+        public List<TreeNode> Children;
+        public bool IsExpanded;
+        /// <summary>Stable key for expand-state persistence (usually the protocol name).</summary>
+        public string Key;
+
+        public TreeNode(string text)
+        {
+            Text = text ?? string.Empty;
+            Children = new List<TreeNode>();
+            IsExpanded = true;
+        }
+
+        public TreeNode(string text, string key, bool expanded)
+        {
+            Text = text ?? string.Empty;
+            Children = new List<TreeNode>();
+            Key = key;
+            IsExpanded = expanded;
+        }
+
+        public bool HasChildren { get { return Children != null && Children.Count > 0; } }
+
+        /// <summary>Adds a child node and returns it (for chaining).</summary>
+        public TreeNode Add(TreeNode child)
+        {
+            if (child != null) Children.Add(child);
+            return child;
+        }
+
+        /// <summary>Adds a leaf child with the given text and returns this node.</summary>
+        public TreeNode AddLeaf(string text)
+        {
+            Children.Add(new TreeNode(text));
+            return this;
+        }
+    }
+
+    /// <summary>
+    /// A visible row produced by flattening a tree: the display string (with glyphs) plus a
+    /// reference to the originating node so the caller can expand/collapse by row.
+    /// </summary>
+    public sealed class TreeRow
+    {
+        public string Display;
+        public TreeNode Node;
+        public int Depth;
+
+        public TreeRow(string display, TreeNode node, int depth)
+        {
+            Display = display;
+            Node = node;
+            Depth = depth;
+        }
+    }
+
+    /// <summary>
+    /// Flattens a tree into visible rows honoring each node's expanded state. Rendering rules
+    /// match the TUI spec: expandable nodes show '+' (collapsed) or '-' (expanded); leaf nodes
+    /// below the top level show tree connectors ('├' mid-sibling, '└' last sibling). Indent is
+    /// two spaces per depth level plus a two-space left margin.
+    /// </summary>
+    public static class TreeFlattener
+    {
+        public const char MidChild  = '\u251c'; // ├
+        public const char LastChild = '\u2514'; // └
+
+        public static List<TreeRow> Flatten(IList<TreeNode> roots)
+        {
+            var rows = new List<TreeRow>();
+            if (roots == null) return rows;
+            for (int i = 0; i < roots.Count; i++)
+            {
+                FlattenNode(roots[i], 0, i == roots.Count - 1, rows);
+            }
+            return rows;
+        }
+
+        private static void FlattenNode(TreeNode node, int depth, bool isLast, List<TreeRow> rows)
+        {
+            if (node == null) return;
+            string indent = new string(' ', 2 * (depth + 1));
+            string line;
+            if (node.HasChildren)
+            {
+                line = indent + (node.IsExpanded ? "-" : "+") + node.Text;
+            }
+            else if (depth == 0)
+            {
+                line = indent + " " + node.Text;
+            }
+            else
+            {
+                char connector = isLast ? LastChild : MidChild;
+                line = indent + connector + " " + node.Text;
+            }
+            rows.Add(new TreeRow(line, node, depth));
+
+            if (node.HasChildren && node.IsExpanded)
+            {
+                for (int i = 0; i < node.Children.Count; i++)
+                {
+                    FlattenNode(node.Children[i], depth + 1, i == node.Children.Count - 1, rows);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A box that renders a detail tree with selection, scrolling, and expand/collapse. The
+    /// tree is supplied as a list of top-level nodes (Component, Eth, IPv4, …). Expand/collapse
+    /// state is persisted by node <see cref="TreeNode.Key"/> so stepping between packets keeps
+    /// the same protocols open/closed.
+    /// </summary>
+    public sealed class DetailsBox
+    {
+        private readonly Box _box;
+        private List<TreeNode> _roots = new List<TreeNode>();
+        private List<TreeRow> _rows = new List<TreeRow>();
+        private int _selected = 0;   // index into _rows
+        private int _top = 0;        // first visible row index
+        // Expand-state persistence keyed by TreeNode.Key.
+        private readonly Dictionary<string, bool> _expandState = new Dictionary<string, bool>();
+
+        public DetailsBox(int width, int height)
+        {
+            _box = new Box(width, height);
+            _box.MenuStyle = MenuBar.Cap.Terminal;
+            _box.MenuOptions = new List<string>();
+        }
+
+        public Box Box { get { return _box; } }
+        public int ContentRows { get { return _box.ContentRows; } }
+        public int RowCount { get { return _rows.Count; } }
+        public int SelectedIndex { get { return _selected; } }
+
+        public IList<string> MenuOptions
+        {
+            get { return _box.MenuOptions; }
+            set { _box.MenuOptions = value; }
+        }
+
+        /// <summary>
+        /// Loads a new packet's detail tree. Applies persisted expand/collapse state (by Key)
+        /// so protocols the user opened/closed stay that way across packets, then resets the
+        /// selection to the top and rebuilds the visible rows.
+        /// </summary>
+        public void SetTree(IList<TreeNode> roots)
+        {
+            _roots = new List<TreeNode>();
+            if (roots != null)
+            {
+                for (int i = 0; i < roots.Count; i++) _roots.Add(roots[i]);
+            }
+            ApplyPersistedState(_roots);
+            _selected = 0;
+            _top = 0;
+            Rebuild();
+        }
+
+        private void ApplyPersistedState(IList<TreeNode> nodes)
+        {
+            if (nodes == null) return;
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                TreeNode n = nodes[i];
+                if (n == null) continue;
+                if (!string.IsNullOrEmpty(n.Key))
+                {
+                    bool state;
+                    if (_expandState.TryGetValue(n.Key, out state)) n.IsExpanded = state;
+                }
+                ApplyPersistedState(n.Children);
+            }
+        }
+
+        private void Rebuild()
+        {
+            _rows = TreeFlattener.Flatten(_roots);
+            if (_selected >= _rows.Count) _selected = Math.Max(0, _rows.Count - 1);
+            EnsureVisible();
+        }
+
+        private void EnsureVisible()
+        {
+            int rows = ContentRows;
+            if (_selected < _top) _top = _selected;
+            else if (_selected > _top + rows - 1) _top = _selected - rows + 1;
+            int maxTop = Math.Max(0, _rows.Count - rows);
+            if (_top > maxTop) _top = maxTop;
+            if (_top < 0) _top = 0;
+        }
+
+        public void MoveUp()   { if (_selected > 0) { _selected--; EnsureVisible(); } }
+        public void MoveDown() { if (_selected < _rows.Count - 1) { _selected++; EnsureVisible(); } }
+        public void PageUp()   { _selected = Math.Max(0, _selected - ContentRows); EnsureVisible(); }
+        public void PageDown() { _selected = Math.Min(_rows.Count - 1, _selected + ContentRows); EnsureVisible(); }
+
+        private TreeNode SelectedNode()
+        {
+            if (_selected < 0 || _selected >= _rows.Count) return null;
+            return _rows[_selected].Node;
+        }
+
+        private void Persist(TreeNode node)
+        {
+            if (node != null && !string.IsNullOrEmpty(node.Key))
+                _expandState[node.Key] = node.IsExpanded;
+        }
+
+        /// <summary>Expands the selected node (if it has children). No-op on leaves.</summary>
+        public void ExpandSelected()
+        {
+            TreeNode n = SelectedNode();
+            if (n != null && n.HasChildren && !n.IsExpanded)
+            {
+                n.IsExpanded = true;
+                Persist(n);
+                Rebuild();
+            }
+        }
+
+        /// <summary>
+        /// Collapses the selected node. When the selected node is a leaf or already collapsed,
+        /// collapses its parent instead (Wireshark behavior) and moves selection to the parent.
+        /// </summary>
+        public void CollapseSelected()
+        {
+            TreeNode n = SelectedNode();
+            if (n == null) return;
+            if (n.HasChildren && n.IsExpanded)
+            {
+                n.IsExpanded = false;
+                Persist(n);
+                Rebuild();
+            }
+            else
+            {
+                // Move to and collapse the parent, if any.
+                int depth = _rows[_selected].Depth;
+                if (depth > 0)
+                {
+                    for (int i = _selected - 1; i >= 0; i--)
+                    {
+                        if (_rows[i].Depth < depth)
+                        {
+                            _selected = i;
+                            TreeNode p = _rows[i].Node;
+                            if (p.HasChildren && p.IsExpanded)
+                            {
+                                p.IsExpanded = false;
+                                Persist(p);
+                            }
+                            Rebuild();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        private void SetAllExpanded(IList<TreeNode> nodes, bool expanded)
+        {
+            if (nodes == null) return;
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                TreeNode n = nodes[i];
+                if (n == null) continue;
+                if (n.HasChildren)
+                {
+                    n.IsExpanded = expanded;
+                    Persist(n);
+                }
+                SetAllExpanded(n.Children, expanded);
+            }
+        }
+
+        public void ExpandAll()   { SetAllExpanded(_roots, true);  Rebuild(); }
+        public void CollapseAll() { SetAllExpanded(_roots, false); Rebuild(); }
+
+        /// <summary>Renders the tree into the box, highlighting the selected row.</summary>
+        public string[] Render(string highlightOn, string highlightOff)
+        {
+            int rows = ContentRows;
+            var window = new List<string>(rows);
+            for (int i = 0; i < rows; i++)
+            {
+                int idx = _top + i;
+                window.Add(idx < _rows.Count ? _rows[idx].Display : string.Empty);
+            }
+            int selectedRow = _selected - _top;
+            if (selectedRow < 0 || selectedRow >= rows) selectedRow = -1;
+            return _box.Render(window, selectedRow, highlightOn, highlightOff);
+        }
+    }
 }
