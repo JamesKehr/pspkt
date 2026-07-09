@@ -1405,6 +1405,21 @@ function Invoke-PspktAnalysisLoop {
     $stopRequested = $false
     $dirty = $true
 
+    # --- Focus state ---
+    # $focused: when true, scrolling is frozen and a line is selected/highlighted while
+    # packet ingestion continues in the background. Selection is tracked by absolute
+    # sequence number so it stays pinned to the same packet as the buffer trims.
+    $focused = $false
+    [long]$selectedSeq = 0
+    [long]$topSeq = 0
+    $contentRows = $textBox.Box.ContentRows
+    $hlOn  = "$ESC[7m"   # reverse video (selected-line highlight)
+    $hlOff = "$ESC[0m"
+
+    $menuLive  = [System.Collections.Generic.List[string]]@('(F)ocus', '(S)top', 'Save to (F)ile')
+    $menuFocus = [System.Collections.Generic.List[string]]@('(R)esume', '(S)top', 'Save to (F)ile')
+    $textBox.MenuOptions = $menuLive
+
     # Cap render rate (~30 fps) so a high packet rate doesn't spend all its time drawing.
     $frameWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $frameIntervalMs = 33
@@ -1422,11 +1437,49 @@ function Invoke-PspktAnalysisLoop {
             if ($keyReady) {
                 $key = [Console]::ReadKey($true)
                 $ch = [char]::ToLower($key.KeyChar)
+
                 if ($ch -eq 's') { $stopRequested = $true; continue }
-                # 'f' (Focus) is handled in Phase 3.
+
+                if (-not $focused) {
+                    if ($ch -eq 'f') {
+                        # Enter Focus: freeze scroll, select the middle visible line.
+                        $focused = $true
+                        $textBox.MenuOptions = $menuFocus
+                        $topSeq = $textBox.TotalSeq - $contentRows
+                        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                        $selectedSeq = $textBox.ClampSeq($topSeq + [int]($contentRows / 2))
+                        $dirty = $true
+                    }
+                } else {
+                    # --- Focus-mode navigation ---
+                    if ($ch -eq 'r') {
+                        # Resume live scrolling.
+                        $focused = $false
+                        $textBox.MenuOptions = $menuLive
+                        $dirty = $true
+                    } else {
+                        switch ($key.Key) {
+                            'UpArrow'    { $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); $dirty = $true }
+                            'DownArrow'  { $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); $dirty = $true }
+                            'PageUp'     { $selectedSeq = $textBox.ClampSeq($selectedSeq - $contentRows); $topSeq = $topSeq - $contentRows; $dirty = $true }
+                            'PageDown'   { $selectedSeq = $textBox.ClampSeq($selectedSeq + $contentRows); $topSeq = $topSeq + $contentRows; $dirty = $true }
+                            'LeftArrow'  { $textBox.Justification = [BoxyBox.Justify]::Left;  $dirty = $true }
+                            'RightArrow' { $textBox.Justification = [BoxyBox.Justify]::Right; $dirty = $true }
+                        }
+                        # Keep the selected line inside the visible window and both values
+                        # inside the retained range (the buffer may have trimmed).
+                        $selectedSeq = $textBox.ClampSeq($selectedSeq)
+                        $maxTop = [Math]::Max($textBox.BaseSeq, $textBox.TotalSeq - $contentRows)
+                        if ($topSeq -gt $maxTop) { $topSeq = $maxTop }
+                        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                        if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
+                        elseif ($selectedSeq -gt $topSeq + $contentRows - 1) { $topSeq = $selectedSeq - $contentRows + 1 }
+                        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                    }
+                }
             }
 
-            # --- Drain + format ---
+            # --- Drain + format (continues even while focused) ---
             $pktCount = $Session.DrainAllRawPackets()
             if ($pktCount -gt 0) {
                 try {
@@ -1450,10 +1503,22 @@ function Invoke-PspktAnalysisLoop {
 
             # --- Throttled render ---
             if ($dirty -and $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs) {
-                $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (S)top"
+                if ($focused) {
+                    # Re-clamp in case ingestion trimmed the buffer since the last frame.
+                    $selectedSeq = $textBox.ClampSeq($selectedSeq)
+                    if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                    if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
+                    elseif ($selectedSeq -gt $topSeq + $contentRows - 1) { $topSeq = $selectedSeq - $contentRows + 1 }
+                    $posInfo = "pkt $($selectedSeq + 1)/$($textBox.TotalSeq)"
+                    $status = "  pspkt Analysis [FOCUS]  |  $posInfo  |  (R)esume (S)top   " + [char]0x2191 + [char]0x2193 + " PgUp/PgDn move   " + [char]0x2190 + [char]0x2192 + " justify"
+                    $frameLines = $textBox.RenderWindow($topSeq, $selectedSeq, $hlOn, $hlOff)
+                } else {
+                    $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (F)ocus (S)top"
+                    $frameLines = $textBox.RenderTail()
+                }
                 if ($status.Length -gt $boxWidth) { $status = $status.Substring(0, $boxWidth) }
                 $statusLine = "$ESC[1;1H$ESC[2K$status"
-                $frame = $region.BuildFrame($textBox.RenderTail())
+                $frame = $region.BuildFrame($frameLines)
                 [Console]::Write($statusLine + $frame)
                 $frameWatch.Restart()
                 $dirty = $false

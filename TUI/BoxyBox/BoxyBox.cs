@@ -49,6 +49,38 @@ namespace BoxyBox
         }
 
         /// <summary>
+        /// Removes all CSI escape sequences, returning the plain visible text. Used when a
+        /// line must be re-colored wholesale (e.g. a selected/highlighted row) — inner reset
+        /// sequences would otherwise punch holes in a background highlight.
+        /// </summary>
+        public static string StripAnsi(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text ?? string.Empty;
+            if (text.IndexOf(ESC) < 0) return text;
+            var sb = new StringBuilder(text.Length);
+            int i = 0;
+            int n = text.Length;
+            while (i < n)
+            {
+                char c = text[i];
+                if (c == ESC && i + 1 < n && text[i + 1] == '[')
+                {
+                    i += 2;
+                    while (i < n)
+                    {
+                        char f = text[i];
+                        i++;
+                        if (f >= '\x40' && f <= '\x7e') break;
+                    }
+                    continue;
+                }
+                sb.Append(c);
+                i++;
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// Number of visible columns in <paramref name="text"/>, ignoring CSI escape
         /// sequences (ESC '[' ... final-byte in 0x40-0x7E).
         /// </summary>
@@ -343,17 +375,54 @@ namespace BoxyBox
         }
 
         /// <summary>
+        /// Builds a highlighted content row: the text is stripped of its own color, fitted to
+        /// the inner width, then wrapped with <paramref name="highlightOn"/> /
+        /// <paramref name="highlightOff"/> so the entire row (including padding) shows the
+        /// highlight background. Stripping avoids inner reset sequences punching holes in it.
+        /// </summary>
+        private string HighlightedContentLine(string text, string highlightOn, string highlightOff)
+        {
+            int inner = Width - 2;
+            string plain = AnsiText.StripAnsi(text ?? string.Empty);
+            string body = TextJustify.Fit(plain, inner, Justification);
+            var sb = new StringBuilder(Width + 16);
+            sb.Append(BoxChars.Vertical);
+            sb.Append(highlightOn);
+            sb.Append(body);
+            sb.Append(highlightOff);
+            sb.Append(BoxChars.Vertical);
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// Renders the full box. <paramref name="lines"/> supplies content rows top-to-bottom;
         /// missing rows are rendered blank, extra rows are ignored.
         /// </summary>
         public string[] Render(IList<string> lines)
+        {
+            return Render(lines, -1, null, null);
+        }
+
+        /// <summary>
+        /// Renders the box, highlighting the content row at <paramref name="selectedRow"/>
+        /// (0-based within the content area) with the supplied highlight sequences. Pass
+        /// selectedRow &lt; 0 for no highlight.
+        /// </summary>
+        public string[] Render(IList<string> lines, int selectedRow, string highlightOn, string highlightOff)
         {
             var result = new string[Height];
             result[0] = TopBorder();
             for (int r = 0; r < ContentRows; r++)
             {
                 string text = (lines != null && r < lines.Count) ? lines[r] : string.Empty;
-                result[r + 1] = ContentLine(text);
+                if (r == selectedRow && highlightOn != null)
+                {
+                    result[r + 1] = HighlightedContentLine(text, highlightOn, highlightOff ?? AnsiText.Reset);
+                }
+                else
+                {
+                    result[r + 1] = ContentLine(text);
+                }
             }
             result[Height - 1] = MenuBar.Build(MenuOptions, Width, MenuStyle);
             return result;
@@ -414,8 +483,12 @@ namespace BoxyBox
     /// <see cref="Box"/>. In live mode it shows the most recent <c>ContentRows</c> lines
     /// (packets scroll upward as new lines arrive). The buffer is bounded — once it exceeds
     /// capacity plus a slack margin, the oldest lines are trimmed in a single batch so
-    /// appends stay amortized O(1). Line storage is a List so Phase 3 focus/selection can
-    /// index by absolute position.
+    /// appends stay amortized O(1).
+    ///
+    /// Every appended line gets a monotonically increasing absolute sequence number that
+    /// never resets even as old lines are trimmed. Focus mode addresses lines by sequence
+    /// number so a selection stays pinned to the same packet while ingestion continues to
+    /// append (and possibly trim) in the background.
     /// </summary>
     public sealed class TextBox
     {
@@ -423,6 +496,8 @@ namespace BoxyBox
         private readonly int _capacity;
         private readonly int _trimSlack;
         private readonly Box _box;
+        // Sequence number of _lines[0]. Increases when the front is trimmed.
+        private long _baseSeq = 0;
 
         public TextBox(int width, int height, int capacity)
         {
@@ -432,6 +507,12 @@ namespace BoxyBox
         }
 
         public Box Box { get { return _box; } }
+
+        /// <summary>Absolute sequence number of the oldest retained line.</summary>
+        public long BaseSeq { get { return _baseSeq; } }
+
+        /// <summary>Exclusive upper bound: the sequence number the next appended line will get.</summary>
+        public long TotalSeq { get { return _baseSeq + _lines.Count; } }
 
         public Justify Justification
         {
@@ -489,14 +570,39 @@ namespace BoxyBox
         {
             if (_lines.Count > _capacity + _trimSlack)
             {
-                _lines.RemoveRange(0, _lines.Count - _capacity);
+                int removed = _lines.Count - _capacity;
+                _lines.RemoveRange(0, removed);
+                _baseSeq += removed;
             }
         }
 
-        /// <summary>Clears all buffered lines.</summary>
+        /// <summary>Clears all buffered lines (sequence numbering continues).</summary>
         public void Clear()
         {
+            _baseSeq += _lines.Count;
             _lines.Clear();
+        }
+
+        /// <summary>Returns the line for an absolute sequence number, or null if not retained.</summary>
+        public string GetLineBySeq(long seq)
+        {
+            long idx = seq - _baseSeq;
+            if (idx < 0 || idx >= _lines.Count) return null;
+            return _lines[(int)idx];
+        }
+
+        /// <summary>
+        /// Clamps a sequence number into the retained range [BaseSeq, TotalSeq-1]. Returns
+        /// BaseSeq when the buffer is empty.
+        /// </summary>
+        public long ClampSeq(long seq)
+        {
+            if (_lines.Count == 0) return _baseSeq;
+            long lo = _baseSeq;
+            long hi = _baseSeq + _lines.Count - 1;
+            if (seq < lo) return lo;
+            if (seq > hi) return hi;
+            return seq;
         }
 
         /// <summary>
@@ -519,8 +625,7 @@ namespace BoxyBox
 
         /// <summary>
         /// Renders a window anchored so the line at <paramref name="topIndex"/> is the first
-        /// visible content row. Used by Phase 3 focus/scroll navigation. Out-of-range indices
-        /// are clamped.
+        /// visible content row. Out-of-range indices are clamped.
         /// </summary>
         public string[] RenderFrom(int topIndex)
         {
@@ -534,6 +639,32 @@ namespace BoxyBox
                 window.Add(idx < _lines.Count ? _lines[idx] : string.Empty);
             }
             return _box.Render(window);
+        }
+
+        /// <summary>
+        /// Focus-mode render: shows <c>ContentRows</c> lines starting at absolute sequence
+        /// <paramref name="topSeq"/>, highlighting the line at <paramref name="selectedSeq"/>
+        /// with the supplied highlight sequences. Sequence numbers outside the retained range
+        /// render as blank rows; the highlight is applied only when the selected line is
+        /// currently visible and retained.
+        /// </summary>
+        public string[] RenderWindow(long topSeq, long selectedSeq, string highlightOn, string highlightOff)
+        {
+            int rows = _box.ContentRows;
+            var window = new List<string>(rows);
+            for (int i = 0; i < rows; i++)
+            {
+                long seq = topSeq + i;
+                string line = GetLineBySeq(seq);
+                window.Add(line ?? string.Empty);
+            }
+            int selectedRow = -1;
+            long rel = selectedSeq - topSeq;
+            if (rel >= 0 && rel < rows && GetLineBySeq(selectedSeq) != null)
+            {
+                selectedRow = (int)rel;
+            }
+            return _box.Render(window, selectedRow, highlightOn, highlightOff);
         }
     }
 }

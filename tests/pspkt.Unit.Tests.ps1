@@ -2414,6 +2414,87 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
     }
 
+    Context 'TextBox focus mode (sequence tracking + highlight)' {
+        BeforeAll {
+            $script:ESC = [char]27
+            $script:hlOn  = "$($script:ESC)[7m"
+            $script:hlOff = "$($script:ESC)[0m"
+        }
+        It 'tracks BaseSeq and TotalSeq across appends' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 1000)
+            $tb.BaseSeq | Should -Be 0
+            1..5 | ForEach-Object { $tb.Append("L$_") }
+            $tb.BaseSeq | Should -Be 0
+            $tb.TotalSeq | Should -Be 5
+        }
+        It 'advances BaseSeq when the buffer trims, keeping GetLineBySeq stable' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 100)
+            1..300 | ForEach-Object { $tb.Append("L$_") }
+            # BaseSeq advanced by the number of trimmed lines
+            $tb.BaseSeq | Should -BeGreaterThan 0
+            # A sequence number still in range resolves to the correct line
+            $seq = $tb.TotalSeq - 1
+            $tb.GetLineBySeq($seq) | Should -Be 'L300'
+        }
+        It 'GetLineBySeq returns null for trimmed or future sequences' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 100)
+            1..300 | ForEach-Object { $tb.Append("L$_") }
+            $tb.GetLineBySeq(0) | Should -BeNullOrEmpty          # trimmed
+            $tb.GetLineBySeq($tb.TotalSeq) | Should -BeNullOrEmpty  # future
+        }
+        It 'ClampSeq keeps a sequence within the retained range' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 1000)
+            1..10 | ForEach-Object { $tb.Append("L$_") }
+            $tb.ClampSeq(-100) | Should -Be $tb.BaseSeq
+            $tb.ClampSeq(100000) | Should -Be ($tb.TotalSeq - 1)
+        }
+        It 'RenderWindow highlights the selected line with the supplied sequences' {
+            $tb = [BoxyBox.TextBox]::new(30, 6, 1000)   # 4 content rows
+            1..10 | ForEach-Object { $tb.Append("L$_") }
+            $frame = $tb.RenderWindow(3, 5, $script:hlOn, $script:hlOff)  # top L4, selected L6
+            # content rows: index 1=L4, 2=L5, 3=L6, 4=L7
+            $frame[1].Contains($script:hlOn) | Should -BeFalse
+            $frame[3].Contains($script:hlOn) | Should -BeTrue   # L6 highlighted
+            $frame[3].Contains('L6') | Should -BeTrue
+        }
+        It 'RenderWindow leaves the selection unhighlighted when it is off-screen' {
+            $tb = [BoxyBox.TextBox]::new(30, 6, 1000)
+            1..10 | ForEach-Object { $tb.Append("L$_") }
+            $frame = $tb.RenderWindow(0, 9, $script:hlOn, $script:hlOff)  # selected below window
+            for ($i = 1; $i -le 4; $i++) { $frame[$i].Contains($script:hlOn) | Should -BeFalse }
+        }
+    }
+
+    Context 'AnsiText.StripAnsi' {
+        BeforeAll { $script:ESC = [char]27 }
+        It 'removes SGR sequences leaving plain text' {
+            $colored = "$($script:ESC)[31mRED$($script:ESC)[0m"
+            [BoxyBox.AnsiText]::StripAnsi($colored) | Should -Be 'RED'
+        }
+        It 'returns plain text unchanged' {
+            [BoxyBox.AnsiText]::StripAnsi('plain') | Should -Be 'plain'
+        }
+        It 'handles null/empty' {
+            [BoxyBox.AnsiText]::StripAnsi($null) | Should -Be ''
+            [BoxyBox.AnsiText]::StripAnsi('') | Should -Be ''
+        }
+    }
+
+    Context 'Box highlighted render' {
+        BeforeAll { $script:ESC = [char]27 }
+        It 'wraps the selected row with highlight and strips its inner color' {
+            $box = [BoxyBox.Box]::new(20, 5)
+            $lines = [System.Collections.Generic.List[string]]@("$($script:ESC)[31msel$($script:ESC)[0m", 'plain')
+            $on = "$($script:ESC)[7m"; $off = "$($script:ESC)[0m"
+            $frame = $box.Render($lines, 0, $on, $off)
+            # selected row (content index 0 => frame[1]) has the highlight and no inner red
+            $frame[1].Contains($on) | Should -BeTrue
+            $frame[1].Contains("$($script:ESC)[31m") | Should -BeFalse
+            # non-selected row unaffected
+            $frame[2].Contains($on) | Should -BeFalse
+        }
+    }
+
     Context 'PacketLineFormatter text-box mode' {
         AfterEach {
             [PacketLineFormatter]::SetTextBoxMode($false)
