@@ -2709,12 +2709,13 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
     Context 'PacketDetailStore' {
         It 'stores and retrieves packet bytes by sequence' {
             $store = [PacketDetailStore]::new(64)
+            # Descriptor: packet(8) at offset 0, metadata nominally at offset 8 (no valid block).
             $data = [byte[]](1,2,3,4,5,6,7,8)
-            $store.Store(10, $data, 0, 8, 9, 1, 1)
+            $store.Store(10, $data, 8, 8, 0, 8, 0, 9, 1, 1)
             $pkt = $null; $c = 0; $e = 0; $d = 0
             $got = $store.TryGet(10, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d)
             $got | Should -BeTrue
-            $pkt.Length | Should -Be 8
+            $pkt.Length | Should -Be 8      # packet-only slice
             $c | Should -Be 9
             $e | Should -Be 1
             $d | Should -Be 1
@@ -2727,12 +2728,45 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         It 'evicts entries beyond capacity (ring reuse)' {
             $store = [PacketDetailStore]::new(16)
             $data = [byte[]](1)
-            0..100 | ForEach-Object { $store.Store([long]$_, $data, 0, 1, 0, 0, 0) }
+            0..100 | ForEach-Object { $store.Store([long]$_, $data, 1, 1, 0, 1, 0, 0, 0, 0) }
             $pkt = $null; $c = 0; $e = 0; $d = 0
             # seq 0 was overwritten long ago
             $store.TryGet(0, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeFalse
             # a recent seq is retained
             $store.TryGet(100, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeTrue
+        }
+        It 'WritePcapng writes a valid pcapng of the retained packets' {
+            $store = [PacketDetailStore]::new(64)
+            # Descriptor: packet(20) at offset 0, metadata(40) at offset 20, DataSize=60.
+            $data = [byte[]]::new(60)
+            for ($i = 0; $i -lt 20; $i++) { $data[$i] = [byte]($i + 1) }
+            $data[20 + 12] = 1     # direction @ meta+12
+            $data[20 + 16] = 138   # componentId @ meta+16
+            $data[20 + 18] = 1     # edgeId @ meta+18
+            $qpc = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            $store.Store(1, $data, 60, 20, 0, 20, $qpc, 138, 1, 1)
+            $store.Store(2, $data, 60, 20, 0, 20, $qpc, 138, 1, 1)
+
+            $out = Join-Path $env:TEMP ("pspkt-unit-{0}.pcapng" -f ([guid]::NewGuid().ToString('N')))
+            try {
+                $written = $store.WritePcapng($out)
+                $written | Should -Be 2
+                $bytes = [System.IO.File]::ReadAllBytes($out)
+                $bytes.Length | Should -BeGreaterThan 0
+                # pcapng Section Header Block magic (block type) = 0x0A0D0D0A.
+                $bytes[0] | Should -Be 0x0A
+                $bytes[1] | Should -Be 0x0D
+                $bytes[2] | Should -Be 0x0D
+                $bytes[3] | Should -Be 0x0A
+            } finally {
+                Remove-Item $out -Force -ErrorAction SilentlyContinue
+            }
+        }
+        It 'WritePcapng returns 0 when nothing is retained' {
+            $store = [PacketDetailStore]::new(16)
+            $out = Join-Path $env:TEMP ("pspkt-unit-empty-{0}.pcapng" -f ([guid]::NewGuid().ToString('N')))
+            try { $store.WritePcapng($out) | Should -Be 0 }
+            finally { Remove-Item $out -Force -ErrorAction SilentlyContinue }
         }
     }
 

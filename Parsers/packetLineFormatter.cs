@@ -2218,7 +2218,7 @@ public static class PacketLineFormatter
                             // still store this packet's bytes below before breaking
                             if (emitted && store != null)
                             {
-                                store.Store(emitSeq, buffer[i].Data, (int)buffer[i].PacketOffset, (int)buffer[i].PacketLength, mCompId, mEdgeId, mDirection);
+                                store.Store(emitSeq, buffer[i].Data, (int)buffer[i].DataSize, (int)buffer[i].MetadataOffset, (int)buffer[i].PacketOffset, (int)buffer[i].PacketLength, buffer[i].QpcTimestamp, mCompId, mEdgeId, mDirection);
                                 emitSeq++;
                             }
                             break;
@@ -2237,7 +2237,7 @@ public static class PacketLineFormatter
             // Retain the emitted packet's raw bytes for just-in-time detailed parsing.
             if (emitted && store != null)
             {
-                store.Store(emitSeq, buffer[i].Data, (int)buffer[i].PacketOffset, (int)buffer[i].PacketLength, mCompId, mEdgeId, mDirection);
+                store.Store(emitSeq, buffer[i].Data, (int)buffer[i].DataSize, (int)buffer[i].MetadataOffset, (int)buffer[i].PacketOffset, (int)buffer[i].PacketLength, buffer[i].QpcTimestamp, mCompId, mEdgeId, mDirection);
                 emitSeq++;
             }
         }

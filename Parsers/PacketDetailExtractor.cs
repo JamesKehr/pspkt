@@ -24,8 +24,13 @@ public sealed class PacketDetailStore
 {
     private struct Record
     {
-        public long Seq;      // -1 = empty slot
-        public byte[] Packet; // copy of the packet bytes (no metadata)
+        public long Seq;       // -1 = empty slot
+        public byte[] Data;    // full descriptor copy (metadata + packet), length = DataSize
+        public int DataSize;
+        public int MetaOffset;
+        public int PktOffset;
+        public int PktLength;
+        public long Qpc;       // QPC timestamp captured at the pktmon callback
         public int CompId;
         public int EdgeId;
         public int Direction;
@@ -44,33 +49,48 @@ public sealed class PacketDetailStore
     public int Capacity { get { return _capacity; } }
 
     /// <summary>
-    /// Stores a copy of the packet bytes for sequence <paramref name="seq"/>. The copy is
-    /// exactly <paramref name="length"/> bytes taken from <paramref name="data"/> at
-    /// <paramref name="offset"/>.
+    /// Stores a copy of the full packet descriptor (metadata + packet bytes) for sequence
+    /// <paramref name="seq"/>. Retaining the whole descriptor — plus the QPC timestamp and the
+    /// metadata/packet offsets — lets the Analysis Details box reparse the packet on demand AND
+    /// lets <see cref="WritePcapng"/> emit a faithful pcapng (real timestamps + comments).
     /// </summary>
-    public void Store(long seq, byte[] data, int offset, int length, int compId, int edgeId, int direction)
+    public void Store(long seq, byte[] data, int dataSize, int metaOffset, int pktOffset, int pktLength, long qpc, int compId, int edgeId, int direction)
     {
-        if (data == null || length <= 0 || offset < 0 || offset + length > data.Length) return;
+        if (data == null || dataSize <= 0 || dataSize > data.Length) return;
+        if (pktOffset < 0 || pktLength <= 0 || pktOffset + pktLength > dataSize) return;
         int slot = (int)((seq % _capacity + _capacity) % _capacity);
-        byte[] copy = new byte[length];
-        Buffer.BlockCopy(data, offset, copy, 0, length);
+        byte[] copy = new byte[dataSize];
+        Buffer.BlockCopy(data, 0, copy, 0, dataSize);
         _ring[slot].Seq = seq;
-        _ring[slot].Packet = copy;
+        _ring[slot].Data = copy;
+        _ring[slot].DataSize = dataSize;
+        _ring[slot].MetaOffset = metaOffset;
+        _ring[slot].PktOffset = pktOffset;
+        _ring[slot].PktLength = pktLength;
+        _ring[slot].Qpc = qpc;
         _ring[slot].CompId = compId;
         _ring[slot].EdgeId = edgeId;
         _ring[slot].Direction = direction;
     }
 
     /// <summary>
-    /// Retrieves the retained packet for <paramref name="seq"/>. Returns false when that
-    /// sequence has been evicted (scrolled beyond the retention window) or was never stored.
+    /// Retrieves the retained packet bytes (packet only, metadata stripped) for
+    /// <paramref name="seq"/>. Returns false when that sequence has been evicted (scrolled
+    /// beyond the retention window) or was never stored. Allocates a packet-only slice on
+    /// demand — called only when the user navigates to a packet, not on the capture hot path.
     /// </summary>
     public bool TryGet(long seq, out byte[] packet, out int compId, out int edgeId, out int direction)
     {
         int slot = (int)((seq % _capacity + _capacity) % _capacity);
-        if (_ring[slot].Seq == seq && _ring[slot].Packet != null)
+        if (_ring[slot].Seq == seq && _ring[slot].Data != null)
         {
-            packet = _ring[slot].Packet;
+            int off = _ring[slot].PktOffset;
+            int len = _ring[slot].PktLength;
+            if (off + len > _ring[slot].DataSize) len = _ring[slot].DataSize - off;
+            if (len < 0) len = 0;
+            byte[] pkt = new byte[len];
+            if (len > 0) Buffer.BlockCopy(_ring[slot].Data, off, pkt, 0, len);
+            packet = pkt;
             compId = _ring[slot].CompId;
             edgeId = _ring[slot].EdgeId;
             direction = _ring[slot].Direction;
@@ -83,13 +103,69 @@ public sealed class PacketDetailStore
         return false;
     }
 
+    /// <summary>
+    /// Writes every currently retained packet (oldest sequence first) to a pcapng file at
+    /// <paramref name="path"/>, reusing the same serialization as a live -WriteFile capture
+    /// (real QPC timestamps + per-packet metadata comments). Returns the number of packets
+    /// written. Retention is bounded by <see cref="Capacity"/>, so only the most recent
+    /// packets are saved.
+    /// </summary>
+    public int WritePcapng(string path)
+    {
+        // Snapshot valid records, ordered by ascending sequence (oldest first).
+        List<Record> recs = new List<Record>(_capacity);
+        for (int i = 0; i < _capacity; i++)
+        {
+            if (_ring[i].Seq >= 0 && _ring[i].Data != null) recs.Add(_ring[i]);
+        }
+        if (recs.Count == 0) return 0;
+        recs.Sort(delegate (Record a, Record b) { return a.Seq.CompareTo(b.Seq); });
+
+        PcapngWriter writer = new PcapngWriter();
+        // Enrich packet comments with component names where the formatter knows them.
+        HashSet<int> registered = new HashSet<int>();
+        for (int i = 0; i < recs.Count; i++)
+        {
+            int cid = recs[i].CompId;
+            if (cid != 0 && registered.Add(cid))
+            {
+                string name, group; int parentId;
+                if (PacketLineFormatter.TryGetComponentInfo(cid, out name, out parentId, out group))
+                {
+                    writer.RegisterComponent(cid, name, group, parentId);
+                }
+            }
+        }
+
+        // Synchronous mode (no writer thread): WritePacket serializes immediately.
+        writer.Start(path, false, 0, false);
+        int written = 0;
+        try
+        {
+            for (int i = 0; i < recs.Count; i++)
+            {
+                Record r = recs[i];
+                PSPacketData p = new PSPacketData(r.Data, (uint)r.DataSize, (uint)r.MetaOffset,
+                    (uint)r.PktOffset, (uint)r.PktLength, 0, 0);
+                p.QpcTimestamp = r.Qpc;
+                writer.WritePacket(p);
+                written++;
+            }
+        }
+        finally
+        {
+            writer.Stop();
+        }
+        return written;
+    }
+
     /// <summary>Clears all retained packets.</summary>
     public void Clear()
     {
         for (int i = 0; i < _capacity; i++)
         {
             _ring[i].Seq = -1;
-            _ring[i].Packet = null;
+            _ring[i].Data = null;
         }
     }
 }

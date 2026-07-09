@@ -4,6 +4,6 @@
     { "Name": "Focus", "DisplayName": "Focus", "Hotkey": "F" },
     { "Name": "Pause", "DisplayName": "Pause", "Hotkey": "P" },
     { "Name": "Stop", "DisplayName": "Stop", "Hotkey": "S" },
-    { "Name": "Save", "DisplayName": "Save to file", "Hotkey": "W" }
+    { "Name": "Save", "DisplayName": "Save pcapng", "Hotkey": "W" }
   ]
 }

@@ -1403,7 +1403,7 @@ the screen into a Text box + Details box (Wireshark-style JIT parse tree), 'r'
 resumes, 's' stops. Pause ('p') stops collecting new packets (nothing more is added
 to the Text box or JIT store) and enters Focus so the frozen buffer can be inspected;
 'r' resumes collection. Shift+Ctrl+C copies the selection; the Save hotkey writes the
-capture buffer to a file via an overlay prompt. Menus are JSON-driven and switch
+retained packets to a pcapng file via an overlay prompt. Menus are JSON-driven and switch
 between Full (hotkey+text) and Simple (hotkey only) by console width.
 
 .PARAMETER Session
@@ -1550,12 +1550,12 @@ function Invoke-PspktAnalysisLoop {
     $notifyText = $null
     $notifyUntil = [DateTime]::MinValue
 
-    # Writes the full text buffer to a file via a blocking overlay prompt. Returns a status
-    # string for the notification. Restores the cursor state around the ReadLine.
+    # Writes the retained capture to a pcapng file via a blocking overlay prompt. Returns a
+    # status string for the notification. Restores the cursor/console state around the ReadLine.
     $saveToFile = {
         $body = [System.Collections.Generic.List[string]]::new()
         $null = $body.Add('')
-        $null = $body.Add(' Enter file path to save the capture text (blank = cancel):')
+        $null = $body.Add(' Enter file path to save the capture as pcapng (blank = cancel):')
         $null = $body.Add('')
         $null = $body.Add('')
         $ovW = [Math]::Min(70, $consoleWidth - 4)
@@ -1579,10 +1579,14 @@ function Invoke-PspktAnalysisLoop {
         if ([string]::IsNullOrWhiteSpace($fname)) { return 'Save cancelled' }
         try {
             $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($fname.Trim())
-            $lines = $textBox.GetWindow($textBox.BaseSeq, [int]($textBox.TotalSeq - $textBox.BaseSeq))
-            $plain = foreach ($l in $lines) { [BoxyBox.AnsiText]::StripAnsi($l) }
-            Set-Content -LiteralPath $resolved -Value $plain -Encoding UTF8
-            return "Saved $($lines.Count) lines to $resolved"
+            if (-not $resolved.EndsWith('.pcapng', [StringComparison]::OrdinalIgnoreCase)) {
+                $resolved = $resolved + '.pcapng'
+            }
+            # Write a pcapng of the retained packets (up to the JIT store capacity), reusing the
+            # same serialization as a live -WriteFile capture (real timestamps + comments).
+            $written = $detailStore.WritePcapng($resolved)
+            if ($written -le 0) { return 'No retained packets to save' }
+            return "Saved $written packets to $resolved"
         } catch {
             return "Save failed: $($_.Exception.Message)"
         }
