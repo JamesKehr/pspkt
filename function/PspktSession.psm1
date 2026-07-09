@@ -1464,7 +1464,7 @@ function Invoke-PspktAnalysisLoop {
     $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
 
     # Focus layout: Text Box (~40%, min 5 content lines) + Details Box (~60%). The Text box's
-    # bottom menu bar (Terminal caps ╘══╛) doubles as the shared divider; the Details box omits
+    # bottom menu bar (Mid caps ╞══╡) doubles as the shared divider; the Details box omits
     # its own top border and sits flush beneath it so the two boxes merge on one line.
     $usable = $areaHeight - 3
     if ($usable -lt 6) { $usable = 6 }
@@ -1475,7 +1475,7 @@ function Invoke-PspktAnalysisLoop {
     $detailsHeight   = $detailContent + 1  # content + menu (no top border)
 
     $textFocusBox = [BoxyBox.Box]::new($boxWidth, $textFocusHeight)
-    $textFocusBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Terminal   # ╘══╛ shared divider line
+    $textFocusBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Mid   # ╞══╡ shared divider line
     $textFocusBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($focusMenuDef, $boxWidth)
     $textFocusRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $textFocusHeight)
     $detailsBox = [BoxyBox.DetailsBox]::new($boxWidth, $detailsHeight, $false)   # no top border
