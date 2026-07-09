@@ -113,6 +113,26 @@ public static class PacketLineFormatter
     }
 
     /// <summary>
+    /// Resolves a component ID to its friendly name, parent ID, and group. Returns false
+    /// when the ID isn't in the map (caller should fall back to the numeric ID).
+    /// </summary>
+    public static bool TryGetComponentInfo(int id, out string name, out int parentId, out string group)
+    {
+        ComponentInfo info;
+        if (_componentMap.TryGetValue(id, out info))
+        {
+            name = info.Name;
+            parentId = info.ParentId;
+            group = info.Group;
+            return true;
+        }
+        name = null;
+        parentId = 0;
+        group = null;
+        return false;
+    }
+
+    /// <summary>
     /// Marks a component ID as a miss (tried to refresh, still not found).
     /// </summary>
     public static void MarkComponentMiss(int id)
@@ -2126,12 +2146,25 @@ public static class PacketLineFormatter
     /// </summary>
     public static BatchLinesResult FormatBatchToLines(PSPacketData[] buffer, int count, int startLineCounter)
     {
+        return FormatBatchToLines(buffer, count, startLineCounter, 0, null);
+    }
+
+    /// <summary>
+    /// Store-aware overload: in addition to formatting, copies each emitted packet's raw bytes
+    /// into <paramref name="store"/> keyed by <paramref name="startSeq"/> + emitted-index, so
+    /// the Analysis Details box can reparse a selected packet on demand. The emit order matches
+    /// the order lines are returned (and therefore the order the caller appends them to the
+    /// TextBox), keeping sequence numbers aligned.
+    /// </summary>
+    public static BatchLinesResult FormatBatchToLines(PSPacketData[] buffer, int count, int startLineCounter, long startSeq, PacketDetailStore store)
+    {
         if (buffer == null || count <= 0) return null;
 
         var lines = new System.Collections.Generic.List<string>(count);
         int lineCounter = startLineCounter;
         int droppedCount = 0;
         int triggerAction = 0;
+        long emitSeq = startSeq;
         bool checkTriggers = _stopOnDrop || _pauseOnDrop ||
                              _stopOnReason != 0 || _stopOnLocation != 0 ||
                              _pauseOnReason != 0 || _pauseOnLocation != 0;
@@ -2141,19 +2174,24 @@ public static class PacketLineFormatter
             // Per-packet scratch so each emitted packet becomes its own list entry.
             var scratch = Scratch();
             int tentativeCounter = lineCounter + 1;
-            if (FormatSinglePacketInto(scratch, ref buffer[i], tentativeCounter))
+            bool emitted = FormatSinglePacketInto(scratch, ref buffer[i], tentativeCounter);
+            if (emitted)
             {
                 lineCounter = tentativeCounter;
                 lines.Add(scratch.ToString());
             }
 
-            // Walk metadata once for seen-component tracking + drop counting/triggers.
+            // Walk metadata once for seen-component tracking + drop counting/triggers, and
+            // to source the compId/edge/direction for the detail store.
             int metaOffset = (int)buffer[i].MetadataOffset;
             byte[] mdata = buffer[i].Data;
+            int mCompId = 0, mEdgeId = 0, mDirection = 0;
             if (mdata != null && (int)buffer[i].DataSize >= metaOffset + 30)
             {
-                int compId = mdata[metaOffset + 16] | (mdata[metaOffset + 17] << 8);
-                if (compId != 0) PktMonApi.NoteComponentId(compId);
+                mCompId = mdata[metaOffset + 16] | (mdata[metaOffset + 17] << 8);
+                mEdgeId = mdata[metaOffset + 18] | (mdata[metaOffset + 19] << 8);
+                mDirection = mdata[metaOffset + 12] | (mdata[metaOffset + 13] << 8);
+                if (mCompId != 0) PktMonApi.NoteComponentId(mCompId);
 
                 int dropReason = (int)BitConverter.ToUInt32(mdata, metaOffset + 22);
                 if (dropReason != 0)
@@ -2167,6 +2205,12 @@ public static class PacketLineFormatter
                             (_stopOnLocation != 0 && dropLocation == _stopOnLocation))
                         {
                             triggerAction = 2;
+                            // still store this packet's bytes below before breaking
+                            if (emitted && store != null)
+                            {
+                                store.Store(emitSeq, buffer[i].Data, (int)buffer[i].PacketOffset, (int)buffer[i].PacketLength, mCompId, mEdgeId, mDirection);
+                                emitSeq++;
+                            }
                             break;
                         }
                         if (triggerAction == 0 &&
@@ -2178,6 +2222,13 @@ public static class PacketLineFormatter
                         }
                     }
                 }
+            }
+
+            // Retain the emitted packet's raw bytes for just-in-time detailed parsing.
+            if (emitted && store != null)
+            {
+                store.Store(emitSeq, buffer[i].Data, (int)buffer[i].PacketOffset, (int)buffer[i].PacketLength, mCompId, mEdgeId, mDirection);
+                emitSeq++;
             }
         }
 

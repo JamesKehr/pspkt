@@ -2500,7 +2500,8 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             [PacketLineFormatter]::SetTextBoxMode($false)
         }
         It 'FormatBatchToLines and SetTextBoxMode exist' {
-            [PacketLineFormatter].GetMethod('FormatBatchToLines') | Should -Not -BeNullOrEmpty
+            $methods = [PacketLineFormatter].GetMethods() | Where-Object { $_.Name -eq 'FormatBatchToLines' }
+            $methods.Count | Should -BeGreaterOrEqual 1
             [PacketLineFormatter].GetMethod('SetTextBoxMode') | Should -Not -BeNullOrEmpty
         }
         It 'component prefix includes the name in full mode and omits it in text-box mode' {
@@ -2587,6 +2588,92 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $frame = $db.Render($script:on, $script:off)
             # first content row (Component) is selected by default
             $frame[1].Contains($script:on) | Should -BeTrue
+        }
+    }
+
+    Context 'PacketDetailStore' {
+        It 'stores and retrieves packet bytes by sequence' {
+            $store = [PacketDetailStore]::new(64)
+            $data = [byte[]](1,2,3,4,5,6,7,8)
+            $store.Store(10, $data, 0, 8, 9, 1, 1)
+            $pkt = $null; $c = 0; $e = 0; $d = 0
+            $got = $store.TryGet(10, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d)
+            $got | Should -BeTrue
+            $pkt.Length | Should -Be 8
+            $c | Should -Be 9
+            $e | Should -Be 1
+            $d | Should -Be 1
+        }
+        It 'returns false for sequences never stored' {
+            $store = [PacketDetailStore]::new(64)
+            $pkt = $null; $c = 0; $e = 0; $d = 0
+            $store.TryGet(999, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeFalse
+        }
+        It 'evicts entries beyond capacity (ring reuse)' {
+            $store = [PacketDetailStore]::new(16)
+            $data = [byte[]](1)
+            0..100 | ForEach-Object { $store.Store([long]$_, $data, 0, 1, 0, 0, 0) }
+            $pkt = $null; $c = 0; $e = 0; $d = 0
+            # seq 0 was overwritten long ago
+            $store.TryGet(0, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeFalse
+            # a recent seq is retained
+            $store.TryGet(100, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeTrue
+        }
+    }
+
+    Context 'PacketDetailExtractor' {
+        BeforeAll {
+            # Build Ethernet + IPv4 + UDP + DNS query for example.com.
+            $b = [System.Collections.Generic.List[byte]]::new()
+            0..5 | ForEach-Object { $b.Add([byte]0x11) }   # dst mac
+            0..5 | ForEach-Object { $b.Add([byte]0x22) }   # src mac
+            $b.Add(0x08); $b.Add(0x00)                      # EtherType IPv4
+            $b.Add(0x45); $b.Add(0x00); $b.Add(0x00); $b.Add(0x3c)
+            $b.Add(0x8b); $b.Add(0xee); $b.Add(0x40); $b.Add(0x00)
+            $b.Add(0x40); $b.Add(0x11); $b.Add(0x00); $b.Add(0x00)
+            $b.AddRange([byte[]](10,24,0,72)); $b.AddRange([byte[]](1,1,1,1))
+            $b.Add(0x13); $b.Add(0x88); $b.Add(0x00); $b.Add(0x35)
+            $b.Add(0x00); $b.Add(0x25); $b.Add(0x00); $b.Add(0x00)   # UDP len 37 (8 hdr + 29 DNS)
+            $b.Add(0x23); $b.Add(0xb4); $b.Add(0x01); $b.Add(0x00)
+            $b.Add(0x00); $b.Add(0x01); $b.Add(0x00); $b.Add(0x00)
+            $b.Add(0x00); $b.Add(0x00); $b.Add(0x00); $b.Add(0x00)
+            $b.Add(0x07); 'example'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(0x03); 'com'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(0x00); $b.Add(0x00); $b.Add(0x01); $b.Add(0x00); $b.Add(0x01)
+            $script:pkt = [byte[]]$b.ToArray()
+        }
+        It 'builds Component/Eth/IPv4/UDP/DNS top-level nodes' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $roots.Count | Should -Be 5
+            $roots[0].Key | Should -Be 'Component'
+            $roots[1].Key | Should -Be 'Eth'
+            $roots[2].Key | Should -Be 'IPv4'
+            $roots[3].Key | Should -Be 'UDP'
+            $roots[4].Key | Should -Be 'DNS'
+        }
+        It 'Component and Eth are collapsed by default; IPv4/UDP/DNS expanded' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $roots[0].IsExpanded | Should -BeFalse   # Component
+            $roots[1].IsExpanded | Should -BeFalse   # Eth
+            $roots[2].IsExpanded | Should -BeTrue     # IPv4
+        }
+        It 'extracts IPv4 fields (Src/Dst/id)' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $ipv4 = $roots[2]
+            ($ipv4.Children | Where-Object { $_.Text -eq 'Src: 10.24.0.72' }).Count | Should -Be 1
+            ($ipv4.Children | Where-Object { $_.Text -eq 'Dst: 1.1.1.1' }).Count | Should -Be 1
+            ($ipv4.Children | Where-Object { $_.Text -eq 'id: 0x8bee' }).Count | Should -Be 1
+        }
+        It 'extracts DNS transaction id and query' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $dns = $roots[4]
+            ($dns.Children | Where-Object { $_.Text -eq 'Transaction: 0x23b4' }).Count | Should -Be 1
+            ($dns.Children | Where-Object { $_.Text -like 'Query: A? example.com*' }).Count | Should -Be 1
+        }
+        It 'returns an error node for too-short input' {
+            $roots = [PacketDetailExtractor]::BuildTree([byte[]](1,2,3), 3, 0, 0, 0)
+            $roots.Count | Should -Be 1
+            $roots[0].Text | Should -Match 'too short'
         }
     }
 }

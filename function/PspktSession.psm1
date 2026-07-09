@@ -1391,13 +1391,33 @@ function Invoke-PspktAnalysisLoop {
     try { if ([Console]::WindowWidth  -gt 0) { $consoleWidth  = [Console]::WindowWidth } }  catch { }
     try { if ([Console]::WindowHeight -gt 0) { $consoleHeight = [Console]::WindowHeight } } catch { }
 
-    # Row 1 is a status line; the Text Box fills the remaining rows.
-    $boxWidth  = $consoleWidth
-    $boxHeight = [Math]::Max(5, $consoleHeight - 1)
+    # Row 1 is a status line; the box area fills the remaining rows.
+    $boxWidth   = $consoleWidth
+    $areaTop    = 2
+    $areaHeight = [Math]::Max(6, $consoleHeight - 1)
 
-    $textBox = [BoxyBox.TextBox]::new($boxWidth, $boxHeight, 200000)
-    $textBox.MenuOptions = [System.Collections.Generic.List[string]]@('(F)ocus', '(S)top', 'Save to (F)ile')
-    $region = [BoxyBox.ScreenRegion]::new(2, 1, $boxWidth, $boxHeight)
+    # Live layout: a single Text Box fills the whole area.
+    $textBox = [BoxyBox.TextBox]::new($boxWidth, $areaHeight, 200000)
+    $liveBox = [BoxyBox.Box]::new($boxWidth, $areaHeight)
+    $liveBox.MenuOptions = [System.Collections.Generic.List[string]]@('(F)ocus', '(S)top', 'Save to (F)ile')
+    $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
+
+    # Focus layout: Text Box (top half) + Details Box (bottom half).
+    $textFocusHeight = [Math]::Max(3, [int][Math]::Ceiling($areaHeight / 2))
+    $detailsHeight   = $areaHeight - $textFocusHeight
+    $textFocusBox = [BoxyBox.Box]::new($boxWidth, $textFocusHeight)
+    $textFocusBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Mid
+    $textFocusBox.MenuOptions = [System.Collections.Generic.List[string]]@('(R)esume', '(S)top', 'Save to (F)ile', '[Tab] switch', '[Shift+Ctrl+C]opy')
+    $textFocusRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $textFocusHeight)
+    $detailsBox = [BoxyBox.DetailsBox]::new($boxWidth, $detailsHeight)
+    $detailsBox.MenuOptions = [System.Collections.Generic.List[string]]@(
+        "[$([char]0x2192)] Expand", "[$([char]0x2190)] Collapse",
+        "[Ctrl+$([char]0x2192)] Expand all", "[Ctrl+$([char]0x2190)] Collapse all",
+        "[Ctrl+$([char]0x2191)$([char]0x2193)] Prev|Next pkt")
+    $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
+
+    # JIT detail store: retain the last 20,000 packets' raw bytes for on-demand parsing.
+    $detailStore = [PacketDetailStore]::new(20000)
 
     $lineCounter  = 0
     $packetCount  = 0
@@ -1406,84 +1426,134 @@ function Invoke-PspktAnalysisLoop {
     $dirty = $true
 
     # --- Focus state ---
-    # $focused: when true, scrolling is frozen and a line is selected/highlighted while
-    # packet ingestion continues in the background. Selection is tracked by absolute
-    # sequence number so it stays pinned to the same packet as the buffer trims.
     $focused = $false
+    $activeBox = 'text'      # 'text' or 'details' (Tab switches)
     [long]$selectedSeq = 0
     [long]$topSeq = 0
-    $contentRows = $textBox.Box.ContentRows
-    $hlOn  = "$ESC[7m"   # reverse video (selected-line highlight)
+    $hlOn  = "$ESC[7m"       # reverse video (selection highlight)
     $hlOff = "$ESC[0m"
 
-    $menuLive  = [System.Collections.Generic.List[string]]@('(F)ocus', '(S)top', 'Save to (F)ile')
-    $menuFocus = [System.Collections.Generic.List[string]]@('(R)esume', '(S)top', 'Save to (F)ile')
-    $textBox.MenuOptions = $menuLive
+    # Loads the detail tree for a given absolute sequence number into the Details box,
+    # reparsing the retained raw bytes just-in-time. Shows a placeholder when the packet
+    # has scrolled beyond the retention window.
+    $loadDetails = {
+        param([long]$seq)
+        $pktBytes = $null; $cId = 0; $eId = 0; $dir = 0
+        $got = $detailStore.TryGet($seq, [ref]$pktBytes, [ref]$cId, [ref]$eId, [ref]$dir)
+        if ($got -and $null -ne $pktBytes) {
+            $roots = [PacketDetailExtractor]::BuildTree($pktBytes, $pktBytes.Length, $cId, $eId, $dir)
+        } else {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $null = $roots.Add([BoxyBox.TreeNode]::new('(detail not retained - packet scrolled past the JIT window)', 'Info', $true))
+        }
+        $detailsBox.SetTree($roots)
+    }
 
-    # Cap render rate (~30 fps) so a high packet rate doesn't spend all its time drawing.
+    # Cap render rate (~30 fps).
     $frameWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $frameIntervalMs = 33
 
     [PktMonApi]::SetCaptureActive($true)
-
-    # Prepare the screen: clear, hide cursor.
     [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen() + [BoxyBox.ScreenRegion]::HideCursor())
 
     try {
         while ($Session.Active -and -not $stopRequested) {
+            $textContentRows = if ($focused) { $textFocusBox.ContentRows } else { $liveBox.ContentRows }
+
             # --- Non-blocking key handling ---
             $keyReady = $false
             try { $keyReady = [Console]::KeyAvailable } catch { $keyReady = $false }
             if ($keyReady) {
                 $key = [Console]::ReadKey($true)
                 $ch = [char]::ToLower($key.KeyChar)
+                $ctrl  = ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0
+                $shift = ($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
 
                 if ($ch -eq 's') { $stopRequested = $true; continue }
 
                 if (-not $focused) {
                     if ($ch -eq 'f') {
-                        # Enter Focus: freeze scroll, select the middle visible line.
+                        # Enter Focus: freeze scroll, split screen, select the middle line.
                         $focused = $true
-                        $textBox.MenuOptions = $menuFocus
-                        $topSeq = $textBox.TotalSeq - $contentRows
+                        $activeBox = 'text'
+                        $topSeq = $textBox.TotalSeq - $textFocusBox.ContentRows
                         if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
-                        $selectedSeq = $textBox.ClampSeq($topSeq + [int]($contentRows / 2))
+                        $selectedSeq = $textBox.ClampSeq($topSeq + [int]($textFocusBox.ContentRows / 2))
+                        & $loadDetails $selectedSeq
+                        # Quick expand-up animation of the Details box.
+                        $steps = 4
+                        for ($s = 1; $s -le $steps; $s++) {
+                            $h = [int]($detailsHeight * $s / $steps)
+                            if ($h -lt 2) { $h = 2 }
+                            $animBox = [BoxyBox.Box]::new($boxWidth, $h)
+                            $animRegion = [BoxyBox.ScreenRegion]::new($areaTop + $areaHeight - $h, 1, $boxWidth, $h)
+                            [Console]::Write($animRegion.BuildFrame($animBox.Render($null)))
+                            Start-Sleep -Milliseconds 12
+                        }
                         $dirty = $true
                     }
                 } else {
-                    # --- Focus-mode navigation ---
+                    # --- Focus mode ---
                     if ($ch -eq 'r') {
-                        # Resume live scrolling.
                         $focused = $false
-                        $textBox.MenuOptions = $menuLive
+                        # Clear the whole area so the details box leaves no residue.
+                        [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
                         $dirty = $true
-                    } else {
-                        switch ($key.Key) {
-                            'UpArrow'    { $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); $dirty = $true }
-                            'DownArrow'  { $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); $dirty = $true }
-                            'PageUp'     { $selectedSeq = $textBox.ClampSeq($selectedSeq - $contentRows); $topSeq = $topSeq - $contentRows; $dirty = $true }
-                            'PageDown'   { $selectedSeq = $textBox.ClampSeq($selectedSeq + $contentRows); $topSeq = $topSeq + $contentRows; $dirty = $true }
-                            'LeftArrow'  { $textBox.Justification = [BoxyBox.Justify]::Left;  $dirty = $true }
-                            'RightArrow' { $textBox.Justification = [BoxyBox.Justify]::Right; $dirty = $true }
+                    }
+                    elseif ($key.Key -eq [ConsoleKey]::Tab) {
+                        $activeBox = if ($activeBox -eq 'text') { 'details' } else { 'text' }
+                        $dirty = $true
+                    }
+                    elseif ($activeBox -eq 'details') {
+                        # Ctrl+Up/Down = prev/next packet (moves the Text Box selection + reloads).
+                        if ($ctrl -and $key.Key -eq [ConsoleKey]::UpArrow) {
+                            $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); & $loadDetails $selectedSeq; $dirty = $true
                         }
-                        # Keep the selected line inside the visible window and both values
-                        # inside the retained range (the buffer may have trimmed).
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::DownArrow) {
+                            $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); & $loadDetails $selectedSeq; $dirty = $true
+                        }
+                        else {
+                            switch ($key.Key) {
+                                'UpArrow'    { $detailsBox.MoveUp();   $dirty = $true }
+                                'DownArrow'  { $detailsBox.MoveDown(); $dirty = $true }
+                                'PageUp'     { $detailsBox.PageUp();   $dirty = $true }
+                                'PageDown'   { $detailsBox.PageDown(); $dirty = $true }
+                                'LeftArrow'  { if ($shift) { $detailsBox.CollapseAll() } else { $detailsBox.CollapseSelected() }; $dirty = $true }
+                                'RightArrow' { if ($shift) { $detailsBox.ExpandAll() }   else { $detailsBox.ExpandSelected()   }; $dirty = $true }
+                            }
+                        }
+                    }
+                    else {
+                        # activeBox = 'text'
+                        switch ($key.Key) {
+                            'UpArrow'    { $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); & $loadDetails $selectedSeq; $dirty = $true }
+                            'DownArrow'  { $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); & $loadDetails $selectedSeq; $dirty = $true }
+                            'PageUp'     { $selectedSeq = $textBox.ClampSeq($selectedSeq - $textContentRows); $topSeq -= $textContentRows; & $loadDetails $selectedSeq; $dirty = $true }
+                            'PageDown'   { $selectedSeq = $textBox.ClampSeq($selectedSeq + $textContentRows); $topSeq += $textContentRows; & $loadDetails $selectedSeq; $dirty = $true }
+                            'LeftArrow'  { $textFocusBox.Justification = [BoxyBox.Justify]::Left;  $dirty = $true }
+                            'RightArrow' { $textFocusBox.Justification = [BoxyBox.Justify]::Right; $dirty = $true }
+                        }
+                    }
+
+                    # Keep the text-box selection inside its visible window + retained range.
+                    if ($focused) {
                         $selectedSeq = $textBox.ClampSeq($selectedSeq)
-                        $maxTop = [Math]::Max($textBox.BaseSeq, $textBox.TotalSeq - $contentRows)
+                        $maxTop = [Math]::Max($textBox.BaseSeq, $textBox.TotalSeq - $textContentRows)
                         if ($topSeq -gt $maxTop) { $topSeq = $maxTop }
                         if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
                         if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
-                        elseif ($selectedSeq -gt $topSeq + $contentRows - 1) { $topSeq = $selectedSeq - $contentRows + 1 }
+                        elseif ($selectedSeq -gt $topSeq + $textContentRows - 1) { $topSeq = $selectedSeq - $textContentRows + 1 }
                         if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
                     }
                 }
             }
 
-            # --- Drain + format (continues even while focused) ---
+            # --- Drain + format (continues even while focused); retain bytes for JIT detail ---
             $pktCount = $Session.DrainAllRawPackets()
             if ($pktCount -gt 0) {
                 try {
-                    $res = [PacketLineFormatter]::FormatBatchToLines($stream.PacketBuffer, $pktCount, $lineCounter)
+                    $startSeq = $textBox.TotalSeq
+                    $res = [PacketLineFormatter]::FormatBatchToLines($stream.PacketBuffer, $pktCount, $lineCounter, $startSeq, $detailStore)
                     if ($null -ne $res) {
                         $lineCounter  = $res.LineCounter
                         $packetCount += $res.PacketCount
@@ -1504,21 +1574,33 @@ function Invoke-PspktAnalysisLoop {
             # --- Throttled render ---
             if ($dirty -and $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs) {
                 if ($focused) {
-                    # Re-clamp in case ingestion trimmed the buffer since the last frame.
+                    # Re-clamp against any trimming since the last frame.
                     $selectedSeq = $textBox.ClampSeq($selectedSeq)
                     if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
                     if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
-                    elseif ($selectedSeq -gt $topSeq + $contentRows - 1) { $topSeq = $selectedSeq - $contentRows + 1 }
-                    $posInfo = "pkt $($selectedSeq + 1)/$($textBox.TotalSeq)"
-                    $status = "  pspkt Analysis [FOCUS]  |  $posInfo  |  (R)esume (S)top   " + [char]0x2191 + [char]0x2193 + " PgUp/PgDn move   " + [char]0x2190 + [char]0x2192 + " justify"
-                    $frameLines = $textBox.RenderWindow($topSeq, $selectedSeq, $hlOn, $hlOff)
+                    elseif ($selectedSeq -gt $topSeq + $textFocusBox.ContentRows - 1) { $topSeq = $selectedSeq - $textFocusBox.ContentRows + 1 }
+
+                    $activeLabel = if ($activeBox -eq 'text') { 'TEXT' } else { 'DETAILS' }
+                    $status = "  Analysis [FOCUS/$activeLabel]  pkt $($selectedSeq + 1)/$($textBox.TotalSeq)  |  (R)esume (S)top [Tab] switch"
+                    # Text box (top): highlight the selected line only when the text box is active.
+                    $textWindow = $textBox.GetWindow($topSeq, $textFocusBox.ContentRows)
+                    $selRow = [int]($selectedSeq - $topSeq)
+                    if ($selRow -lt 0 -or $selRow -ge $textFocusBox.ContentRows) { $selRow = -1 }
+                    $textFrameLines = if ($activeBox -eq 'text') {
+                        $textFocusBox.Render($textWindow, $selRow, $hlOn, $hlOff)
+                    } else {
+                        $textFocusBox.Render($textWindow, $selRow, "$ESC[2m", $hlOff)  # dim selection when inactive
+                    }
+                    $detailsFrameLines = $detailsBox.Render($hlOn, $hlOff)
+
+                    $frame = $textFocusRegion.BuildFrame($textFrameLines) + $detailsRegion.BuildFrame($detailsFrameLines)
                 } else {
                     $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (F)ocus (S)top"
-                    $frameLines = $textBox.RenderTail()
+                    $liveWindow = $textBox.GetTailWindow($liveBox.ContentRows)
+                    $frame = $liveRegion.BuildFrame($liveBox.Render($liveWindow))
                 }
                 if ($status.Length -gt $boxWidth) { $status = $status.Substring(0, $boxWidth) }
                 $statusLine = "$ESC[1;1H$ESC[2K$status"
-                $frame = $region.BuildFrame($frameLines)
                 [Console]::Write($statusLine + $frame)
                 $frameWatch.Restart()
                 $dirty = $false
@@ -1528,7 +1610,7 @@ function Invoke-PspktAnalysisLoop {
     finally {
         # Restore console + formatter state.
         [Console]::Write([BoxyBox.ScreenRegion]::ShowCursor())
-        $belowRow = 2 + $boxHeight
+        $belowRow = $areaTop + $areaHeight
         [Console]::Write("$ESC[$belowRow;1H`n")
         [PacketLineFormatter]::SetTextBoxMode($false)
         Set-PspktDetailLevel -Level $prevDetail

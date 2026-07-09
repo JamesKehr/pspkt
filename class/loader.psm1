@@ -73,6 +73,8 @@ if ($null -eq $typeCheck) {
         [IcmpContext]
         [IcmpAppPredicate]
         [NdpParser]
+        [PacketDetailStore]
+        [PacketDetailExtractor]
         [BoxyBox.AnsiText]
         [BoxyBox.TextJustify]
         [BoxyBox.BoxChars]

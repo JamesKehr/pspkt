@@ -606,6 +606,38 @@ namespace BoxyBox
         }
 
         /// <summary>
+        /// Returns <paramref name="rows"/> visible line strings starting at absolute sequence
+        /// <paramref name="topSeq"/> (blank-padded where out of range). Lets a caller render
+        /// the buffer into a box it sizes itself (e.g. a shorter box while the Details box is
+        /// open), independent of this TextBox's own Box height.
+        /// </summary>
+        public List<string> GetWindow(long topSeq, int rows)
+        {
+            var window = new List<string>(rows);
+            for (int i = 0; i < rows; i++)
+            {
+                string line = GetLineBySeq(topSeq + i);
+                window.Add(line ?? string.Empty);
+            }
+            return window;
+        }
+
+        /// <summary>
+        /// Returns the live-tail window (the most recent <paramref name="rows"/> lines, newest
+        /// anchored at the bottom, top blank-padded), for rendering into an arbitrary box.
+        /// </summary>
+        public List<string> GetTailWindow(int rows)
+        {
+            var window = new List<string>(rows);
+            int start = _lines.Count - rows;
+            if (start < 0) start = 0;
+            int pad = rows - (_lines.Count - start);
+            for (int p = 0; p < pad; p++) window.Add(string.Empty);
+            for (int i = start; i < _lines.Count; i++) window.Add(_lines[i]);
+            return window;
+        }
+
+        /// <summary>
         /// Renders the live tail: the most recent <c>ContentRows</c> lines, top-aligned so
         /// the newest line sits at the bottom of the content area.
         /// </summary>
