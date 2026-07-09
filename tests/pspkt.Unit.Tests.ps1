@@ -2203,6 +2203,167 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
     }
 }
 
+Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
+    BeforeAll {
+        $script:modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+        Import-Module $script:modulePath -Force -ErrorAction Stop
+        $script:ESC = [char]27
+    }
+
+    AfterAll {
+        Remove-Module pspkt -Force -ErrorAction SilentlyContinue
+    }
+
+    Context 'TextJustify.Fit (plain text)' {
+        It 'pads left-justified text to the right' {
+            [BoxyBox.TextJustify]::Fit('abc', 6, [BoxyBox.Justify]::Left) | Should -Be 'abc   '
+        }
+        It 'pads right-justified text to the left' {
+            [BoxyBox.TextJustify]::Fit('abc', 6, [BoxyBox.Justify]::Right) | Should -Be '   abc'
+        }
+        It 'returns text unchanged when it exactly fits' {
+            [BoxyBox.TextJustify]::Fit('abcdef', 6, [BoxyBox.Justify]::Left) | Should -Be 'abcdef'
+        }
+        It 'truncates the tail of left-justified overflow with an ellipsis' {
+            [BoxyBox.TextJustify]::Fit('abcdefghij', 6, [BoxyBox.Justify]::Left) | Should -Be 'abc...'
+        }
+        It 'truncates the head of right-justified overflow with an ellipsis' {
+            [BoxyBox.TextJustify]::Fit('abcdefghij', 6, [BoxyBox.Justify]::Right) | Should -Be '...hij'
+        }
+        It 'hard-slices when width is too small for the ellipsis (left)' {
+            [BoxyBox.TextJustify]::Fit('abcdef', 2, [BoxyBox.Justify]::Left) | Should -Be 'ab'
+        }
+        It 'hard-slices when width is too small for the ellipsis (right)' {
+            [BoxyBox.TextJustify]::Fit('abcdef', 2, [BoxyBox.Justify]::Right) | Should -Be 'ef'
+        }
+        It 'returns empty string for non-positive width' {
+            [BoxyBox.TextJustify]::Fit('abc', 0, [BoxyBox.Justify]::Left) | Should -Be ''
+        }
+        It 'treats null text as empty' {
+            [BoxyBox.TextJustify]::Fit($null, 3, [BoxyBox.Justify]::Left) | Should -Be '   '
+        }
+    }
+
+    Context 'AnsiText helpers' {
+        BeforeAll {
+            $script:colored = "$($script:ESC)[31mRED$($script:ESC)[0m"
+        }
+        It 'VisibleLength ignores SGR escape sequences' {
+            [BoxyBox.AnsiText]::VisibleLength($script:colored) | Should -Be 3
+        }
+        It 'VisibleLength returns 0 for null/empty' {
+            [BoxyBox.AnsiText]::VisibleLength($null) | Should -Be 0
+            [BoxyBox.AnsiText]::VisibleLength('') | Should -Be 0
+        }
+        It 'ContainsAnsi detects escape sequences' {
+            [BoxyBox.AnsiText]::ContainsAnsi($script:colored) | Should -BeTrue
+            [BoxyBox.AnsiText]::ContainsAnsi('plain') | Should -BeFalse
+        }
+        It 'TakeVisiblePrefix keeps N visible columns and appends a reset' {
+            $p = [BoxyBox.AnsiText]::TakeVisiblePrefix($script:colored, 2)
+            [BoxyBox.AnsiText]::VisibleLength($p) | Should -Be 2
+            $p.EndsWith("$($script:ESC)[0m") | Should -BeTrue
+        }
+    }
+
+    Context 'TextJustify.Fit (ANSI-aware)' {
+        BeforeAll {
+            $script:colored = "$($script:ESC)[31mRED$($script:ESC)[0m"
+        }
+        It 'pads by visible length, not raw string length' {
+            $fit = [BoxyBox.TextJustify]::Fit($script:colored, 6, [BoxyBox.Justify]::Left)
+            [BoxyBox.AnsiText]::VisibleLength($fit) | Should -Be 6
+        }
+    }
+
+    Context 'Box.Render' {
+        BeforeAll {
+            $script:box = [BoxyBox.Box]::new(20, 5)
+            $script:box.MenuOptions = [System.Collections.Generic.List[string]]@('(F)ocus', '(S)top')
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add('hello')
+            $script:rendered = $script:box.Render($lines)
+        }
+        It 'produces Height rows' {
+            $script:rendered.Count | Should -Be 5
+        }
+        It 'first row is the top border with corners' {
+            [int]$script:rendered[0][0]  | Should -Be ([int][char]0x250c)   # top-left
+            [int]$script:rendered[0][-1] | Should -Be ([int][char]0x2510)   # top-right
+        }
+        It 'every row is exactly Width visible columns' {
+            foreach ($row in $script:rendered) {
+                [BoxyBox.AnsiText]::VisibleLength($row) | Should -Be 20
+            }
+        }
+        It 'content row contains the text padded within side borders' {
+            $script:rendered[1] | Should -Be ("$([char]0x2502)hello             $([char]0x2502)")
+        }
+        It 'unused content rows are blank' {
+            $script:rendered[2] | Should -Be ("$([char]0x2502)                  $([char]0x2502)")
+        }
+        It 'last row is the menu bar with the terminal left cap' {
+            [int]$script:rendered[4][0] | Should -Be ([int][char]0x2558)
+        }
+        It 'right-justified box anchors content to the right' {
+            $rbox = [BoxyBox.Box]::new(20, 3)
+            $rbox.Justification = [BoxyBox.Justify]::Right
+            $rlines = [System.Collections.Generic.List[string]]::new()
+            $rlines.Add('end')
+            $rr = $rbox.Render($rlines)
+            $rr[1] | Should -Be ("$([char]0x2502)               end$([char]0x2502)")
+        }
+    }
+
+    Context 'ScreenRegion.BuildFrame' {
+        BeforeAll {
+            $box = [BoxyBox.Box]::new(20, 5)
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add('x')
+            $script:rendered = $box.Render($lines)
+            $region = [BoxyBox.ScreenRegion]::new(1, 1, 20, 5)
+            $script:frame = $region.BuildFrame($script:rendered)
+        }
+        It 'emits no newline (so the console does not scroll)' {
+            $script:frame.Contains("`n") | Should -BeFalse
+        }
+        It 'positions the cursor absolutely for the first row' {
+            $script:frame.Contains("$($script:ESC)[1;1H") | Should -BeTrue
+        }
+        It 'clears each line before writing' {
+            $script:frame.Contains("$($script:ESC)[2K") | Should -BeTrue
+        }
+        It 'cursor hide/show/clear helpers emit expected sequences' {
+            [BoxyBox.ScreenRegion]::HideCursor()  | Should -Be "$($script:ESC)[?25l"
+            [BoxyBox.ScreenRegion]::ShowCursor()  | Should -Be "$($script:ESC)[?25h"
+            [BoxyBox.ScreenRegion]::ClearScreen() | Should -Be "$($script:ESC)[2J$($script:ESC)[H"
+        }
+    }
+
+    Context 'MenuBar.Build' {
+        It 'fills to the requested width with the double rule' {
+            $opts = [System.Collections.Generic.List[string]]@('(R)esume')
+            $bar = [BoxyBox.MenuBar]::Build($opts, 30, [BoxyBox.MenuBar+Cap]::Terminal)
+            [BoxyBox.AnsiText]::VisibleLength($bar) | Should -Be 30
+            [int]$bar[0]  | Should -Be ([int][char]0x2558)  # ╘
+            [int]$bar[-1] | Should -Be ([int][char]0x255b)  # ╛
+        }
+        It 'uses mid caps for the divider style' {
+            $bar = [BoxyBox.MenuBar]::Build([System.Collections.Generic.List[string]]::new(), 10, [BoxyBox.MenuBar+Cap]::Mid)
+            [int]$bar[0]  | Should -Be ([int][char]0x255e)  # ╞
+            [int]$bar[-1] | Should -Be ([int][char]0x2561)  # ╡
+        }
+        It 'drops options that would overflow the width' {
+            $opts = [System.Collections.Generic.List[string]]@('AAAAAAAA', 'BBBBBBBB', 'CCCCCCCC')
+            $bar = [BoxyBox.MenuBar]::Build($opts, 16, [BoxyBox.MenuBar+Cap]::Terminal)
+            [BoxyBox.AnsiText]::VisibleLength($bar) | Should -Be 16
+            # 16 wide: 2 caps + 14 inner. "══AAAAAAAA" = 10 fits; adding "══BBBBBBBB" (10) => 20 > 14, dropped.
+            $bar.Contains('AAAAAAAA') | Should -BeTrue
+            $bar.Contains('BBBBBBBB') | Should -BeFalse
+        }
+    }
+}
+
 Describe 'pspkt test prechecks' -Tag 'Precheck' {
     BeforeAll {
         $script:modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
