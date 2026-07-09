@@ -2844,6 +2844,9 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $live.Menu.Count  | Should -BeGreaterThan 0
             $focus.Menu.Count | Should -BeGreaterThan 0
             ($focus.Menu | Where-Object { $_.Name -eq 'Copy' }).Count | Should -Be 1
+            # Pause ('p') is offered in both live and focus modes.
+            ($live.Menu  | Where-Object { $_.Name -eq 'Pause' -and $_.Hotkey -eq 'P' }).Count | Should -Be 1
+            ($focus.Menu | Where-Object { $_.Name -eq 'Pause' -and $_.Hotkey -eq 'P' }).Count | Should -Be 1
         }
         It 'returns an empty definition for an unknown box' {
             $def = & $script:mod { Get-PspktTuiMenu -Box 'DoesNotExist' }

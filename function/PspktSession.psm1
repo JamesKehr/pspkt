@@ -1400,7 +1400,9 @@ real-time ring, formats each packet into the compact Text Box line (Default-leve
 parse with the component name omitted), and feeds them into a scrolling BoxyBox
 TextBox rendered to a fixed console region (no console scroll). Focus ('f') splits
 the screen into a Text box + Details box (Wireshark-style JIT parse tree), 'r'
-resumes, 's' stops. Shift+Ctrl+C copies the selection; the Save hotkey writes the
+resumes, 's' stops. Pause ('p') stops collecting new packets (nothing more is added
+to the Text box or JIT store) and enters Focus so the frozen buffer can be inspected;
+'r' resumes collection. Shift+Ctrl+C copies the selection; the Save hotkey writes the
 capture buffer to a file via an overlay prompt. Menus are JSON-driven and switch
 between Full (hotkey+text) and Simple (hotkey only) by console width.
 
@@ -1493,6 +1495,7 @@ function Invoke-PspktAnalysisLoop {
 
     # --- Focus state ---
     $focused = $false
+    $paused = $false         # Pause ('p') freezes collection: drained packets are discarded
     $activeBox = 'text'      # 'text' or 'details' (Tab switches)
     [long]$selectedSeq = 0
     [long]$topSeq = 0
@@ -1517,6 +1520,30 @@ function Invoke-PspktAnalysisLoop {
             $null = $roots.Add([BoxyBox.TreeNode]::new('(detail not retained - packet scrolled past the JIT window)', 'Info', $true))
         }
         $detailsBox.SetTree($roots)
+    }
+
+    # Enters Focus mode: freezes scrolling, splits the screen, selects a line near the tail,
+    # gives the Details box keyboard focus, and plays a short expand-up animation. Dot-source
+    # (". $enterFocus") so its assignments mutate the loop-scope state ($focused, $activeBox,
+    # $topSeq, $selectedSeq) rather than a child scope. Shared by the 'f' and 'p' hotkeys.
+    $enterFocus = {
+        $focused = $true
+        $activeBox = 'details'
+        $topSeq = $textBox.TotalSeq - $textFocusBox.ContentRows
+        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+        $selectedSeq = $textBox.ClampSeq($topSeq + [int]($textFocusBox.ContentRows / 2))
+        & $loadDetails $selectedSeq
+        # Quick expand-up animation of the Details box.
+        $steps = 4
+        for ($s = 1; $s -le $steps; $s++) {
+            $h = [int]($detailsHeight * $s / $steps)
+            if ($h -lt 2) { $h = 2 }
+            $animBox = [BoxyBox.Box]::new($boxWidth, $h)
+            $animRegion = [BoxyBox.ScreenRegion]::new($areaTop + $areaHeight - $h, 1, $boxWidth, $h)
+            [Console]::Write($animRegion.BuildFrame($animBox.Render($null)))
+            Start-Sleep -Milliseconds 12
+        }
+        $dirty = $true
     }
 
     # --- Transient notification overlay state (e.g. "Copied to clipboard") ---
@@ -1646,32 +1673,25 @@ function Invoke-PspktAnalysisLoop {
 
                 if ($ch -eq 's') { $stopRequested = $true; continue }
 
+                # Pause ('p'): stop collecting new packets (drained packets are discarded, so
+                # nothing more is added to the Text box or JIT store) and enter Focus so the
+                # frozen buffer can be inspected. Works from live or existing focus.
+                if ($ch -eq 'p') {
+                    $paused = $true
+                    if (-not $focused) { . $enterFocus }
+                    $dirty = $true
+                    continue
+                }
+
                 if (-not $focused) {
                     if ($ch -eq 'f') {
-                        # Enter Focus: freeze scroll, split screen, select the middle line, and
-                        # give the Details box keyboard focus so arrows navigate the tree at once.
-                        $focused = $true
-                        $activeBox = 'details'
-                        $topSeq = $textBox.TotalSeq - $textFocusBox.ContentRows
-                        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
-                        $selectedSeq = $textBox.ClampSeq($topSeq + [int]($textFocusBox.ContentRows / 2))
-                        & $loadDetails $selectedSeq
-                        # Quick expand-up animation of the Details box.
-                        $steps = 4
-                        for ($s = 1; $s -le $steps; $s++) {
-                            $h = [int]($detailsHeight * $s / $steps)
-                            if ($h -lt 2) { $h = 2 }
-                            $animBox = [BoxyBox.Box]::new($boxWidth, $h)
-                            $animRegion = [BoxyBox.ScreenRegion]::new($areaTop + $areaHeight - $h, 1, $boxWidth, $h)
-                            [Console]::Write($animRegion.BuildFrame($animBox.Render($null)))
-                            Start-Sleep -Milliseconds 12
-                        }
-                        $dirty = $true
+                        . $enterFocus
                     }
                 } else {
                     # --- Focus mode ---
                     if ($ch -eq 'r') {
                         $focused = $false
+                        $paused = $false        # Resume also clears a pause and restarts collection.
                         # Clear the whole area so the details box leaves no residue.
                         [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
                         $dirty = $true
@@ -1735,21 +1755,28 @@ function Invoke-PspktAnalysisLoop {
             # --- Drain + format (continues even while focused); retain bytes for JIT detail ---
             $pktCount = $Session.DrainAllRawPackets()
             if ($pktCount -gt 0) {
-                try {
-                    $startSeq = $textBox.TotalSeq
-                    $res = [PacketLineFormatter]::FormatBatchToLines($stream.PacketBuffer, $pktCount, $lineCounter, $startSeq, $detailStore)
-                    if ($null -ne $res) {
-                        $lineCounter  = $res.LineCounter
-                        $packetCount += $res.PacketCount
-                        $droppedCount += $res.DroppedCount
-                        if ($null -ne $res.Lines -and $res.Lines.Count -gt 0) {
-                            $textBox.AppendRange($res.Lines)
-                            $dirty = $true
-                        }
-                        if ($res.TriggerAction -eq 2) { $stopRequested = $true }
-                    }
-                } finally {
+                if ($paused) {
+                    # Paused: discard the drained batch (return pooled buffers) so no new packets
+                    # are added to the Text box or JIT store, while still draining the ring so the
+                    # producer never overflows on a long pause.
                     [PktMonApi]::ReturnPacketBuffers($stream.PacketBuffer, $pktCount)
+                } else {
+                    try {
+                        $startSeq = $textBox.TotalSeq
+                        $res = [PacketLineFormatter]::FormatBatchToLines($stream.PacketBuffer, $pktCount, $lineCounter, $startSeq, $detailStore)
+                        if ($null -ne $res) {
+                            $lineCounter  = $res.LineCounter
+                            $packetCount += $res.PacketCount
+                            $droppedCount += $res.DroppedCount
+                            if ($null -ne $res.Lines -and $res.Lines.Count -gt 0) {
+                                $textBox.AppendRange($res.Lines)
+                                $dirty = $true
+                            }
+                            if ($res.TriggerAction -eq 2) { $stopRequested = $true }
+                        }
+                    } finally {
+                        [PktMonApi]::ReturnPacketBuffers($stream.PacketBuffer, $pktCount)
+                    }
                 }
             } else {
                 $null = [PktMonApi]::WaitForPackets($PollingIntervalMs)
@@ -1765,7 +1792,8 @@ function Invoke-PspktAnalysisLoop {
                     elseif ($selectedSeq -gt $topSeq + $textFocusBox.ContentRows - 1) { $topSeq = $selectedSeq - $textFocusBox.ContentRows + 1 }
 
                     $activeLabel = if ($activeBox -eq 'text') { 'TEXT' } else { 'DETAILS' }
-                    $status = "  Analysis [FOCUS/$activeLabel]  pkt $($selectedSeq + 1)/$($textBox.TotalSeq)  |  (R)esume (S)top [Tab] switch"
+                    $modeLabel = if ($paused) { "PAUSED/$activeLabel" } else { "FOCUS/$activeLabel" }
+                    $status = "  Analysis [$modeLabel]  pkt $($selectedSeq + 1)/$($textBox.TotalSeq)  |  (R)esume (S)top [Tab] switch"
                     # Text box (top): highlight the selected line; dim it when the text box is
                     # not the active box. Compute the highlight sequence first so the single
                     # .Render() call returns string[] directly (a PS if-expression would box
@@ -1780,7 +1808,7 @@ function Invoke-PspktAnalysisLoop {
 
                     $frame = $textFocusRegion.BuildFrame($textFrameLines) + $detailsRegion.BuildFrame($detailsFrameLines)
                 } else {
-                    $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (F)ocus (S)top"
+                    $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (F)ocus (P)ause (S)top"
                     $liveWindow = $textBox.GetTailWindow($liveBox.ContentRows)
                     $frame = $liveRegion.BuildFrame($liveBox.Render($liveWindow))
                 }
