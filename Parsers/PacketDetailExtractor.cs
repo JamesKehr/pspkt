@@ -148,7 +148,49 @@ public static class PacketDetailExtractor
             BuildIPv6(packet, ipOffset, length, roots);
         }
 
+        // Colorize each section (header + children) by its protocol layer so the Details box
+        // matches the parsing color scheme. Component=0, DataLink=1, Network=2, Transport=3,
+        // Application=4 (see PacketFormatter layer indices).
+        for (int i = 0; i < roots.Count; i++)
+        {
+            ColorizeSubtree(roots[i], LayerForKey(roots[i].Key));
+        }
+
         return roots;
+    }
+
+    /// <summary>Maps a section key to its parsing-color layer index (-1 = no color).</summary>
+    private static int LayerForKey(string key)
+    {
+        switch (key)
+        {
+            case "Component": return 0; // LAYER_COMPONENT
+            case "Eth":       return 1; // LAYER_DATALINK
+            case "IPv4":
+            case "IPv6":
+            case "ARP":       return 2; // LAYER_NETWORK
+            case "TCP":
+            case "UDP":
+            case "ICMP":
+            case "ICMPv6":    return 3; // LAYER_TRANSPORT
+            case "DNS":
+            case "mDNS":      return 4; // LAYER_APPLICATION
+            default:          return -1;
+        }
+    }
+
+    /// <summary>Recursively wraps a node and its children in the given layer's color.</summary>
+    private static void ColorizeSubtree(BoxyBox.TreeNode node, int layer)
+    {
+        if (node == null || layer < 0) return;
+        node.Text = PacketFormatter.ColorizeByIndex(node.Text, layer, 0);
+        if (node.Children != null)
+        {
+            for (int i = 0; i < node.Children.Count; i++)
+            {
+                ColorizeSubtree(node.Children[i], layer);
+            }
+        }
     }
 
     private static BoxyBox.TreeNode BuildComponentNode(int compId, int edgeId, int direction)

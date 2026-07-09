@@ -1429,6 +1429,12 @@ function Invoke-PspktAnalysisLoop {
     $stream = $Session.OutputStream[0]
     $ESC = [char]27
 
+    # Ensure the parsing color scheme is loaded into the C# formatter so both the Text box
+    # lines and the Details tree render with the active profile's colors. The standard
+    # real-time branch gets this for free via Get-PspktCaptureHeader; the Analysis branch
+    # does not call that, so sync explicitly here (lazy-loads + InitColorScheme on first use).
+    $null = Get-PspktColorScheme
+
     # Text Box uses the Default single-line parse (level 0) with the compact component
     # prefix (name omitted — shown in the Details box in a later phase).
     $prevDetail = Get-PspktDetailLevel
@@ -1457,14 +1463,22 @@ function Invoke-PspktAnalysisLoop {
     $liveBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($liveMenuDef, $boxWidth)
     $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
 
-    # Focus layout: Text Box (top half) + Details Box (bottom half).
-    $textFocusHeight = [Math]::Max(3, [int][Math]::Ceiling($areaHeight / 2))
-    $detailsHeight   = $areaHeight - $textFocusHeight
+    # Focus layout: Text Box (~40%, min 5 content lines) + Details Box (~60%). The Text box's
+    # bottom menu bar (Terminal caps ╘══╛) doubles as the shared divider; the Details box omits
+    # its own top border and sits flush beneath it so the two boxes merge on one line.
+    $usable = $areaHeight - 3
+    if ($usable -lt 6) { $usable = 6 }
+    $textContent = [Math]::Max(5, [int][Math]::Round($usable * 0.40))
+    if ($textContent -gt $usable - 1) { $textContent = $usable - 1 }
+    $detailContent = $usable - $textContent
+    $textFocusHeight = $textContent + 2    # top border + content + menu (divider)
+    $detailsHeight   = $detailContent + 1  # content + menu (no top border)
+
     $textFocusBox = [BoxyBox.Box]::new($boxWidth, $textFocusHeight)
-    $textFocusBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Mid
+    $textFocusBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Terminal   # ╘══╛ shared divider line
     $textFocusBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($focusMenuDef, $boxWidth)
     $textFocusRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $textFocusHeight)
-    $detailsBox = [BoxyBox.DetailsBox]::new($boxWidth, $detailsHeight)
+    $detailsBox = [BoxyBox.DetailsBox]::new($boxWidth, $detailsHeight, $false)   # no top border
     $detailsBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($detailsMenuDef, $boxWidth)
     $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
 
@@ -1482,7 +1496,11 @@ function Invoke-PspktAnalysisLoop {
     $activeBox = 'text'      # 'text' or 'details' (Tab switches)
     [long]$selectedSeq = 0
     [long]$topSeq = 0
-    $hlOn  = "$ESC[7m"       # reverse video (selection highlight)
+    # Selection highlight: a distinct background color applied over the row while preserving
+    # the row's own foreground (parsing) colors. Active box uses blue; the inactive box uses
+    # a dimmer gray so it's clear which box has keyboard focus.
+    $hlOn  = "$ESC[44m"      # blue background (active selection)
+    $hlDim = "$ESC[100m"     # gray background (selection in the inactive box)
     $hlOff = "$ESC[0m"
 
     # Loads the detail tree for a given absolute sequence number into the Details box,
@@ -1708,9 +1726,10 @@ function Invoke-PspktAnalysisLoop {
                     $textWindow = $textBox.GetWindow($topSeq, $textFocusBox.ContentRows)
                     $selRow = [int]($selectedSeq - $topSeq)
                     if ($selRow -lt 0 -or $selRow -ge $textFocusBox.ContentRows) { $selRow = -1 }
-                    $textHlOn = if ($activeBox -eq 'text') { $hlOn } else { "$ESC[2m" }
+                    $textHlOn    = if ($activeBox -eq 'text')    { $hlOn } else { $hlDim }
+                    $detailsHlOn = if ($activeBox -eq 'details') { $hlOn } else { $hlDim }
                     $textFrameLines = $textFocusBox.Render($textWindow, $selRow, $textHlOn, $hlOff)
-                    $detailsFrameLines = $detailsBox.Render($hlOn, $hlOff)
+                    $detailsFrameLines = $detailsBox.Render($detailsHlOn, $hlOff)
 
                     $frame = $textFocusRegion.BuildFrame($textFrameLines) + $detailsRegion.BuildFrame($detailsFrameLines)
                 } else {

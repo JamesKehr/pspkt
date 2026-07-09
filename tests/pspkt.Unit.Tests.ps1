@@ -2480,16 +2480,56 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
     }
 
+    Context 'AnsiText.ApplyBackground' {
+        BeforeAll { $script:ESC = [char]27 }
+        It 'wraps text in a background sequence and preserves inner foreground colors' {
+            $colored = "$($script:ESC)[36mIPv4$($script:ESC)[0m rest"
+            $bg = "$($script:ESC)[44m"; $reset = "$($script:ESC)[0m"
+            $out = [BoxyBox.AnsiText]::ApplyBackground($colored, $bg, $reset)
+            $out.StartsWith($bg) | Should -BeTrue
+            $out.Contains("$($script:ESC)[36m") | Should -BeTrue
+            # background re-applied after every inner reset so it spans the whole string
+            $out.Contains("$reset$bg") | Should -BeTrue
+        }
+        It 'handles null/empty by returning empty' {
+            $bg = "$($script:ESC)[44m"; $reset = "$($script:ESC)[0m"
+            [BoxyBox.AnsiText]::ApplyBackground($null, $bg, $reset) | Should -Be ''
+            [BoxyBox.AnsiText]::ApplyBackground('', $bg, $reset) | Should -Be ''
+        }
+    }
+
+    Context 'Box top-border toggle (seamless merge)' {
+        It 'omits the top border and reduces ContentRows by one when ShowTopBorder is false' {
+            $box = [BoxyBox.Box]::new(30, 5)
+            $box.ContentRows | Should -Be 3   # Height - top border - menu bar
+            $box.ShowTopBorder = $false
+            $box.ContentRows | Should -Be 4   # top border reclaimed as a content row
+            $lines = [System.Collections.Generic.List[string]]@('a', 'b', 'c', 'd')
+            $frame = $box.Render($lines)
+            # first rendered row is content, not a top border corner
+            $frame[0][0] | Should -Not -Be ([char]0x250C)
+        }
+        It 'DetailsBox exposes a 3-arg constructor that suppresses the top border' {
+            $db = [BoxyBox.DetailsBox]::new(40, 6, $false)
+            $db.Box.ShowTopBorder | Should -BeFalse
+            $db2 = [BoxyBox.DetailsBox]::new(40, 6)
+            $db2.Box.ShowTopBorder | Should -BeTrue
+        }
+    }
+
     Context 'Box highlighted render' {
         BeforeAll { $script:ESC = [char]27 }
-        It 'wraps the selected row with highlight and strips its inner color' {
+        It 'wraps the selected row with a highlight background and preserves its foreground color' {
             $box = [BoxyBox.Box]::new(20, 5)
             $lines = [System.Collections.Generic.List[string]]@("$($script:ESC)[31msel$($script:ESC)[0m", 'plain')
-            $on = "$($script:ESC)[7m"; $off = "$($script:ESC)[0m"
+            $on = "$($script:ESC)[44m"; $off = "$($script:ESC)[0m"
             $frame = $box.Render($lines, 0, $on, $off)
-            # selected row (content index 0 => frame[1]) has the highlight and no inner red
+            # selected row (content index 0 => frame[1]) has the highlight background
             $frame[1].Contains($on) | Should -BeTrue
-            $frame[1].Contains("$($script:ESC)[31m") | Should -BeFalse
+            # foreground color is preserved under the highlight (no longer stripped)
+            $frame[1].Contains("$($script:ESC)[31m") | Should -BeTrue
+            # background is re-applied after the inner reset so it spans the whole row
+            $frame[1].Contains("$off$on") | Should -BeTrue
             # non-selected row unaffected
             $frame[2].Contains($on) | Should -BeFalse
         }

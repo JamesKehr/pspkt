@@ -39,6 +39,21 @@ namespace BoxyBox
         public const string Reset = "\x1b[0m";
 
         /// <summary>
+        /// Applies a background-color SGR to <paramref name="text"/> while preserving its own
+        /// foreground colors: the background is emitted first and re-emitted after every reset
+        /// sequence in the text (which would otherwise clear it), then a final reset is added.
+        /// Used to highlight a selected row without stripping the parsing colors.
+        /// </summary>
+        public static string ApplyBackground(string text, string bgSeq, string resetSeq)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+            if (string.IsNullOrEmpty(bgSeq)) return text;
+            if (string.IsNullOrEmpty(resetSeq)) resetSeq = Reset;
+            string body = text.Replace(resetSeq, resetSeq + bgSeq);
+            return bgSeq + body + resetSeq;
+        }
+
+        /// <summary>
         /// Returns true when the string contains at least one ANSI escape sequence.
         /// Lets callers skip the slower ANSI-aware path for plain text.
         /// </summary>
@@ -334,8 +349,14 @@ namespace BoxyBox
         public int Width { get; private set; }
         public int Height { get; private set; } // total rows including borders/menu
 
-        /// <summary>Number of content rows (Height minus the top border and menu bar).</summary>
-        public int ContentRows { get { return Height - 2; } }
+        /// <summary>
+        /// When false, the top border row is omitted so the box can sit flush beneath another
+        /// box (the box above's menu bar becomes the shared divider). Default true.
+        /// </summary>
+        public bool ShowTopBorder { get; set; }
+
+        /// <summary>Number of content rows (Height minus the menu bar and optional top border).</summary>
+        public int ContentRows { get { return Height - (ShowTopBorder ? 2 : 1); } }
 
         public Justify Justification { get; set; }
         public IList<string> MenuOptions { get; set; }
@@ -350,6 +371,7 @@ namespace BoxyBox
             Justification = Justify.Left;
             MenuStyle = MenuBar.Cap.Terminal;
             MenuOptions = new List<string>();
+            ShowTopBorder = true;
         }
 
         /// <summary>Builds the top border line.</summary>
@@ -375,21 +397,19 @@ namespace BoxyBox
         }
 
         /// <summary>
-        /// Builds a highlighted content row: the text is stripped of its own color, fitted to
-        /// the inner width, then wrapped with <paramref name="highlightOn"/> /
-        /// <paramref name="highlightOff"/> so the entire row (including padding) shows the
-        /// highlight background. Stripping avoids inner reset sequences punching holes in it.
+        /// Builds a highlighted content row: the text is fitted to the inner width (preserving
+        /// its own foreground colors), then a highlight background is applied across the whole
+        /// row — re-emitted after every inner reset so the parsing colors show on a distinct
+        /// selection background rather than being erased.
         /// </summary>
         private string HighlightedContentLine(string text, string highlightOn, string highlightOff)
         {
             int inner = Width - 2;
-            string plain = AnsiText.StripAnsi(text ?? string.Empty);
-            string body = TextJustify.Fit(plain, inner, Justification);
-            var sb = new StringBuilder(Width + 16);
+            string body = TextJustify.Fit(text ?? string.Empty, inner, Justification);
+            string hl = AnsiText.ApplyBackground(body, highlightOn, highlightOff ?? AnsiText.Reset);
+            var sb = new StringBuilder(Width + 32);
             sb.Append(BoxChars.Vertical);
-            sb.Append(highlightOn);
-            sb.Append(body);
-            sb.Append(highlightOff);
+            sb.Append(hl);
             sb.Append(BoxChars.Vertical);
             return sb.ToString();
         }
@@ -406,22 +426,28 @@ namespace BoxyBox
         /// <summary>
         /// Renders the box, highlighting the content row at <paramref name="selectedRow"/>
         /// (0-based within the content area) with the supplied highlight sequences. Pass
-        /// selectedRow &lt; 0 for no highlight.
+        /// selectedRow &lt; 0 for no highlight. When <see cref="ShowTopBorder"/> is false the
+        /// top border row is omitted (the box sits flush under another box).
         /// </summary>
         public string[] Render(IList<string> lines, int selectedRow, string highlightOn, string highlightOff)
         {
             var result = new string[Height];
-            result[0] = TopBorder();
+            int row = 0;
+            if (ShowTopBorder)
+            {
+                result[0] = TopBorder();
+                row = 1;
+            }
             for (int r = 0; r < ContentRows; r++)
             {
                 string text = (lines != null && r < lines.Count) ? lines[r] : string.Empty;
                 if (r == selectedRow && highlightOn != null)
                 {
-                    result[r + 1] = HighlightedContentLine(text, highlightOn, highlightOff ?? AnsiText.Reset);
+                    result[row + r] = HighlightedContentLine(text, highlightOn, highlightOff ?? AnsiText.Reset);
                 }
                 else
                 {
-                    result[r + 1] = ContentLine(text);
+                    result[row + r] = ContentLine(text);
                 }
             }
             result[Height - 1] = MenuBar.Build(MenuOptions, Width, MenuStyle);
@@ -833,8 +859,19 @@ namespace BoxyBox
         private readonly Dictionary<string, bool> _expandState = new Dictionary<string, bool>();
 
         public DetailsBox(int width, int height)
+            : this(width, height, true)
+        {
+        }
+
+        /// <summary>
+        /// Creates a Details box. When <paramref name="showTopBorder"/> is false the box omits
+        /// its own top border so it can sit flush beneath the Text box (whose menu bar becomes
+        /// the shared divider).
+        /// </summary>
+        public DetailsBox(int width, int height, bool showTopBorder)
         {
             _box = new Box(width, height);
+            _box.ShowTopBorder = showTopBorder;
             _box.MenuStyle = MenuBar.Cap.Terminal;
             _box.MenuOptions = new List<string>();
         }
