@@ -1094,17 +1094,42 @@ namespace BoxyBox
     /// </summary>
     public static class MenuRenderer
     {
+        // High-contrast SGR colors so menu items stand out against the box border/rule.
+        // Hotkey (in brackets) is emphasized; the label is bright but slightly softer.
+        // Overridable via SetColors so a color profile can theme the menu bar later.
+        private static string _hotkeySgr = "\x1b[93m";  // bright yellow (hotkey in brackets)
+        private static string _labelSgr  = "\x1b[97m";  // bright white (display name)
+
+        /// <summary>
+        /// Overrides the menu item colors (raw SGR sequences, e.g. "\x1b[93m"). Pass null or
+        /// empty to leave a color unchanged. Lets a color profile theme the menu bar later.
+        /// </summary>
+        public static void SetColors(string hotkeySgr, string labelSgr)
+        {
+            if (!string.IsNullOrEmpty(hotkeySgr)) _hotkeySgr = hotkeySgr;
+            if (!string.IsNullOrEmpty(labelSgr)) _labelSgr = labelSgr;
+        }
+
         public static List<string> BuildOptions(MenuDefinition def, bool full)
         {
             var list = new List<string>();
             if (def == null || def.Menu == null) return list;
+            string reset = AnsiText.Reset;
             for (int i = 0; i < def.Menu.Count; i++)
             {
                 MenuItem it = def.Menu[i];
                 if (it == null) continue;
                 string hk = it.Hotkey ?? string.Empty;
-                if (full) list.Add("[" + hk + "]" + (it.DisplayName ?? string.Empty));
-                else list.Add("[" + hk + "]");
+                string hotkey = _hotkeySgr + "[" + hk + "]" + reset;
+                if (full)
+                {
+                    string name = it.DisplayName ?? string.Empty;
+                    list.Add(hotkey + _labelSgr + name + reset);
+                }
+                else
+                {
+                    list.Add(hotkey);
+                }
             }
             return list;
         }

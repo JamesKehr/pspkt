@@ -2723,14 +2723,21 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $null = $script:def.AddItem('Expand',   'Expand',   "$([char]0x2192)")
             $null = $script:def.AddItem('Collapse', 'Collapse', "$([char]0x2190)")
         }
-        It 'renders Full options as [Hotkey]DisplayName' {
+        It 'renders Full options as [Hotkey]DisplayName (visible text)' {
             $opts = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $true)
-            $opts[0] | Should -Be "[$([char]0x2192)]Expand"
-            $opts[1] | Should -Be "[$([char]0x2190)]Collapse"
+            [BoxyBox.AnsiText]::StripAnsi($opts[0]) | Should -Be "[$([char]0x2192)]Expand"
+            [BoxyBox.AnsiText]::StripAnsi($opts[1]) | Should -Be "[$([char]0x2190)]Collapse"
         }
-        It 'renders Simple options as [Hotkey] only' {
+        It 'colors menu items so they stand out from the border' {
+            $opts = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $true)
+            # both the hotkey and the label carry an SGR color sequence
+            [BoxyBox.AnsiText]::ContainsAnsi($opts[0]) | Should -BeTrue
+            $simple = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $false)
+            [BoxyBox.AnsiText]::ContainsAnsi($simple[0]) | Should -BeTrue
+        }
+        It 'renders Simple options as [Hotkey] only (visible text)' {
             $opts = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $false)
-            $opts[0] | Should -Be "[$([char]0x2192)]"
+            [BoxyBox.AnsiText]::StripAnsi($opts[0]) | Should -Be "[$([char]0x2192)]"
         }
         It 'FullFits is true for a wide bar and false for a narrow one' {
             [BoxyBox.MenuRenderer]::FullFits($script:def, 120) | Should -BeTrue
@@ -2738,11 +2745,11 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
         It 'BuildAuto picks Simple when Full will not fit' {
             $auto = [BoxyBox.MenuRenderer]::BuildAuto($script:def, 8)
-            $auto[0] | Should -Be "[$([char]0x2192)]"   # simple (hotkey only)
+            [BoxyBox.AnsiText]::StripAnsi($auto[0]) | Should -Be "[$([char]0x2192)]"   # simple (hotkey only)
         }
         It 'BuildAuto picks Full when there is room' {
             $auto = [BoxyBox.MenuRenderer]::BuildAuto($script:def, 120)
-            $auto[0] | Should -Be "[$([char]0x2192)]Expand"
+            [BoxyBox.AnsiText]::StripAnsi($auto[0]) | Should -Be "[$([char]0x2192)]Expand"
         }
     }
 
