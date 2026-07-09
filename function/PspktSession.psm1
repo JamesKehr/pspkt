@@ -1578,13 +1578,14 @@ function Invoke-PspktAnalysisLoop {
                 $ctrl  = ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0
                 $shift = ($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
 
-                # Shift+Ctrl+C: copy the selected Text line + all visible Details lines.
+                # Shift+Ctrl+C: copy the selected Text line + the full parsed detail tree
+                # (every node/child, regardless of scroll position or collapse state).
                 if ($ctrl -and $shift -and $key.Key -eq [ConsoleKey]::C) {
                     if ($focused) {
                         $copyLines = [System.Collections.Generic.List[string]]::new()
                         $selLine = $textBox.GetLineBySeq($selectedSeq)
                         if ($null -ne $selLine) { $null = $copyLines.Add([BoxyBox.AnsiText]::StripAnsi($selLine)) }
-                        foreach ($d in $detailsBox.GetVisibleText()) { $null = $copyLines.Add($d) }
+                        foreach ($d in $detailsBox.GetAllText()) { $null = $copyLines.Add($d) }
                         try {
                             ($copyLines -join "`r`n") | Set-Clipboard -ErrorAction Stop
                             $notifyText = "Copied packet ($($copyLines.Count) lines) to clipboard"

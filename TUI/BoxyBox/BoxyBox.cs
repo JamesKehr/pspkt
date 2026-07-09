@@ -803,23 +803,39 @@ namespace BoxyBox
 
         public static List<TreeRow> Flatten(IList<TreeNode> roots)
         {
+            return FlattenInternal(roots, false);
+        }
+
+        /// <summary>
+        /// Flattens the full tree ignoring each node's collapse state, so every node and child
+        /// is included. Used by the copy action to capture the complete parsed detail regardless
+        /// of what is scrolled into view or collapsed.
+        /// </summary>
+        public static List<TreeRow> FlattenAll(IList<TreeNode> roots)
+        {
+            return FlattenInternal(roots, true);
+        }
+
+        private static List<TreeRow> FlattenInternal(IList<TreeNode> roots, bool forceExpanded)
+        {
             var rows = new List<TreeRow>();
             if (roots == null) return rows;
             for (int i = 0; i < roots.Count; i++)
             {
-                FlattenNode(roots[i], 0, i == roots.Count - 1, rows);
+                FlattenNode(roots[i], 0, i == roots.Count - 1, rows, forceExpanded);
             }
             return rows;
         }
 
-        private static void FlattenNode(TreeNode node, int depth, bool isLast, List<TreeRow> rows)
+        private static void FlattenNode(TreeNode node, int depth, bool isLast, List<TreeRow> rows, bool forceExpanded)
         {
             if (node == null) return;
+            bool expanded = forceExpanded || node.IsExpanded;
             string indent = new string(' ', 2 * (depth + 1));
             string line;
             if (node.HasChildren)
             {
-                line = indent + (node.IsExpanded ? "-" : "+") + node.Text;
+                line = indent + (expanded ? "-" : "+") + node.Text;
             }
             else if (depth == 0)
             {
@@ -832,11 +848,11 @@ namespace BoxyBox
             }
             rows.Add(new TreeRow(line, node, depth));
 
-            if (node.HasChildren && node.IsExpanded)
+            if (node.HasChildren && expanded)
             {
                 for (int i = 0; i < node.Children.Count; i++)
                 {
-                    FlattenNode(node.Children[i], depth + 1, i == node.Children.Count - 1, rows);
+                    FlattenNode(node.Children[i], depth + 1, i == node.Children.Count - 1, rows, forceExpanded);
                 }
             }
         }
@@ -1053,6 +1069,20 @@ namespace BoxyBox
                 int idx = _top + i;
                 if (idx < _rows.Count) lines.Add(AnsiText.StripAnsi(_rows[idx].Display));
             }
+            return lines;
+        }
+
+        /// <summary>
+        /// Returns the plain-text (ANSI-stripped) content of the entire detail tree — every
+        /// node and child, fully expanded — regardless of scroll position or collapse state.
+        /// Used by the Shift+Ctrl+C copy action so the clipboard captures all parsed details,
+        /// not just the rows currently in the viewport.
+        /// </summary>
+        public List<string> GetAllText()
+        {
+            var all = TreeFlattener.FlattenAll(_roots);
+            var lines = new List<string>(all.Count);
+            for (int i = 0; i < all.Count; i++) lines.Add(AnsiText.StripAnsi(all[i].Display));
             return lines;
         }
     }

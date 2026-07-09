@@ -2603,6 +2603,17 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $rows.Count | Should -Be 1
             $rows[0].Display.TrimStart().StartsWith('+Eth') | Should -BeTrue
         }
+        It 'FlattenAll includes children even when the node is collapsed' {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $eth = [BoxyBox.TreeNode]::new('Eth', 'Eth', $false)   # collapsed
+            $null = $eth.AddLeaf('x'); $null = $eth.AddLeaf('y')
+            $null = $roots.Add($eth)
+            # Flatten honors collapse (1 row); FlattenAll ignores it (3 rows) and shows '-'.
+            [BoxyBox.TreeFlattener]::Flatten($roots).Count | Should -Be 1
+            $all = [BoxyBox.TreeFlattener]::FlattenAll($roots)
+            $all.Count | Should -Be 3
+            $all[0].Display.TrimStart().StartsWith('-Eth') | Should -BeTrue
+        }
     }
 
     Context 'DetailsBox' {
@@ -2655,6 +2666,16 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $frame = $db.Render($script:on, $script:off)
             # first content row (Component) is selected by default
             $frame[1].Contains($script:on) | Should -BeTrue
+        }
+        It 'GetAllText returns the whole tree even when collapsed and larger than the viewport' {
+            $db = [BoxyBox.DetailsBox]::new(40, 4)   # tiny viewport
+            $db.SetTree((New-SampleTree))
+            $db.CollapseAll()                        # viewport now shows only 3 collapsed roots
+            $db.GetVisibleText().Count | Should -BeLessOrEqual 3
+            $all = $db.GetAllText()
+            $all.Count | Should -Be 7                # 3 parents + 4 children, all included
+            ($all -join '|').Contains('Src') | Should -BeTrue
+            ($all -join '|').Contains('Dst') | Should -BeTrue
         }
     }
 
