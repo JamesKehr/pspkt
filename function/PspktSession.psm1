@@ -1610,9 +1610,10 @@ function Invoke-PspktAnalysisLoop {
 
                 if (-not $focused) {
                     if ($ch -eq 'f') {
-                        # Enter Focus: freeze scroll, split screen, select the middle line.
+                        # Enter Focus: freeze scroll, split screen, select the middle line, and
+                        # give the Details box keyboard focus so arrows navigate the tree at once.
                         $focused = $true
-                        $activeBox = 'text'
+                        $activeBox = 'details'
                         $topSeq = $textBox.TotalSeq - $textFocusBox.ContentRows
                         if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
                         $selectedSeq = $textBox.ClampSeq($topSeq + [int]($textFocusBox.ContentRows / 2))
