@@ -1189,6 +1189,16 @@ public static class PacketLineFormatter
     {
         if (linkKind == 0) return null;
 
+        // Analysis Text Box uses the Minimal-level data link representation ("Eth" / "802.11")
+        // instead of the full "src > dst, type X, len N" form, keeping each scrolling line
+        // compact. The full MAC/type/length breakdown is available in the Details box.
+        if (_textBoxMode)
+        {
+            if (linkKind == 1) return "Eth";
+            if (linkKind == 2) return "802.11";
+            return null;
+        }
+
         string src = srcMac ?? "??-??-??-??-??-??";
         string dst = dstMac ?? "??-??-??-??-??-??";
         string etName = GetEtherTypeName(etherType);

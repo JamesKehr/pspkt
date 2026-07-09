@@ -2553,6 +2553,33 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $compact.Contains('000:009') | Should -BeTrue
             $compact.Contains('[') | Should -BeTrue
         }
+        It 'renders the data link at Minimal level (Eth:) in text-box mode but full form otherwise' {
+            # Eth(14) + IPv4/UDP header is enough for the Default line's data link segment.
+            $pkt = [byte[]]@(
+                0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00,
+                0x45,0,0,0x3c,0x8b,0xee,0x40,0,0x40,0x11,0,0,
+                10,24,0,72, 1,1,1,1,
+                0xc5,0x1b,0,0x35,0,8,0,0)
+
+            [PacketLineFormatter]::SetTextBoxMode($true)
+            $sbTb = [System.Text.StringBuilder]::new()
+            $null = [PacketLineFormatter]::FormatDefaultLineInto($sbTb, 0, 0, 9, 1, 0, 0,
+                1, '22-22-22-22-22-22', '11-11-11-11-11-11', 0x0800, 34,
+                3, '10.24.0.72', '1.1.1.1', 50651, 53, 0, [uint32]0, [uint32]0, [uint16]0, 0,
+                0, 0, 0, 0, $null, $pkt, 0, $pkt.Length)
+            $tb = [BoxyBox.AnsiText]::StripAnsi($sbTb.ToString())
+            $tb.Contains('Eth:') | Should -BeTrue
+            $tb.Contains('22-22-22-22-22-22') | Should -BeFalse
+
+            [PacketLineFormatter]::SetTextBoxMode($false)
+            $sbFull = [System.Text.StringBuilder]::new()
+            $null = [PacketLineFormatter]::FormatDefaultLineInto($sbFull, 0, 0, 9, 1, 0, 0,
+                1, '22-22-22-22-22-22', '11-11-11-11-11-11', 0x0800, 34,
+                3, '10.24.0.72', '1.1.1.1', 50651, 53, 0, [uint32]0, [uint32]0, [uint16]0, 0,
+                0, 0, 0, 0, $null, $pkt, 0, $pkt.Length)
+            $full = [BoxyBox.AnsiText]::StripAnsi($sbFull.ToString())
+            $full.Contains('22-22-22-22-22-22 > 11-11-11-11-11-11, type IPv4') | Should -BeTrue
+        }
     }
 
     Context 'TreeNode + TreeFlattener' {
