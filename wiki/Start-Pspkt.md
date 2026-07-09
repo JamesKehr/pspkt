@@ -79,7 +79,7 @@ Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture 
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `-ParsingLevel` (`-pl`) | `PspktParsingLevel` | `Default` | Display detail: `Minimal`, `Default`, `Detailed`, or `VeryDetailed`. |
+| `-ParsingLevel` (`-pl`) | `PspktParsingLevel` | `Default` | Display detail: `Minimal`, `Default`, `Detailed`, or `Analysis`. |
 | `-Spaced` | `switch` | — | Adds a blank line between formatted packet lines. |
 | `-Timestamp` (`-t`) | `switch` | — | Prefixes each line with the high-resolution local timestamp. |
 | `-NoWarning` | `switch` | — | Suppresses non-fatal setup warnings (auto-bumps from application-layer filters, missing-MAC vmNIC skip, non-numeric component value). Does **not** suppress pcapng data-loss / writer-error warnings — those indicate actual data loss. For full suppression of every `Write-Warning` use `-WarningAction SilentlyContinue`. |

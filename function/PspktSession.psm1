@@ -1404,7 +1404,7 @@ Display detail level. Alias: -pl.
 * Minimal — single-line port/protocol summary
 * Default — packet header summary (link/network/transport/app)
 * Detailed — multi-line per-layer breakdown
-* VeryDetailed — Detailed plus blank line between packets
+* Analysis — Detailed plus blank line between packets
 
 .PARAMETER Component
 Components to capture from. Alias: -comp.
@@ -2386,7 +2386,7 @@ function Start-Pspkt {
 
         if ($appPredicateActive) {
             # Auto-bump ParsingLevel to Detailed. Application-layer parsing only
-            # runs at Detailed/VeryDetailed; a predicate on a lower level would
+            # runs at Detailed/Analysis; a predicate on a lower level would
             # silently match nothing because the parser is never invoked.
             if ([int]$ParsingLevel -lt [int][PspktParsingLevel]::Detailed) {
                 $previousLevel = $ParsingLevel

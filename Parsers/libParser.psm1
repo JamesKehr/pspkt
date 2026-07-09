@@ -11,7 +11,7 @@ $script:AnsiReset = ''
 $script:ProfilesDir = Join-Path $PSScriptRoot 'ColorProfiles'
 $script:ComponentMap = @{}
 $script:ComponentMisses = @{}  # IDs we already tried to refresh and still couldn't find.
-$script:DetailLevel = 0  # -1 = Minimal, 0 = Default, 1 = Detailed (-v), 2 = VeryDetailed (-vv)
+$script:DetailLevel = 0  # -1 = Minimal, 0 = Default, 1 = Detailed (-v), 2 = Analysis (-vv)
 $script:DetailSpacing = $false  # When true, adds blank line between packets in detailed mode.
 $script:ShowTimestamp = $false  # When true, prepends packet timestamp to output.
 $script:DetailIndent = " $([char]0x2514)"

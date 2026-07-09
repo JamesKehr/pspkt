@@ -16,7 +16,7 @@ This is the same model Wireshark uses: capture filters shape what's written to d
 
 ## Requirements
 
-Application-layer filters require **`-ParsingLevel Detailed`** (or `VeryDetailed`). Application-layer parsing doesn't run at `Minimal` or `Default` levels, so a predicate there would silently match nothing. `Start-Pspkt` **auto-bumps** `-ParsingLevel` to `Detailed` whenever an application filter is configured and prints a warning so the change in output verbosity isn't a surprise.
+Application-layer filters require **`-ParsingLevel Detailed`** (or `Analysis`). Application-layer parsing doesn't run at `Minimal` or `Default` levels, so a predicate there would silently match nothing. `Start-Pspkt` **auto-bumps** `-ParsingLevel` to `Detailed` whenever an application filter is configured and prints a warning so the change in output verbosity isn't a surprise.
 
 It also **auto-bumps `-PacketSize` to at least 1500 bytes** when a name-style predicate is in play. The default `-PacketSize 128` truncates DNS messages well before any non-trivial name fits in the payload. Use `-PacketSize 0` to opt into full-packet capture without the auto-bump.
 

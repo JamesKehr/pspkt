@@ -128,7 +128,7 @@ public static class PacketLineFormatter
     private static bool _icmpNdpOnly;
 
     // Application-layer display predicates. Evaluated by the consumer thread when
-    // _detailLevel >= 1 (Detailed/VeryDetailed). Never touched by the producer callback.
+    // _detailLevel >= 1 (Detailed/Analysis). Never touched by the producer callback.
     // Null = no predicate active for that protocol; the hot-path null check is branch-
     // predicted false and effectively free when no predicate is configured.
     private static DnsAppPredicate _dnsPredicate;

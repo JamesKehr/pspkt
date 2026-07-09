@@ -1315,7 +1315,7 @@ enum PspktParsingLevel {
     Minimal      = -1
     Default      = 0
     Detailed     = 1
-    VeryDetailed = 2
+    Analysis     = 2
 }
 
 # create the type accelerator

@@ -4,7 +4,7 @@ Commands that control how parsed packets are rendered to the console. All these 
 
 | Command | Purpose |
 |---|---|
-| [`Set-PspktDetailLevel`](#set-pspktdetaillevel) | Set Minimal / Default / Detailed / VeryDetailed output |
+| [`Set-PspktDetailLevel`](#set-pspktdetaillevel) | Set Minimal / Default / Detailed / Analysis output |
 | [`Get-PspktDetailLevel`](#get-pspktdetaillevel) | Read the current detail level |
 | [`Set-PspktDetailSpacing`](#set-pspktdetailspacing) | Toggle blank-line spacing between packets |
 | [`Get-PspktDetailSpacing`](#get-pspktdetailspacing) | Read current spacing setting |
@@ -29,7 +29,7 @@ Controls how much per-packet information is rendered. Settings are persistent fo
 | `-1` | Minimal | Condensed single-line summary |
 | `0` | Default | Header summary per layer |
 | `1` | Detailed | Multi-line per-layer breakdown |
-| `2` | VeryDetailed | Detailed plus blank line between packets |
+| `2` | Analysis | Detailed plus blank line between packets |
 
 ### Syntax
 ```powershell
