@@ -1645,11 +1645,19 @@ function Invoke-PspktAnalysisLoop {
                     }
                     elseif ($activeBox -eq 'details') {
                         # Ctrl+Up/Down = prev/next packet (moves the Text Box selection + reloads).
+                        # Ctrl+Left/Right = Collapse All / Expand All. Plain arrows navigate or
+                        # collapse/expand only the selected node.
                         if ($ctrl -and $key.Key -eq [ConsoleKey]::UpArrow) {
                             $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); & $loadDetails $selectedSeq; $dirty = $true
                         }
                         elseif ($ctrl -and $key.Key -eq [ConsoleKey]::DownArrow) {
                             $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); & $loadDetails $selectedSeq; $dirty = $true
+                        }
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::LeftArrow) {
+                            $detailsBox.CollapseAll(); $dirty = $true
+                        }
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::RightArrow) {
+                            $detailsBox.ExpandAll(); $dirty = $true
                         }
                         else {
                             switch ($key.Key) {
@@ -1657,8 +1665,8 @@ function Invoke-PspktAnalysisLoop {
                                 'DownArrow'  { $detailsBox.MoveDown(); $dirty = $true }
                                 'PageUp'     { $detailsBox.PageUp();   $dirty = $true }
                                 'PageDown'   { $detailsBox.PageDown(); $dirty = $true }
-                                'LeftArrow'  { if ($shift) { $detailsBox.CollapseAll() } else { $detailsBox.CollapseSelected() }; $dirty = $true }
-                                'RightArrow' { if ($shift) { $detailsBox.ExpandAll() }   else { $detailsBox.ExpandSelected()   }; $dirty = $true }
+                                'LeftArrow'  { $detailsBox.CollapseSelected(); $dirty = $true }
+                                'RightArrow' { $detailsBox.ExpandSelected();   $dirty = $true }
                             }
                         }
                     }
