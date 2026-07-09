@@ -1582,15 +1582,15 @@ function Invoke-PspktAnalysisLoop {
 
                     $activeLabel = if ($activeBox -eq 'text') { 'TEXT' } else { 'DETAILS' }
                     $status = "  Analysis [FOCUS/$activeLabel]  pkt $($selectedSeq + 1)/$($textBox.TotalSeq)  |  (R)esume (S)top [Tab] switch"
-                    # Text box (top): highlight the selected line only when the text box is active.
+                    # Text box (top): highlight the selected line; dim it when the text box is
+                    # not the active box. Compute the highlight sequence first so the single
+                    # .Render() call returns string[] directly (a PS if-expression would box
+                    # the result into Object[], which BuildFrame's IList<string> rejects).
                     $textWindow = $textBox.GetWindow($topSeq, $textFocusBox.ContentRows)
                     $selRow = [int]($selectedSeq - $topSeq)
                     if ($selRow -lt 0 -or $selRow -ge $textFocusBox.ContentRows) { $selRow = -1 }
-                    $textFrameLines = if ($activeBox -eq 'text') {
-                        $textFocusBox.Render($textWindow, $selRow, $hlOn, $hlOff)
-                    } else {
-                        $textFocusBox.Render($textWindow, $selRow, "$ESC[2m", $hlOff)  # dim selection when inactive
-                    }
+                    $textHlOn = if ($activeBox -eq 'text') { $hlOn } else { "$ESC[2m" }
+                    $textFrameLines = $textFocusBox.Render($textWindow, $selRow, $textHlOn, $hlOff)
                     $detailsFrameLines = $detailsBox.Render($hlOn, $hlOff)
 
                     $frame = $textFocusRegion.BuildFrame($textFrameLines) + $detailsRegion.BuildFrame($detailsFrameLines)
