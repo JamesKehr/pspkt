@@ -189,6 +189,17 @@ public static class PacketLineFormatter
     // that happens to render as the same characters won't collide.
     internal static readonly string FilteredByPredicate = "\0__pspkt_app_predicate_filtered__\0";
 
+    // Text-box (Analysis) mode. When true the component prefix omits the component
+    // name (shown in the Details box instead), producing the compact scrolling line
+    // used by the BoxyBox Text Box. Global toggle; reset at capture teardown.
+    private static bool _textBoxMode = false;
+
+    /// <summary>Enables/disables text-box (Analysis) formatting of the component prefix.</summary>
+    public static void SetTextBoxMode(bool enabled)
+    {
+        _textBoxMode = enabled;
+    }
+
     /// <summary>
     /// Configures display-level filtering for ICMP/ICMPv6 packets. pktmon driver filters
     /// cannot constrain on ICMP type, so this is applied in FormatSinglePacket.
@@ -1148,7 +1159,10 @@ public static class PacketLineFormatter
             parentId = info.ParentId;
         }
 
-        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection);
+        // In text-box (Analysis) mode the component name is omitted from the scrolling
+        // line — it's shown in the Details box instead — so the prefix is the compact
+        // "GGG:CCC[dir edge]" form. See BoxyBox TUI spec.
+        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection, !_textBoxMode);
     }
 
     private static string FormatDataLinkInternal(int linkKind, string srcMac, string dstMac, int etherType, int rawLen)
@@ -2082,6 +2096,94 @@ public static class PacketLineFormatter
         return new BatchResult
         {
             Output = sb.Length > 0 ? sb.ToString() : null,
+            PacketCount = count,
+            DroppedCount = droppedCount,
+            LineCounter = lineCounter,
+            TriggerAction = triggerAction
+        };
+    }
+
+    /// <summary>
+    /// Result from FormatBatchToLines: one formatted string per emitted packet plus stats.
+    /// Used by the BoxyBox Analysis consumer loop, which feeds each line into a scrolling
+    /// text box rather than writing a single concatenated blob to the console.
+    /// </summary>
+    public class BatchLinesResult
+    {
+        public System.Collections.Generic.List<string> Lines;
+        public int PacketCount;
+        public int DroppedCount;
+        public int LineCounter;
+        /// <summary>0 = no trigger, 1 = pause triggered, 2 = stop triggered.</summary>
+        public int TriggerAction;
+    }
+
+    /// <summary>
+    /// Line-oriented variant of <see cref="FormatBatch"/>: formats each emitted packet into
+    /// its own string (no trailing newline) and returns them as a list, so the caller can
+    /// push them into a scrolling TUI text box. Parsing, predicate rejection, drop counting,
+    /// and drop-trigger handling behave identically to FormatBatch.
+    /// </summary>
+    public static BatchLinesResult FormatBatchToLines(PSPacketData[] buffer, int count, int startLineCounter)
+    {
+        if (buffer == null || count <= 0) return null;
+
+        var lines = new System.Collections.Generic.List<string>(count);
+        int lineCounter = startLineCounter;
+        int droppedCount = 0;
+        int triggerAction = 0;
+        bool checkTriggers = _stopOnDrop || _pauseOnDrop ||
+                             _stopOnReason != 0 || _stopOnLocation != 0 ||
+                             _pauseOnReason != 0 || _pauseOnLocation != 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            // Per-packet scratch so each emitted packet becomes its own list entry.
+            var scratch = Scratch();
+            int tentativeCounter = lineCounter + 1;
+            if (FormatSinglePacketInto(scratch, ref buffer[i], tentativeCounter))
+            {
+                lineCounter = tentativeCounter;
+                lines.Add(scratch.ToString());
+            }
+
+            // Walk metadata once for seen-component tracking + drop counting/triggers.
+            int metaOffset = (int)buffer[i].MetadataOffset;
+            byte[] mdata = buffer[i].Data;
+            if (mdata != null && (int)buffer[i].DataSize >= metaOffset + 30)
+            {
+                int compId = mdata[metaOffset + 16] | (mdata[metaOffset + 17] << 8);
+                if (compId != 0) PktMonApi.NoteComponentId(compId);
+
+                int dropReason = (int)BitConverter.ToUInt32(mdata, metaOffset + 22);
+                if (dropReason != 0)
+                {
+                    droppedCount++;
+                    if (checkTriggers)
+                    {
+                        int dropLocation = (int)BitConverter.ToUInt32(mdata, metaOffset + 26);
+                        if (_stopOnDrop ||
+                            (_stopOnReason != 0 && dropReason == _stopOnReason) ||
+                            (_stopOnLocation != 0 && dropLocation == _stopOnLocation))
+                        {
+                            triggerAction = 2;
+                            break;
+                        }
+                        if (triggerAction == 0 &&
+                            (_pauseOnDrop ||
+                             (_pauseOnReason != 0 && dropReason == _pauseOnReason) ||
+                             (_pauseOnLocation != 0 && dropLocation == _pauseOnLocation)))
+                        {
+                            triggerAction = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        return new BatchLinesResult
+        {
+            Lines = lines,
             PacketCount = count,
             DroppedCount = droppedCount,
             LineCounter = lineCounter,

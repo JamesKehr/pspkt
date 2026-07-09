@@ -1339,6 +1339,139 @@ function Set-PspktSession {
     }
 }
 
+# --------------------------------------------------------------------------
+# Analysis mode consumer loop (BoxyBox TUI). Phase 2: live scrolling Text Box.
+# --------------------------------------------------------------------------
+
+<#
+.SYNOPSIS
+Runs the BoxyBox Analysis-mode consumer loop: a live scrolling Text Box.
+
+.DESCRIPTION
+Internal helper invoked by Start-Pspkt when -ParsingLevel is Analysis. Drains the
+real-time ring, formats each packet into the compact Text Box line (Default-level
+parse with the component name omitted), and feeds them into a scrolling BoxyBox
+TextBox rendered to a fixed console region (no console scroll). Phase 2 supports
+live scrolling plus the 's' hotkey to stop; Focus/Details arrive in later phases.
+
+.PARAMETER Session
+The active pspkt session whose OutputStream[0] ring is drained.
+
+.PARAMETER PollingIntervalMs
+Upper bound on the consumer wait when no packets are available.
+
+.OUTPUTS
+PSCustomObject with PacketCount and DroppedCount.
+#>
+function Invoke-PspktAnalysisLoop {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNull()]
+        [pspktSession]
+        $Session,
+
+        [Parameter(Mandatory = $false)]
+        [int]
+        $PollingIntervalMs = 50
+    )
+
+    $stream = $Session.OutputStream[0]
+    $ESC = [char]27
+
+    # Text Box uses the Default single-line parse (level 0) with the compact component
+    # prefix (name omitted — shown in the Details box in a later phase).
+    $prevDetail = Get-PspktDetailLevel
+    Set-PspktDetailLevel -Level 0
+    [PacketLineFormatter]::SetTextBoxMode($true)
+
+    # Console dimensions with fallbacks for non-interactive hosts.
+    $consoleWidth = 100
+    $consoleHeight = 30
+    try { if ([Console]::WindowWidth  -gt 0) { $consoleWidth  = [Console]::WindowWidth } }  catch { }
+    try { if ([Console]::WindowHeight -gt 0) { $consoleHeight = [Console]::WindowHeight } } catch { }
+
+    # Row 1 is a status line; the Text Box fills the remaining rows.
+    $boxWidth  = $consoleWidth
+    $boxHeight = [Math]::Max(5, $consoleHeight - 1)
+
+    $textBox = [BoxyBox.TextBox]::new($boxWidth, $boxHeight, 200000)
+    $textBox.MenuOptions = [System.Collections.Generic.List[string]]@('(F)ocus', '(S)top', 'Save to (F)ile')
+    $region = [BoxyBox.ScreenRegion]::new(2, 1, $boxWidth, $boxHeight)
+
+    $lineCounter  = 0
+    $packetCount  = 0
+    $droppedCount = 0
+    $stopRequested = $false
+    $dirty = $true
+
+    # Cap render rate (~30 fps) so a high packet rate doesn't spend all its time drawing.
+    $frameWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $frameIntervalMs = 33
+
+    [PktMonApi]::SetCaptureActive($true)
+
+    # Prepare the screen: clear, hide cursor.
+    [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen() + [BoxyBox.ScreenRegion]::HideCursor())
+
+    try {
+        while ($Session.Active -and -not $stopRequested) {
+            # --- Non-blocking key handling ---
+            $keyReady = $false
+            try { $keyReady = [Console]::KeyAvailable } catch { $keyReady = $false }
+            if ($keyReady) {
+                $key = [Console]::ReadKey($true)
+                $ch = [char]::ToLower($key.KeyChar)
+                if ($ch -eq 's') { $stopRequested = $true; continue }
+                # 'f' (Focus) is handled in Phase 3.
+            }
+
+            # --- Drain + format ---
+            $pktCount = $Session.DrainAllRawPackets()
+            if ($pktCount -gt 0) {
+                try {
+                    $res = [PacketLineFormatter]::FormatBatchToLines($stream.PacketBuffer, $pktCount, $lineCounter)
+                    if ($null -ne $res) {
+                        $lineCounter  = $res.LineCounter
+                        $packetCount += $res.PacketCount
+                        $droppedCount += $res.DroppedCount
+                        if ($null -ne $res.Lines -and $res.Lines.Count -gt 0) {
+                            $textBox.AppendRange($res.Lines)
+                            $dirty = $true
+                        }
+                        if ($res.TriggerAction -eq 2) { $stopRequested = $true }
+                    }
+                } finally {
+                    [PktMonApi]::ReturnPacketBuffers($stream.PacketBuffer, $pktCount)
+                }
+            } else {
+                $null = [PktMonApi]::WaitForPackets($PollingIntervalMs)
+            }
+
+            # --- Throttled render ---
+            if ($dirty -and $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs) {
+                $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (S)top"
+                if ($status.Length -gt $boxWidth) { $status = $status.Substring(0, $boxWidth) }
+                $statusLine = "$ESC[1;1H$ESC[2K$status"
+                $frame = $region.BuildFrame($textBox.RenderTail())
+                [Console]::Write($statusLine + $frame)
+                $frameWatch.Restart()
+                $dirty = $false
+            }
+        }
+    }
+    finally {
+        # Restore console + formatter state.
+        [Console]::Write([BoxyBox.ScreenRegion]::ShowCursor())
+        $belowRow = 2 + $boxHeight
+        [Console]::Write("$ESC[$belowRow;1H`n")
+        [PacketLineFormatter]::SetTextBoxMode($false)
+        Set-PspktDetailLevel -Level $prevDetail
+    }
+
+    return [pscustomobject]@{ PacketCount = $packetCount; DroppedCount = $droppedCount }
+}
+
 <#
 .SYNOPSIS
 Starts a real-time pktmon packet capture with parsed, color-coded console output and optional pcapng file write.
@@ -3267,7 +3400,37 @@ function Start-Pspkt {
         }
 
         try {
-          if ($useRealTime) {
+          if ($useRealTime -and ($ParsingLevel -eq [PspktParsingLevel]::Analysis)) {
+            # --- Analysis mode: BoxyBox TUI (scrolling Text Box) ---
+            $script:ComponentRefreshLocked = $true
+
+            # Resolve drop-trigger values (mirrors the standard real-time branch).
+            [int]$aPauseLoc = 0; [int]$aPauseReason = 0; [int]$aStopLoc = 0; [int]$aStopReason = 0
+            if ($PSBoundParameters.ContainsKey('PauseOnLocation') -and $PauseOnLocation) {
+                $aPauseLoc = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_LOCATION]) -Value $PauseOnLocation)
+            }
+            if ($PSBoundParameters.ContainsKey('PauseOnReason') -and $PauseOnReason) {
+                $aPauseReason = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_REASON]) -Value $PauseOnReason)
+            }
+            if ($PSBoundParameters.ContainsKey('StopOnLocation') -and $StopOnLocation) {
+                $aStopLoc = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_LOCATION]) -Value $StopOnLocation)
+            }
+            if ($PSBoundParameters.ContainsKey('StopOnReason') -and $StopOnReason) {
+                $aStopReason = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_REASON]) -Value $StopOnReason)
+            }
+
+            [PacketLineFormatter]::SetDropTriggers(
+                $StopOnDrop.IsPresent, $PauseOnDrop.IsPresent,
+                $aStopReason, $aStopLoc, $aPauseReason, $aPauseLoc)
+            $icmpEchoOnly = $Ping.IsPresent -or $Ping4.IsPresent -or $Ping6.IsPresent
+            $icmpNdpOnly  = $NDP.IsPresent -or $AA.IsPresent -or $AAv6.IsPresent
+            [PacketLineFormatter]::SetIcmpDisplayFilter($icmpEchoOnly, $icmpNdpOnly)
+
+            $analysisResult = Invoke-PspktAnalysisLoop -Session $Session -PollingIntervalMs $PollingIntervalMs
+            $packetCount += $analysisResult.PacketCount
+            $droppedCount += $analysisResult.DroppedCount
+          }
+          elseif ($useRealTime) {
             # Determine if pause/stop features are active.
             $pauseEnabled = $Pause.IsPresent -or $PauseOnDrop.IsPresent -or
                 $PSBoundParameters.ContainsKey('PauseOnLocation') -or

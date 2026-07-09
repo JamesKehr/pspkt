@@ -2362,6 +2362,76 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $bar.Contains('BBBBBBBB') | Should -BeFalse
         }
     }
+
+    Context 'TextBox (scrolling buffer)' {
+        It 'reports ContentRows as Height minus borders/menu' {
+            $tb = [BoxyBox.TextBox]::new(40, 6, 1000)
+            $tb.ContentRows | Should -Be 4
+        }
+        It 'RenderTail shows the most recent ContentRows lines anchored at the bottom' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 1000)   # 3 content rows
+            1..10 | ForEach-Object { $tb.Append("line $_") }
+            $frame = $tb.RenderTail()
+            # content rows are indices 1..3; newest (line 10) is the last content row
+            $frame[1].Contains('line 8')  | Should -BeTrue
+            $frame[2].Contains('line 9')  | Should -BeTrue
+            $frame[3].Contains('line 10') | Should -BeTrue
+        }
+        It 'pads the top when fewer lines than ContentRows are present' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 1000)   # 3 content rows
+            $tb.Append('only')
+            $frame = $tb.RenderTail()
+            # newest anchored to bottom content row; upper rows blank
+            $frame[1] | Should -Be ("$([char]0x2502)                  $([char]0x2502)")
+            $frame[3].Contains('only') | Should -BeTrue
+        }
+        It 'bounds the buffer to roughly capacity, trimming oldest lines' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 100)
+            1..300 | ForEach-Object { $tb.Append("L$_") }
+            $tb.LineCount | Should -BeLessOrEqual 150   # capacity + slack margin
+            $tb.LineCount | Should -BeGreaterOrEqual 100
+            # oldest lines were trimmed; L1 is gone
+            $tb.GetLine(0) | Should -Not -Be 'L1'
+        }
+        It 'GetLine returns null for out-of-range indices' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 100)
+            $tb.Append('x')
+            $tb.GetLine(-1) | Should -BeNullOrEmpty
+            $tb.GetLine(99) | Should -BeNullOrEmpty
+        }
+        It 'RenderFrom anchors a given index at the first content row' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 1000)   # 3 content rows
+            1..10 | ForEach-Object { $tb.Append("L$_") }
+            $frame = $tb.RenderFrom(2)   # 0-based; L3, L4, L5
+            $frame[1].Contains('L3') | Should -BeTrue
+            $frame[2].Contains('L4') | Should -BeTrue
+            $frame[3].Contains('L5') | Should -BeTrue
+        }
+        It 'AppendRange adds a batch of lines' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 1000)
+            $tb.AppendRange([System.Collections.Generic.List[string]]@('a','b','c'))
+            $tb.LineCount | Should -Be 3
+        }
+    }
+
+    Context 'PacketLineFormatter text-box mode' {
+        AfterEach {
+            [PacketLineFormatter]::SetTextBoxMode($false)
+        }
+        It 'FormatBatchToLines and SetTextBoxMode exist' {
+            [PacketLineFormatter].GetMethod('FormatBatchToLines') | Should -Not -BeNullOrEmpty
+            [PacketLineFormatter].GetMethod('SetTextBoxMode') | Should -Not -BeNullOrEmpty
+        }
+        It 'component prefix includes the name in full mode and omits it in text-box mode' {
+            $full = [PacketFormatter]::FormatComponentPrefix(0, 9, 'NetVsc', 0, 1, 1, $true)
+            $compact = [PacketFormatter]::FormatComponentPrefix(0, 9, 'NetVsc', 0, 1, 1, $false)
+            $full.Contains('NetVsc') | Should -BeTrue
+            $compact.Contains('NetVsc') | Should -BeFalse
+            # both share the "GGG:CCC[arrows]" head
+            $compact.Contains('000:009') | Should -BeTrue
+            $compact.Contains('[') | Should -BeTrue
+        }
+    }
 }
 
 Describe 'pspkt test prechecks' -Tag 'Precheck' {

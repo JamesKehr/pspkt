@@ -79,6 +79,7 @@ if ($null -eq $typeCheck) {
         [BoxyBox.MenuBar]
         [BoxyBox.Box]
         [BoxyBox.ScreenRegion]
+        [BoxyBox.TextBox]
         [BoxyBox.Justify]
         [PACKETMONITOR_REALTIME_STREAM_CONFIGURATION]
         [PACKETMONITOR_STREAM_DATA_DESCRIPTOR]

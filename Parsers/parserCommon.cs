@@ -440,6 +440,20 @@ public static class PacketFormatter
     /// </summary>
     public static string FormatComponentPrefix(int parentId, int compId, string compName, int lineCounter, int edgeId, int direction)
     {
+        return FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, direction, true);
+    }
+
+    /// <summary>
+    /// Formats the component prefix with Unicode arrow indicators for direction and edge.
+    /// Full form:  "GGG:CCC[↑←](CompName        )" — CompName padded/truncated to a fixed
+    /// width so the prefix length is identical for every packet (column alignment).
+    /// Text-box form (includeName=false): "GGG:CCC[↑←]" — the component name is omitted for
+    /// the compact BoxyBox Text Box scrolling line.
+    ///   Direction: ↑ = In (1/3/5), ↓ = Out (2/4/6), space = unspecified
+    ///   Edge: → = Ingress (1), ← = Egress (2), space = unspecified
+    /// </summary>
+    public static string FormatComponentPrefix(int parentId, int compId, string compName, int lineCounter, int edgeId, int direction, bool includeName)
+    {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
 
         // Cache key bit layout (must not overlap — direction/edgeId are read directly from
@@ -448,10 +462,11 @@ public static class PacketFormatter
         // (direction, edgeId, compId) combinations to collide on the same cache key, which
         // silently returned another component's cached — and therefore wrong — prefix string.
         //   bit 0      : variant   (1 bit,  0-1)
-        //   bits 1-4   : direction (4 bits, 0-15)
-        //   bits 5-8   : edgeId    (4 bits, 0-15)
-        //   bits 9+    : compId
-        int cacheKey = variant | ((direction & 0xF) << 1) | ((edgeId & 0xF) << 5) | (compId << 9);
+        //   bit 1      : includeName (1 bit)
+        //   bits 2-5   : direction (4 bits, 0-15)
+        //   bits 6-9   : edgeId    (4 bits, 0-15)
+        //   bits 10+   : compId
+        int cacheKey = variant | ((includeName ? 1 : 0) << 1) | ((direction & 0xF) << 2) | ((edgeId & 0xF) << 6) | (compId << 10);
         string[] cached;
         if (_compCache.TryGetValue(cacheKey, out cached))
         {
@@ -483,10 +498,20 @@ public static class PacketFormatter
         else if (edgeId == 2) edgeArrow = '\u2190';    // ←
 
         // Note: no trailing ':' here — callers append ": " after the prefix.
-        string raw = string.Concat(
-            parentId.ToString("D3"), ":", compId.ToString("D3"),
-            "[", dirArrow.ToString(), edgeArrow.ToString(), "]",
-            "(", compName, ")");
+        string raw;
+        if (includeName)
+        {
+            raw = string.Concat(
+                parentId.ToString("D3"), ":", compId.ToString("D3"),
+                "[", dirArrow.ToString(), edgeArrow.ToString(), "]",
+                "(", compName, ")");
+        }
+        else
+        {
+            raw = string.Concat(
+                parentId.ToString("D3"), ":", compId.ToString("D3"),
+                "[", dirArrow.ToString(), edgeArrow.ToString(), "]");
+        }
 
         string prefix = _prefixes[LAYER_COMPONENT, variant];
         string result;

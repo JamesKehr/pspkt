@@ -408,4 +408,132 @@ namespace BoxyBox
         public static string ShowCursor() { return CSI + "?25h"; }
         public static string ClearScreen() { return CSI + "2J" + CSI + "H"; }
     }
+
+    /// <summary>
+    /// A scrolling text box: a bounded buffer of recent lines rendered inside a
+    /// <see cref="Box"/>. In live mode it shows the most recent <c>ContentRows</c> lines
+    /// (packets scroll upward as new lines arrive). The buffer is bounded — once it exceeds
+    /// capacity plus a slack margin, the oldest lines are trimmed in a single batch so
+    /// appends stay amortized O(1). Line storage is a List so Phase 3 focus/selection can
+    /// index by absolute position.
+    /// </summary>
+    public sealed class TextBox
+    {
+        private readonly List<string> _lines = new List<string>();
+        private readonly int _capacity;
+        private readonly int _trimSlack;
+        private readonly Box _box;
+
+        public TextBox(int width, int height, int capacity)
+        {
+            _box = new Box(width, height);
+            _capacity = capacity < 16 ? 16 : capacity;
+            _trimSlack = Math.Max(64, _capacity / 8);
+        }
+
+        public Box Box { get { return _box; } }
+
+        public Justify Justification
+        {
+            get { return _box.Justification; }
+            set { _box.Justification = value; }
+        }
+
+        public IList<string> MenuOptions
+        {
+            get { return _box.MenuOptions; }
+            set { _box.MenuOptions = value; }
+        }
+
+        public MenuBar.Cap MenuStyle
+        {
+            get { return _box.MenuStyle; }
+            set { _box.MenuStyle = value; }
+        }
+
+        /// <summary>Total lines currently retained (post-trim).</summary>
+        public int LineCount { get { return _lines.Count; } }
+
+        /// <summary>Number of visible content rows.</summary>
+        public int ContentRows { get { return _box.ContentRows; } }
+
+        /// <summary>Bounded capacity (retained line count target).</summary>
+        public int Capacity { get { return _capacity; } }
+
+        /// <summary>Returns the line at an absolute index, or null if out of range.</summary>
+        public string GetLine(int index)
+        {
+            if (index < 0 || index >= _lines.Count) return null;
+            return _lines[index];
+        }
+
+        /// <summary>Appends a single line, trimming the oldest lines when over capacity.</summary>
+        public void Append(string line)
+        {
+            _lines.Add(line ?? string.Empty);
+            TrimIfNeeded();
+        }
+
+        /// <summary>Appends a batch of lines, trimming once at the end.</summary>
+        public void AppendRange(IList<string> lines)
+        {
+            if (lines == null) return;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                _lines.Add(lines[i] ?? string.Empty);
+            }
+            TrimIfNeeded();
+        }
+
+        private void TrimIfNeeded()
+        {
+            if (_lines.Count > _capacity + _trimSlack)
+            {
+                _lines.RemoveRange(0, _lines.Count - _capacity);
+            }
+        }
+
+        /// <summary>Clears all buffered lines.</summary>
+        public void Clear()
+        {
+            _lines.Clear();
+        }
+
+        /// <summary>
+        /// Renders the live tail: the most recent <c>ContentRows</c> lines, top-aligned so
+        /// the newest line sits at the bottom of the content area.
+        /// </summary>
+        public string[] RenderTail()
+        {
+            int rows = _box.ContentRows;
+            var window = new List<string>(rows);
+            int start = _lines.Count - rows;
+            if (start < 0) start = 0;
+            // Pad the top so the newest line anchors to the bottom row when fewer than
+            // ContentRows lines are available.
+            int pad = rows - (_lines.Count - start);
+            for (int p = 0; p < pad; p++) window.Add(string.Empty);
+            for (int i = start; i < _lines.Count; i++) window.Add(_lines[i]);
+            return _box.Render(window);
+        }
+
+        /// <summary>
+        /// Renders a window anchored so the line at <paramref name="topIndex"/> is the first
+        /// visible content row. Used by Phase 3 focus/scroll navigation. Out-of-range indices
+        /// are clamped.
+        /// </summary>
+        public string[] RenderFrom(int topIndex)
+        {
+            int rows = _box.ContentRows;
+            if (topIndex < 0) topIndex = 0;
+            if (topIndex > _lines.Count - 1) topIndex = Math.Max(0, _lines.Count - 1);
+            var window = new List<string>(rows);
+            for (int i = 0; i < rows; i++)
+            {
+                int idx = topIndex + i;
+                window.Add(idx < _lines.Count ? _lines[idx] : string.Empty);
+            }
+            return _box.Render(window);
+        }
+    }
 }
