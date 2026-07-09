@@ -2515,6 +2515,33 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $db2 = [BoxyBox.DetailsBox]::new(40, 6)
             $db2.Box.ShowTopBorder | Should -BeTrue
         }
+        It 'Box.Resize updates dimensions in place, clamps, and preserves menu/border state' {
+            $box = [BoxyBox.Box]::new(40, 10)
+            $box.ShowTopBorder = $false
+            $box.MenuOptions = [System.Collections.Generic.List[string]]@('x')
+            $box.Resize(80, 6)
+            $box.Width  | Should -Be 80
+            $box.Height | Should -Be 6
+            $box.ContentRows | Should -Be 5           # 6 - menu (no top border)
+            $box.ShowTopBorder | Should -BeFalse      # preserved
+            $box.MenuOptions.Count | Should -Be 1     # preserved
+            $box.Resize(1, 1)                          # below minimum
+            $box.Width  | Should -BeGreaterOrEqual 2
+            $box.Height | Should -BeGreaterOrEqual 2
+        }
+        It 'DetailsBox.Resize preserves the tree and re-fits the viewport height' {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $ip = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
+            $null = $ip.AddLeaf('Src'); $null = $ip.AddLeaf('Dst')
+            $null = $roots.Add($ip)
+            $db = [BoxyBox.DetailsBox]::new(40, 10, $false)
+            $db.SetTree($roots)
+            $before = $db.RowCount
+            $db.Resize(90, 5)
+            $db.Box.Width | Should -Be 90
+            $db.RowCount  | Should -Be $before        # tree preserved
+            $db.ContentRows | Should -Be 4            # height 5, no top border
+        }
     }
 
     Context 'Box highlighted render' {

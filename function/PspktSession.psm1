@@ -1482,8 +1482,8 @@ function Invoke-PspktAnalysisLoop {
     $detailsBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($detailsMenuDef, $boxWidth)
     $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
 
-    # JIT detail store: retain the last 20,000 packets' raw bytes for on-demand parsing.
-    $detailStore = [PacketDetailStore]::new(20000)
+    # JIT detail store: retain the last 50,000 packets' raw bytes for on-demand parsing.
+    $detailStore = [PacketDetailStore]::new(50000)
 
     $lineCounter  = 0
     $packetCount  = 0
@@ -1567,6 +1567,43 @@ function Invoke-PspktAnalysisLoop {
 
     try {
         while ($Session.Active -and -not $stopRequested) {
+            # --- Detect a console (Windows Terminal) resize and rebuild the layout in place ---
+            # Boxes and regions are sized from the console dimensions read once at startup; when
+            # the window is resized we recompute the layout so borders span the new width/height.
+            $curW = $consoleWidth; $curH = $consoleHeight
+            try { if ([Console]::WindowWidth  -gt 0) { $curW = [Console]::WindowWidth } }  catch { }
+            try { if ([Console]::WindowHeight -gt 0) { $curH = [Console]::WindowHeight } } catch { }
+            if ($curW -ne $consoleWidth -or $curH -ne $consoleHeight) {
+                $consoleWidth  = $curW
+                $consoleHeight = $curH
+                $boxWidth   = $consoleWidth
+                $areaHeight = [Math]::Max(6, $consoleHeight - 1)
+
+                # Live layout: single box filling the area. Re-fit the menu (Full/Simple by width).
+                $liveBox.Resize($boxWidth, $areaHeight)
+                $liveBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($liveMenuDef, $boxWidth)
+                $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
+
+                # Focus layout: ~40% Text / ~60% Details with the shared divider (see startup).
+                $usable = $areaHeight - 3
+                if ($usable -lt 6) { $usable = 6 }
+                $textContent = [Math]::Max(5, [int][Math]::Round($usable * 0.40))
+                if ($textContent -gt $usable - 1) { $textContent = $usable - 1 }
+                $detailContent = $usable - $textContent
+                $textFocusHeight = $textContent + 2
+                $detailsHeight   = $detailContent + 1
+                $textFocusBox.Resize($boxWidth, $textFocusHeight)
+                $textFocusBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($focusMenuDef, $boxWidth)
+                $textFocusRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $textFocusHeight)
+                $detailsBox.Resize($boxWidth, $detailsHeight)
+                $detailsBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($detailsMenuDef, $boxWidth)
+                $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
+
+                # Clear stale content so shrinking the window leaves no residue, then repaint.
+                [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
+                $dirty = $true
+            }
+
             $textContentRows = if ($focused) { $textFocusBox.ContentRows } else { $liveBox.ContentRows }
 
             # --- Non-blocking key handling ---

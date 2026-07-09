@@ -374,6 +374,18 @@ namespace BoxyBox
             ShowTopBorder = true;
         }
 
+        /// <summary>
+        /// Updates the box dimensions in place (e.g. when the console is resized). Other state
+        /// (menu options/style, justification, top-border flag) is preserved.
+        /// </summary>
+        public void Resize(int width, int height)
+        {
+            if (width < 2) width = 2;
+            if (height < 2) height = 2;
+            Width = width;
+            Height = height;
+        }
+
         /// <summary>Builds the top border line.</summary>
         private string TopBorder()
         {
@@ -901,6 +913,17 @@ namespace BoxyBox
         {
             get { return _box.MenuOptions; }
             set { _box.MenuOptions = value; }
+        }
+
+        /// <summary>
+        /// Resizes the underlying box in place (e.g. on a console resize), preserving the loaded
+        /// tree, expand/collapse state, and selection, then re-clamps the scroll offset so the
+        /// selected row stays visible within the new height.
+        /// </summary>
+        public void Resize(int width, int height)
+        {
+            _box.Resize(width, height);
+            EnsureVisible();
         }
 
         /// <summary>
