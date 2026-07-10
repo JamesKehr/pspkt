@@ -616,6 +616,16 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
                 ($ans.Children | Where-Object { $_.Text -eq 'Time to live: 60' }).Count | Should -Be 1
                 ($ans.Children | Where-Object { $_.Text -eq 'Address: 93.184.216.34' }).Count | Should -Be 1
             }
+            It 'defaults to expanded sections with collapsed RR one-liners' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                $dns.IsExpanded | Should -BeTrue
+                $queries = $dns.Children | Where-Object { $_.Key -eq 'DNS.Queries' }
+                $answers = $dns.Children | Where-Object { $_.Key -eq 'DNS.Answers' }
+                $queries.IsExpanded | Should -BeTrue                  # section expanded
+                $answers.IsExpanded | Should -BeTrue
+                $queries.Children[0].IsExpanded | Should -BeFalse     # RR one-liner collapsed
+                $answers.Children[0].IsExpanded | Should -BeFalse
+            }
             It 'parses the EDNS0 OPT record with the DO bit set' {
                 $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
                 $opt = ($dns.Children | Where-Object { $_.Key -eq 'DNS.Additional' }).Children[0]

@@ -518,7 +518,7 @@ public static class DnsParser
     private static BoxyBox.TreeNode BuildOptNode(byte[] data, string name, int udpSize, uint ttl, int rdlen)
     {
         string dispName = (name == ".") ? "<Root>" : name;
-        BoxyBox.TreeNode opt = new BoxyBox.TreeNode(dispName + ": type OPT", null, true);
+        BoxyBox.TreeNode opt = new BoxyBox.TreeNode(dispName + ": type OPT", null, false); // collapsed one-liner by default
         opt.AddLeaf("Name: " + dispName);
         opt.AddLeaf("Type: OPT (41)");
         opt.AddLeaf("UDP payload size: " + udpSize);
@@ -568,7 +568,7 @@ public static class DnsParser
 
         string header = dispName + ": type " + typeStr + ", class " + className;
         if (!string.IsNullOrEmpty(summary)) header += ", " + summary;
-        BoxyBox.TreeNode rr = new BoxyBox.TreeNode(header, null, true);
+        BoxyBox.TreeNode rr = new BoxyBox.TreeNode(header, null, false); // collapsed one-liner by default
         rr.AddLeaf("Name: " + dispName);
         rr.AddLeaf("Type: " + typeStr + " (" + rtype + ")");
         rr.AddLeaf("Class: " + className + " (0x" + rclass.ToString("x4") + ")");
@@ -625,7 +625,7 @@ public static class DnsParser
                 int qtype  = PacketParseHelper.ReadUInt16BE(data, pos);
                 int qclass = PacketParseHelper.ReadUInt16BE(data, pos + 2);
                 pos += 4;
-                BoxyBox.TreeNode qn = new BoxyBox.TreeNode(name + ": type " + GetTypeName(qtype) + ", class " + GetClassName(qclass), null, true);
+                BoxyBox.TreeNode qn = new BoxyBox.TreeNode(name + ": type " + GetTypeName(qtype) + ", class " + GetClassName(qclass), null, false); // collapsed one-liner by default
                 qn.AddLeaf("Name: " + name);
                 qn.AddLeaf("Type: " + GetTypeName(qtype) + " (" + qtype + ")");
                 qn.AddLeaf("Class: " + GetClassName(qclass) + " (0x" + qclass.ToString("x4") + ")");
