@@ -5,6 +5,7 @@
 ## Highlights
 
 - **Real-time parsing** of Ethernet, IPv4/IPv6, TCP/UDP/ICMP/ICMPv6/NDP/ARP, DNS, DHCP, HTTP, TLS, and SMB2.
+- **Interactive Analysis mode** (`-pl Analysis`): a full-screen TUI to freeze the stream, select a packet, and inspect a Wireshark-style detail tree — see [Analysis Mode](./Analysis-Mode.md).
 - **Zero per-packet PowerShell overhead.** A native callback writes into a lock-free SPSC ring buffer; a single PS consumer loop calls a C# bulk formatter and `[Console]::Write`s the result.
 - **Pooled packet buffers**, **AutoResetEvent signaling**, and **cache-line padded** ring indices keep allocation rate and lock contention low.
 - **Quick filters** (`-DNS`, `-SMB`, `-Ping`, etc.) plus a single `-IPAddress` AND-merge that combines into every filter.
@@ -57,6 +58,7 @@ pspkt -WriteFile capture.pcapng -FileSize 100 -NumFiles 5
 | [Filters](./Filters.md) | `New-`/`Get-`/`Set-`/`Add-`/`Remove-PspktFilter`, `ConvertTo-PspktIpAddress` |
 | [Components](./Components.md) | `Get-`/`Set-`/`Add-`/`Remove-PspktComponent`, group/NIC helpers |
 | [Display](./Display.md) | Detail level, spacing, timestamps, component map, capture header |
+| [Analysis Mode](./Analysis-Mode.md) | Interactive full-screen TUI (`-pl Analysis`): freeze, select, Wireshark-style detail tree, save pcapng |
 | [Color Profiles](./Color-Profiles.md) | Manage and preview ANSI color schemes |
 | [Quick Filters](./Quick-Filters.md) | Reference of all `-DNS`/`-SMB`/`-Ping`/etc. switches |
 | [Application Filters](./Application-Filters.md) | Display-side payload filters (DNS name, RCODE, etc.) |

@@ -29,7 +29,10 @@ Controls how much per-packet information is rendered. Settings are persistent fo
 | `-1` | Minimal | Condensed single-line summary |
 | `0` | Default | Header summary per layer |
 | `1` | Detailed | Multi-line per-layer breakdown |
-| `2` | Analysis | Detailed plus blank line between packets |
+| `2` | Analysis | Interactive full-screen TUI (freeze, select, Wireshark-style detail tree) — see [Analysis Mode](./Analysis-Mode.md) |
+
+> `Analysis` is interactive and takes over the console. For scripted / redirected output use
+> `Minimal`, `Default`, or `Detailed`.
 
 ### Syntax
 ```powershell
