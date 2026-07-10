@@ -803,15 +803,23 @@ namespace BoxyBox
     }
 
     /// <summary>
-    /// Flattens a tree into visible rows honoring each node's expanded state. Rendering rules
-    /// match the TUI spec: expandable nodes show '+' (collapsed) or '-' (expanded); leaf nodes
-    /// below the top level show tree connectors ('├' mid-sibling, '└' last sibling). Indent is
-    /// two spaces per depth level plus a two-space left margin.
+    /// Flattens a tree into visible rows honoring each node's expanded state. Expandable nodes
+    /// show '+' (collapsed) or '-' (expanded). Leaf indentation depends on <see cref="UseConnectors"/>:
+    /// by default leaves use a plain two-space indent (no tree connectors); when connectors are
+    /// enabled, leaf nodes below the top level show '├' (mid-sibling) / '└' (last sibling)
+    /// glyphs. Indent is two spaces per depth level plus a two-space left margin.
     /// </summary>
     public static class TreeFlattener
     {
         public const char MidChild  = '\u251c'; // ├
         public const char LastChild = '\u2514'; // └
+
+        /// <summary>
+        /// When true, leaf rows below the top level are drawn with '├'/'└' tree connectors.
+        /// Default false: leaves use a plain two-space indent instead. Kept as a toggle so the
+        /// connector rendering can be re-enabled without restoring the removed code.
+        /// </summary>
+        public static bool UseConnectors = false;
 
         public static List<TreeRow> Flatten(IList<TreeNode> roots)
         {
@@ -849,14 +857,17 @@ namespace BoxyBox
             {
                 line = indent + (expanded ? "-" : "+") + node.Text;
             }
-            else if (depth == 0)
+            else if (UseConnectors && depth > 0)
             {
-                line = indent + " " + node.Text;
+                // Connector mode (opt-in): '├' for a mid sibling, '└' for the last sibling.
+                char connector = isLast ? LastChild : MidChild;
+                line = indent + connector + " " + node.Text;
             }
             else
             {
-                char connector = isLast ? LastChild : MidChild;
-                line = indent + connector + " " + node.Text;
+                // Default: no connectors — a plain two-space indent occupies the columns the
+                // connector + space would have used, so leaf text keeps the same alignment.
+                line = indent + "  " + node.Text;
             }
             rows.Add(new TreeRow(line, node, depth));
 

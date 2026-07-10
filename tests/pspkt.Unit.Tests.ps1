@@ -2712,7 +2712,8 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
     }
 
     Context 'TreeNode + TreeFlattener' {
-        It 'flattens expandable nodes with +/- and leaf children with connectors' {
+        AfterEach { [BoxyBox.TreeFlattener]::UseConnectors = $false }
+        It 'flattens expandable nodes with +/- and plain two-space leaf indent by default' {
             $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
             $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
             $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
@@ -2720,8 +2721,21 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
             $rows.Count | Should -Be 3
             $rows[0].Display.TrimStart().StartsWith('-IPv4') | Should -BeTrue
-            $rows[1].Display.Contains([char]0x251c) | Should -BeTrue   # ├ (mid child)
-            $rows[2].Display.Contains([char]0x2514) | Should -BeTrue   # └ (last child)
+            # Default: no tree connectors; leaves use a plain two-space indent.
+            $rows[1].Display.Contains([char]0x251c) | Should -BeFalse   # no ├
+            $rows[2].Display.Contains([char]0x2514) | Should -BeFalse   # no └
+            [BoxyBox.AnsiText]::StripAnsi($rows[1].Display) | Should -Be '      Src'   # indent(4)+2 spaces
+            [BoxyBox.AnsiText]::StripAnsi($rows[2].Display) | Should -Be '      Dst'
+        }
+        It 'draws tree connectors when UseConnectors is enabled (opt-in)' {
+            [BoxyBox.TreeFlattener]::UseConnectors = $true
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
+            $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
+            $null = $roots.Add($ipv4)
+            $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
+            $rows[1].Display.Contains([char]0x251c) | Should -BeTrue    # ├ (mid child)
+            $rows[2].Display.Contains([char]0x2514) | Should -BeTrue    # └ (last child)
         }
         It 'collapsed nodes hide their children and show +' {
             $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
