@@ -1808,7 +1808,7 @@ public static class PacketLineFormatter
             if (_dnsCtxCacheValid)
             {
                 _dnsCtxCacheValid = false;
-                return DnsParser.FormatDnsFromContext(ref _dnsCtxCache, data.Length);
+                return DnsParser.FormatDnsFromContext(ref _dnsCtxCache, true);
             }
 
             // IPv6 path (or any other case where the early gate didn't run): evaluate
@@ -1820,14 +1820,14 @@ public static class PacketLineFormatter
                 if (DnsParser.TryParseDns(data, srcPort, dstPort, out dctx))
                 {
                     if (!_dnsPredicate.Evaluate(ref dctx)) return FilteredByPredicate;
-                    return DnsParser.FormatDnsFromContext(ref dctx, data.Length);
+                    return DnsParser.FormatDnsFromContext(ref dctx, true);
                 }
                 if (!_dnsPredicate.MatchTruncated) return FilteredByPredicate;
                 // MatchTruncated=true with an unparseable packet falls through to the
                 // best-effort formatter below; it will likely return null too.
             }
 
-            return DnsParser.FormatDnsSegment(data, srcPort, dstPort);
+            return DnsParser.FormatDnsSegment(data, srcPort, dstPort, true);
         }
 
         if (srcPort == 67 || srcPort == 68 || dstPort == 67 || dstPort == 68 ||

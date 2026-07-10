@@ -445,24 +445,8 @@ public static class PacketDetailExtractor
 
         if (udp && (sp == 53 || dp == 53 || sp == 5353 || dp == 5353))
         {
-            DnsContext ctx;
-            if (DnsParser.TryParseDns(payload, len, sp, dp, out ctx))
-            {
-                var dns = new BoxyBox.TreeNode(ctx.IsMdns ? "mDNS" : "DNS", "DNS", true);
-                dns.AddLeaf("Transaction: 0x" + ctx.TxId.ToString("x4"));
-                dns.AddLeaf("Type: " + (ctx.Qr == 0 ? "Query" : "Response"));
-                if (ctx.Qr == 0)
-                {
-                    dns.AddLeaf("Query: " + DnsParser.GetTypeName(ctx.QType) + "? " + ctx.QName);
-                }
-                else
-                {
-                    dns.AddLeaf("Rcode: " + DnsParser.GetRcodeName(ctx.Rcode));
-                    dns.AddLeaf("Counts: " + ctx.AnCount + "/" + ctx.NsCount + "/" + ctx.ArCount);
-                    if (ctx.FirstAnswer != null) dns.AddLeaf("Answer: " + ctx.FirstAnswer);
-                }
-                roots.Add(dns);
-            }
+            List<BoxyBox.TreeNode> dnsRoots = DnsParser.BuildDnsDetailTree(payload, len, sp, dp);
+            for (int i = 0; i < dnsRoots.Count; i++) roots.Add(dnsRoots[i]);
         }
     }
 

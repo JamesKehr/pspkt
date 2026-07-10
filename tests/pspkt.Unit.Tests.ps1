@@ -560,9 +560,70 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         It 'DnsParser.FormatDnsFromContext produces the same line as FormatDnsSegment' {
             $ctx = [DnsContext]::new()
             $null = [DnsParser]::TryParseDns($script:dnsQueryExampleA, 53, 12345, [ref]$ctx)
-            $a = [DnsParser]::FormatDnsFromContext([ref]$ctx, $script:dnsQueryExampleA.Length)
+            $a = [DnsParser]::FormatDnsFromContext([ref]$ctx, $false)   # Default separator
             $b = [DnsParser]::FormatDnsSegment($script:dnsQueryExampleA, 53, 12345)
             $a | Should -Be $b
+            $a | Should -Be 'DNS: 0x1234 0/0/0 example.com. A'
+        }
+        It 'DnsParser.FormatDnsFromContext uses the DNS - separator when detailed' {
+            $ctx = [DnsContext]::new()
+            $null = [DnsParser]::TryParseDns($script:dnsQueryExampleA, 53, 12345, [ref]$ctx)
+            [DnsParser]::FormatDnsFromContext([ref]$ctx, $true) | Should -Be 'DNS - 0x1234 0/0/0 example.com. A'
+        }
+
+        Context 'DnsParser.BuildDnsDetailTree (Analysis Details)' {
+            BeforeAll {
+                # Response: txid 0x1234, flags 0x8180 (response, RD, RA), qd=1 an=1 ns=0 ar=1(OPT).
+                $b = [System.Collections.Generic.List[byte]]::new()
+                $b.AddRange([byte[]](0x12,0x34, 0x81,0x80, 0,1, 0,1, 0,0, 0,1))
+                $b.Add(7); 'example'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+                $b.Add(3); 'com'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+                $b.Add(0); $b.AddRange([byte[]](0,1, 0,1))
+                $b.AddRange([byte[]](0xc0,0x0c, 0,1, 0,1, 0,0,0,60, 0,4, 93,184,216,34))   # A answer
+                $b.AddRange([byte[]](0, 0,41, 0x10,0x00, 0x00,0x00,0x80,0x00, 0,0))         # OPT, DO set
+                $script:dnsResp = [byte[]]$b.ToArray()
+            }
+            It 'root uses the Detailed one-liner as its collapsed text' {
+                $roots = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)
+                $roots.Count | Should -Be 1
+                $roots[0].Key | Should -Be 'DNS'
+                $roots[0].Text | Should -Be 'DNS - 0x1234 1/0/1 example.com. A 93.184.216.34'
+            }
+            It 'includes Transaction ID, RR Count, Flags, Queries, Answers and Additional sections' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                ($dns.Children | Where-Object { $_.Text -eq 'Transaction ID: 0x1234' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Text -eq 'RR Count - Qry: 1, Ans: 1, Auth: 0, Adtl: 1' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Key -eq 'DNS.Flags' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Key -eq 'DNS.Queries' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Key -eq 'DNS.Answers' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Key -eq 'DNS.Additional' }).Count | Should -Be 1
+            }
+            It 'renders the response flag bit-breakdown with actual bit values' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                $flags = $dns.Children | Where-Object { $_.Key -eq 'DNS.Flags' }
+                $flags.Text | Should -Be 'Flags: 0x8180 Query response, No error'
+                $flags.IsExpanded | Should -BeFalse   # verbose section collapsed by default
+                ($flags.Children | Where-Object { $_.Text -eq '1... .... .... .... = Response: Response' }).Count | Should -Be 1
+                ($flags.Children | Where-Object { $_.Text -eq '.... ...1 .... .... = Recursion desired: Do query recursively' }).Count | Should -Be 1
+                ($flags.Children | Where-Object { $_.Text -eq '.... .... .... 0000 = Reply code: No error (0)' }).Count | Should -Be 1
+            }
+            It 'parses the A answer record (Name/Type/Class/TTL/Address)' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                $ans = ($dns.Children | Where-Object { $_.Key -eq 'DNS.Answers' }).Children[0]
+                $ans.Text | Should -Be 'example.com.: type A, class IN, 93.184.216.34'
+                ($ans.Children | Where-Object { $_.Text -eq 'Type: A (1)' }).Count | Should -Be 1
+                ($ans.Children | Where-Object { $_.Text -eq 'Class: IN (0x0001)' }).Count | Should -Be 1
+                ($ans.Children | Where-Object { $_.Text -eq 'Time to live: 60' }).Count | Should -Be 1
+                ($ans.Children | Where-Object { $_.Text -eq 'Address: 93.184.216.34' }).Count | Should -Be 1
+            }
+            It 'parses the EDNS0 OPT record with the DO bit set' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                $opt = ($dns.Children | Where-Object { $_.Key -eq 'DNS.Additional' }).Children[0]
+                $opt.Text | Should -Be '<Root>: type OPT'
+                ($opt.Children | Where-Object { $_.Text -eq 'UDP payload size: 4096' }).Count | Should -Be 1
+                $z = $opt.Children | Where-Object { $_.Text -like 'Z: 0x*' }
+                ($z.Children | Where-Object { $_.Text -eq '1... .... .... .... = DO bit: Accepts DNSSEC security RRs' }).Count | Should -Be 1
+            }
         }
 
         It 'DnsAppPredicate QNameRegex matches example.com query A' {
@@ -2847,8 +2908,16 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         It 'extracts DNS transaction id and query' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $dns = $roots[4]
-            ($dns.Children | Where-Object { $_.Text -eq 'Transaction: 0x23b4' }).Count | Should -Be 1
-            ($dns.Children | Where-Object { $_.Text -like 'Query: A? example.com*' }).Count | Should -Be 1
+            ($dns.Children | Where-Object { $_.Text -eq 'Transaction ID: 0x23b4' }).Count | Should -Be 1
+            ($dns.Children | Where-Object { $_.Text -eq 'RR Count - Qry: 1, Ans: 0, Auth: 0, Adtl: 0' }).Count | Should -Be 1
+            # Queries section with the example.com A query.
+            $queries = $dns.Children | Where-Object { $_.Key -eq 'DNS.Queries' }
+            $queries | Should -Not -BeNullOrEmpty
+            ($queries.Children | Where-Object { $_.Text -eq 'example.com.: type A, class IN' }).Count | Should -Be 1
+            # Flags node present with the bit-breakdown.
+            $flags = $dns.Children | Where-Object { $_.Key -eq 'DNS.Flags' }
+            $flags | Should -Not -BeNullOrEmpty
+            ($flags.Children | Where-Object { $_.Text -like '*Recursion desired: Do query recursively' }).Count | Should -Be 1
         }
         It 'returns an error node for too-short input' {
             $roots = [PacketDetailExtractor]::BuildTree([byte[]](1,2,3), 3, 0, 0, 0)
