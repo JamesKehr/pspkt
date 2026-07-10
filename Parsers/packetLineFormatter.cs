@@ -81,9 +81,7 @@ public static class PacketLineFormatter
     // State
     private static bool _showTimestamp = false;
     private static int _detailLevel = 0; // -1=Minimal, 0=Default, 1+=Detailed
-    private static readonly string _indent1 = "\x1b[97m \u2514\x1b[0m";
-    private static readonly string _indent2 = "\x1b[97m  \u2514\x1b[0m";
-    private static readonly string _indent3 = "\x1b[97m   \u2514\x1b[0m";
+    private static readonly string _detailIndent = "  "; // Detailed sub-lines: flat two-space indent, no tree connector
 
     /// <summary>
     /// Registers a component in the C# component map.
@@ -1140,20 +1138,20 @@ public static class PacketLineFormatter
         sb.Append(": ");
         PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
         sb.Append('\n');
-        sb.Append(_indent1);
+        sb.Append(_detailIndent);
         PacketFormatter.AppendColorized(sb, networkDetail, 2, lineCounter);
 
         if (transportDetail != null)
         {
             sb.Append('\n');
-            sb.Append(_indent2);
+            sb.Append(_detailIndent);
             PacketFormatter.AppendColorized(sb, transportDetail, transportLayerIndex, lineCounter);
         }
 
         if (appDetail != null)
         {
             sb.Append('\n');
-            sb.Append(_indent3);
+            sb.Append(_detailIndent);
             PacketFormatter.AppendColorized(sb, appDetail, 4, lineCounter);
         }
 

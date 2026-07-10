@@ -2609,6 +2609,37 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
     }
 
+    Context 'PacketLineFormatter detailed output' {
+        AfterEach { Set-PspktDetailLevel -Level 0 }
+        It 'indents detail sub-lines with two spaces and no tree connector' {
+            Set-PspktDetailLevel -Level 1   # Detailed
+            # Descriptor: [metadata(40)][packet]. Packet = Eth(14)+IPv4(20)+UDP(8), src port 53.
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ipv4 = [byte[]]::new(20)
+            $ipv4[0]=0x45; $ipv4[8]=51; $ipv4[9]=17; $ipv4[3]=28
+            $ipv4[12]=1;$ipv4[13]=1;$ipv4[14]=1;$ipv4[15]=1
+            $ipv4[16]=10;$ipv4[17]=24;$ipv4[18]=0;$ipv4[19]=72
+            $udp = [byte[]](0,53, 0xC3,0x8C, 0,8, 0,0)
+            $packet = $eth + $ipv4 + $udp
+            $meta = [byte[]]::new(40)
+            $meta[12]=1; $meta[16]=172; $meta[18]=1
+            $data = $meta + $packet
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$packet.Length, [uint32]0, [uint32]0)
+            $res = [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0)
+            $out = [BoxyBox.AnsiText]::StripAnsi($res.Output)
+            $lines = $out.Split("`n") | Where-Object { $_.Length -gt 0 }
+            # First line is the component/data-link header; the network + transport sub-lines follow.
+            $ipLine  = $lines | Where-Object { $_.Contains('IPv4 - Src:') }
+            $udpLine = $lines | Where-Object { $_.Contains('UDP - Src:') }
+            $ipLine  | Should -Not -BeNullOrEmpty
+            $udpLine | Should -Not -BeNullOrEmpty
+            # Flat two-space indent, no U+2514 connector.
+            $ipLine.StartsWith('  IPv4')  | Should -BeTrue
+            $udpLine.StartsWith('  UDP')  | Should -BeTrue
+            $out.Contains([char]0x2514)   | Should -BeFalse
+        }
+    }
+
     Context 'TreeNode + TreeFlattener' {
         It 'flattens expandable nodes with +/- and leaf children with connectors' {
             $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
