@@ -81,9 +81,7 @@ public static class PacketLineFormatter
     // State
     private static bool _showTimestamp = false;
     private static int _detailLevel = 0; // -1=Minimal, 0=Default, 1+=Detailed
-    private static readonly string _indent1 = "\x1b[97m \u2514\x1b[0m";
-    private static readonly string _indent2 = "\x1b[97m  \u2514\x1b[0m";
-    private static readonly string _indent3 = "\x1b[97m   \u2514\x1b[0m";
+    private static readonly string _detailIndent = "  "; // Detailed sub-lines: flat two-space indent, no tree connector
 
     /// <summary>
     /// Registers a component in the C# component map.
@@ -110,6 +108,26 @@ public static class PacketLineFormatter
     public static bool HasComponent(int id)
     {
         return _componentMap.ContainsKey(id);
+    }
+
+    /// <summary>
+    /// Resolves a component ID to its friendly name, parent ID, and group. Returns false
+    /// when the ID isn't in the map (caller should fall back to the numeric ID).
+    /// </summary>
+    public static bool TryGetComponentInfo(int id, out string name, out int parentId, out string group)
+    {
+        ComponentInfo info;
+        if (_componentMap.TryGetValue(id, out info))
+        {
+            name = info.Name;
+            parentId = info.ParentId;
+            group = info.Group;
+            return true;
+        }
+        name = null;
+        parentId = 0;
+        group = null;
+        return false;
     }
 
     /// <summary>
@@ -188,6 +206,17 @@ public static class PacketLineFormatter
     // the packet. Reference-equality compared in callers so an actual DNS response
     // that happens to render as the same characters won't collide.
     internal static readonly string FilteredByPredicate = "\0__pspkt_app_predicate_filtered__\0";
+
+    // Text-box (Analysis) mode. When true the component prefix omits the component
+    // name (shown in the Details box instead), producing the compact scrolling line
+    // used by the BoxyBox Text Box. Global toggle; reset at capture teardown.
+    private static bool _textBoxMode = false;
+
+    /// <summary>Enables/disables text-box (Analysis) formatting of the component prefix.</summary>
+    public static void SetTextBoxMode(bool enabled)
+    {
+        _textBoxMode = enabled;
+    }
 
     /// <summary>
     /// Configures display-level filtering for ICMP/ICMPv6 packets. pktmon driver filters
@@ -1109,20 +1138,20 @@ public static class PacketLineFormatter
         sb.Append(": ");
         PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
         sb.Append('\n');
-        sb.Append(_indent1);
+        sb.Append(_detailIndent);
         PacketFormatter.AppendColorized(sb, networkDetail, 2, lineCounter);
 
         if (transportDetail != null)
         {
             sb.Append('\n');
-            sb.Append(_indent2);
+            sb.Append(_detailIndent);
             PacketFormatter.AppendColorized(sb, transportDetail, transportLayerIndex, lineCounter);
         }
 
         if (appDetail != null)
         {
             sb.Append('\n');
-            sb.Append(_indent3);
+            sb.Append(_detailIndent);
             PacketFormatter.AppendColorized(sb, appDetail, 4, lineCounter);
         }
 
@@ -1148,12 +1177,25 @@ public static class PacketLineFormatter
             parentId = info.ParentId;
         }
 
-        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection);
+        // In text-box (Analysis) mode the component name is omitted from the scrolling
+        // line — it's shown in the Details box instead — so the prefix is the compact
+        // "GGG:CCC[dir edge]" form. See BoxyBox TUI spec.
+        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection, !_textBoxMode);
     }
 
     private static string FormatDataLinkInternal(int linkKind, string srcMac, string dstMac, int etherType, int rawLen)
     {
         if (linkKind == 0) return null;
+
+        // Analysis Text Box uses the Minimal-level data link representation ("Eth" / "802.11")
+        // instead of the full "src > dst, type X, len N" form, keeping each scrolling line
+        // compact. The full MAC/type/length breakdown is available in the Details box.
+        if (_textBoxMode)
+        {
+            if (linkKind == 1) return "Eth";
+            if (linkKind == 2) return "802.11";
+            return null;
+        }
 
         string src = srcMac ?? "??-??-??-??-??-??";
         string dst = dstMac ?? "??-??-??-??-??-??";
@@ -1766,7 +1808,7 @@ public static class PacketLineFormatter
             if (_dnsCtxCacheValid)
             {
                 _dnsCtxCacheValid = false;
-                return DnsParser.FormatDnsFromContext(ref _dnsCtxCache, data.Length);
+                return DnsParser.FormatDnsFromContext(ref _dnsCtxCache, true);
             }
 
             // IPv6 path (or any other case where the early gate didn't run): evaluate
@@ -1778,14 +1820,14 @@ public static class PacketLineFormatter
                 if (DnsParser.TryParseDns(data, srcPort, dstPort, out dctx))
                 {
                     if (!_dnsPredicate.Evaluate(ref dctx)) return FilteredByPredicate;
-                    return DnsParser.FormatDnsFromContext(ref dctx, data.Length);
+                    return DnsParser.FormatDnsFromContext(ref dctx, true);
                 }
                 if (!_dnsPredicate.MatchTruncated) return FilteredByPredicate;
                 // MatchTruncated=true with an unparseable packet falls through to the
                 // best-effort formatter below; it will likely return null too.
             }
 
-            return DnsParser.FormatDnsSegment(data, srcPort, dstPort);
+            return DnsParser.FormatDnsSegment(data, srcPort, dstPort, true);
         }
 
         if (srcPort == 67 || srcPort == 68 || dstPort == 67 || dstPort == 68 ||
@@ -2082,6 +2124,125 @@ public static class PacketLineFormatter
         return new BatchResult
         {
             Output = sb.Length > 0 ? sb.ToString() : null,
+            PacketCount = count,
+            DroppedCount = droppedCount,
+            LineCounter = lineCounter,
+            TriggerAction = triggerAction
+        };
+    }
+
+    /// <summary>
+    /// Result from FormatBatchToLines: one formatted string per emitted packet plus stats.
+    /// Used by the BoxyBox Analysis consumer loop, which feeds each line into a scrolling
+    /// text box rather than writing a single concatenated blob to the console.
+    /// </summary>
+    public class BatchLinesResult
+    {
+        public System.Collections.Generic.List<string> Lines;
+        public int PacketCount;
+        public int DroppedCount;
+        public int LineCounter;
+        /// <summary>0 = no trigger, 1 = pause triggered, 2 = stop triggered.</summary>
+        public int TriggerAction;
+    }
+
+    /// <summary>
+    /// Line-oriented variant of <see cref="FormatBatch"/>: formats each emitted packet into
+    /// its own string (no trailing newline) and returns them as a list, so the caller can
+    /// push them into a scrolling TUI text box. Parsing, predicate rejection, drop counting,
+    /// and drop-trigger handling behave identically to FormatBatch.
+    /// </summary>
+    public static BatchLinesResult FormatBatchToLines(PSPacketData[] buffer, int count, int startLineCounter)
+    {
+        return FormatBatchToLines(buffer, count, startLineCounter, 0, null);
+    }
+
+    /// <summary>
+    /// Store-aware overload: in addition to formatting, copies each emitted packet's raw bytes
+    /// into <paramref name="store"/> keyed by <paramref name="startSeq"/> + emitted-index, so
+    /// the Analysis Details box can reparse a selected packet on demand. The emit order matches
+    /// the order lines are returned (and therefore the order the caller appends them to the
+    /// TextBox), keeping sequence numbers aligned.
+    /// </summary>
+    public static BatchLinesResult FormatBatchToLines(PSPacketData[] buffer, int count, int startLineCounter, long startSeq, PacketDetailStore store)
+    {
+        if (buffer == null || count <= 0) return null;
+
+        var lines = new System.Collections.Generic.List<string>(count);
+        int lineCounter = startLineCounter;
+        int droppedCount = 0;
+        int triggerAction = 0;
+        long emitSeq = startSeq;
+        bool checkTriggers = _stopOnDrop || _pauseOnDrop ||
+                             _stopOnReason != 0 || _stopOnLocation != 0 ||
+                             _pauseOnReason != 0 || _pauseOnLocation != 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            // Per-packet scratch so each emitted packet becomes its own list entry.
+            var scratch = Scratch();
+            int tentativeCounter = lineCounter + 1;
+            bool emitted = FormatSinglePacketInto(scratch, ref buffer[i], tentativeCounter);
+            if (emitted)
+            {
+                lineCounter = tentativeCounter;
+                lines.Add(scratch.ToString());
+            }
+
+            // Walk metadata once for seen-component tracking + drop counting/triggers, and
+            // to source the compId/edge/direction for the detail store.
+            int metaOffset = (int)buffer[i].MetadataOffset;
+            byte[] mdata = buffer[i].Data;
+            int mCompId = 0, mEdgeId = 0, mDirection = 0;
+            if (mdata != null && (int)buffer[i].DataSize >= metaOffset + 30)
+            {
+                mCompId = mdata[metaOffset + 16] | (mdata[metaOffset + 17] << 8);
+                mEdgeId = mdata[metaOffset + 18] | (mdata[metaOffset + 19] << 8);
+                mDirection = mdata[metaOffset + 12] | (mdata[metaOffset + 13] << 8);
+                if (mCompId != 0) PktMonApi.NoteComponentId(mCompId);
+
+                int dropReason = (int)BitConverter.ToUInt32(mdata, metaOffset + 22);
+                if (dropReason != 0)
+                {
+                    droppedCount++;
+                    if (checkTriggers)
+                    {
+                        int dropLocation = (int)BitConverter.ToUInt32(mdata, metaOffset + 26);
+                        if (_stopOnDrop ||
+                            (_stopOnReason != 0 && dropReason == _stopOnReason) ||
+                            (_stopOnLocation != 0 && dropLocation == _stopOnLocation))
+                        {
+                            triggerAction = 2;
+                            // still store this packet's bytes below before breaking
+                            if (emitted && store != null)
+                            {
+                                store.Store(emitSeq, buffer[i].Data, (int)buffer[i].DataSize, (int)buffer[i].MetadataOffset, (int)buffer[i].PacketOffset, (int)buffer[i].PacketLength, buffer[i].QpcTimestamp, mCompId, mEdgeId, mDirection);
+                                emitSeq++;
+                            }
+                            break;
+                        }
+                        if (triggerAction == 0 &&
+                            (_pauseOnDrop ||
+                             (_pauseOnReason != 0 && dropReason == _pauseOnReason) ||
+                             (_pauseOnLocation != 0 && dropLocation == _pauseOnLocation)))
+                        {
+                            triggerAction = 1;
+                        }
+                    }
+                }
+            }
+
+            // Retain the emitted packet's raw bytes for just-in-time detailed parsing.
+            if (emitted && store != null)
+            {
+                store.Store(emitSeq, buffer[i].Data, (int)buffer[i].DataSize, (int)buffer[i].MetadataOffset, (int)buffer[i].PacketOffset, (int)buffer[i].PacketLength, buffer[i].QpcTimestamp, mCompId, mEdgeId, mDirection);
+                emitSeq++;
+            }
+        }
+
+        return new BatchLinesResult
+        {
+            Lines = lines,
             PacketCount = count,
             DroppedCount = droppedCount,
             LineCounter = lineCounter,

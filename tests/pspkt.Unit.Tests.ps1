@@ -560,9 +560,80 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         It 'DnsParser.FormatDnsFromContext produces the same line as FormatDnsSegment' {
             $ctx = [DnsContext]::new()
             $null = [DnsParser]::TryParseDns($script:dnsQueryExampleA, 53, 12345, [ref]$ctx)
-            $a = [DnsParser]::FormatDnsFromContext([ref]$ctx, $script:dnsQueryExampleA.Length)
+            $a = [DnsParser]::FormatDnsFromContext([ref]$ctx, $false)   # Default separator
             $b = [DnsParser]::FormatDnsSegment($script:dnsQueryExampleA, 53, 12345)
             $a | Should -Be $b
+            $a | Should -Be 'DNS: 0x1234 0/0/0 example.com. A'
+        }
+        It 'DnsParser.FormatDnsFromContext uses the DNS - separator when detailed' {
+            $ctx = [DnsContext]::new()
+            $null = [DnsParser]::TryParseDns($script:dnsQueryExampleA, 53, 12345, [ref]$ctx)
+            [DnsParser]::FormatDnsFromContext([ref]$ctx, $true) | Should -Be 'DNS - 0x1234 0/0/0 example.com. A'
+        }
+
+        Context 'DnsParser.BuildDnsDetailTree (Analysis Details)' {
+            BeforeAll {
+                # Response: txid 0x1234, flags 0x8180 (response, RD, RA), qd=1 an=1 ns=0 ar=1(OPT).
+                $b = [System.Collections.Generic.List[byte]]::new()
+                $b.AddRange([byte[]](0x12,0x34, 0x81,0x80, 0,1, 0,1, 0,0, 0,1))
+                $b.Add(7); 'example'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+                $b.Add(3); 'com'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+                $b.Add(0); $b.AddRange([byte[]](0,1, 0,1))
+                $b.AddRange([byte[]](0xc0,0x0c, 0,1, 0,1, 0,0,0,60, 0,4, 93,184,216,34))   # A answer
+                $b.AddRange([byte[]](0, 0,41, 0x10,0x00, 0x00,0x00,0x80,0x00, 0,0))         # OPT, DO set
+                $script:dnsResp = [byte[]]$b.ToArray()
+            }
+            It 'root uses the Detailed one-liner as its collapsed text' {
+                $roots = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)
+                $roots.Count | Should -Be 1
+                $roots[0].Key | Should -Be 'DNS'
+                $roots[0].Text | Should -Be 'DNS - 0x1234 1/0/1 example.com. A 93.184.216.34'
+            }
+            It 'includes Transaction ID, RR Count, Flags, Queries, Answers and Additional sections' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                ($dns.Children | Where-Object { $_.Text -eq 'Transaction ID: 0x1234' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Text -eq 'RR Count - Qry: 1, Ans: 1, Auth: 0, Adtl: 1' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Key -eq 'DNS.Flags' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Key -eq 'DNS.Queries' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Key -eq 'DNS.Answers' }).Count | Should -Be 1
+                ($dns.Children | Where-Object { $_.Key -eq 'DNS.Additional' }).Count | Should -Be 1
+            }
+            It 'renders the response flag bit-breakdown with actual bit values' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                $flags = $dns.Children | Where-Object { $_.Key -eq 'DNS.Flags' }
+                $flags.Text | Should -Be 'Flags: 0x8180 Query response, No error'
+                $flags.IsExpanded | Should -BeFalse   # verbose section collapsed by default
+                ($flags.Children | Where-Object { $_.Text -eq '1... .... .... .... = Response: Response' }).Count | Should -Be 1
+                ($flags.Children | Where-Object { $_.Text -eq '.... ...1 .... .... = Recursion desired: Do query recursively' }).Count | Should -Be 1
+                ($flags.Children | Where-Object { $_.Text -eq '.... .... .... 0000 = Reply code: No error (0)' }).Count | Should -Be 1
+            }
+            It 'parses the A answer record (Name/Type/Class/TTL/Address)' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                $ans = ($dns.Children | Where-Object { $_.Key -eq 'DNS.Answers' }).Children[0]
+                $ans.Text | Should -Be 'example.com.: type A, class IN, 93.184.216.34'
+                ($ans.Children | Where-Object { $_.Text -eq 'Type: A (1)' }).Count | Should -Be 1
+                ($ans.Children | Where-Object { $_.Text -eq 'Class: IN (0x0001)' }).Count | Should -Be 1
+                ($ans.Children | Where-Object { $_.Text -eq 'Time to live: 60' }).Count | Should -Be 1
+                ($ans.Children | Where-Object { $_.Text -eq 'Address: 93.184.216.34' }).Count | Should -Be 1
+            }
+            It 'defaults to expanded sections with collapsed RR one-liners' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                $dns.IsExpanded | Should -BeTrue
+                $queries = $dns.Children | Where-Object { $_.Key -eq 'DNS.Queries' }
+                $answers = $dns.Children | Where-Object { $_.Key -eq 'DNS.Answers' }
+                $queries.IsExpanded | Should -BeTrue                  # section expanded
+                $answers.IsExpanded | Should -BeTrue
+                $queries.Children[0].IsExpanded | Should -BeFalse     # RR one-liner collapsed
+                $answers.Children[0].IsExpanded | Should -BeFalse
+            }
+            It 'parses the EDNS0 OPT record with the DO bit set' {
+                $dns = [DnsParser]::BuildDnsDetailTree($script:dnsResp, $script:dnsResp.Length, 53, 40000)[0]
+                $opt = ($dns.Children | Where-Object { $_.Key -eq 'DNS.Additional' }).Children[0]
+                $opt.Text | Should -Be '<Root>: type OPT'
+                ($opt.Children | Where-Object { $_.Text -eq 'UDP payload size: 4096' }).Count | Should -Be 1
+                $z = $opt.Children | Where-Object { $_.Text -like 'Z: 0x*' }
+                ($z.Children | Where-Object { $_.Text -eq '1... .... .... .... = DO bit: Accepts DNSSEC security RRs' }).Count | Should -Be 1
+            }
         }
 
         It 'DnsAppPredicate QNameRegex matches example.com query A' {
@@ -2199,6 +2270,766 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $macs = @()
             $out = & $script:vmMod $script:expand $filters $macs
             $out.Count | Should -Be 0
+        }
+    }
+}
+
+Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
+    BeforeAll {
+        $script:modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+        Import-Module $script:modulePath -Force -ErrorAction Stop
+        $script:ESC = [char]27
+    }
+
+    AfterAll {
+        Remove-Module pspkt -Force -ErrorAction SilentlyContinue
+    }
+
+    Context 'TextJustify.Fit (plain text)' {
+        It 'pads left-justified text to the right' {
+            [BoxyBox.TextJustify]::Fit('abc', 6, [BoxyBox.Justify]::Left) | Should -Be 'abc   '
+        }
+        It 'pads right-justified text to the left' {
+            [BoxyBox.TextJustify]::Fit('abc', 6, [BoxyBox.Justify]::Right) | Should -Be '   abc'
+        }
+        It 'returns text unchanged when it exactly fits' {
+            [BoxyBox.TextJustify]::Fit('abcdef', 6, [BoxyBox.Justify]::Left) | Should -Be 'abcdef'
+        }
+        It 'truncates the tail of left-justified overflow with an ellipsis' {
+            [BoxyBox.TextJustify]::Fit('abcdefghij', 6, [BoxyBox.Justify]::Left) | Should -Be 'abc...'
+        }
+        It 'truncates the head of right-justified overflow with an ellipsis' {
+            [BoxyBox.TextJustify]::Fit('abcdefghij', 6, [BoxyBox.Justify]::Right) | Should -Be '...hij'
+        }
+        It 'hard-slices when width is too small for the ellipsis (left)' {
+            [BoxyBox.TextJustify]::Fit('abcdef', 2, [BoxyBox.Justify]::Left) | Should -Be 'ab'
+        }
+        It 'hard-slices when width is too small for the ellipsis (right)' {
+            [BoxyBox.TextJustify]::Fit('abcdef', 2, [BoxyBox.Justify]::Right) | Should -Be 'ef'
+        }
+        It 'returns empty string for non-positive width' {
+            [BoxyBox.TextJustify]::Fit('abc', 0, [BoxyBox.Justify]::Left) | Should -Be ''
+        }
+        It 'treats null text as empty' {
+            [BoxyBox.TextJustify]::Fit($null, 3, [BoxyBox.Justify]::Left) | Should -Be '   '
+        }
+    }
+
+    Context 'AnsiText helpers' {
+        BeforeAll {
+            $script:colored = "$($script:ESC)[31mRED$($script:ESC)[0m"
+        }
+        It 'VisibleLength ignores SGR escape sequences' {
+            [BoxyBox.AnsiText]::VisibleLength($script:colored) | Should -Be 3
+        }
+        It 'VisibleLength returns 0 for null/empty' {
+            [BoxyBox.AnsiText]::VisibleLength($null) | Should -Be 0
+            [BoxyBox.AnsiText]::VisibleLength('') | Should -Be 0
+        }
+        It 'ContainsAnsi detects escape sequences' {
+            [BoxyBox.AnsiText]::ContainsAnsi($script:colored) | Should -BeTrue
+            [BoxyBox.AnsiText]::ContainsAnsi('plain') | Should -BeFalse
+        }
+        It 'TakeVisiblePrefix keeps N visible columns and appends a reset' {
+            $p = [BoxyBox.AnsiText]::TakeVisiblePrefix($script:colored, 2)
+            [BoxyBox.AnsiText]::VisibleLength($p) | Should -Be 2
+            $p.EndsWith("$($script:ESC)[0m") | Should -BeTrue
+        }
+    }
+
+    Context 'TextJustify.Fit (ANSI-aware)' {
+        BeforeAll {
+            $script:colored = "$($script:ESC)[31mRED$($script:ESC)[0m"
+        }
+        It 'pads by visible length, not raw string length' {
+            $fit = [BoxyBox.TextJustify]::Fit($script:colored, 6, [BoxyBox.Justify]::Left)
+            [BoxyBox.AnsiText]::VisibleLength($fit) | Should -Be 6
+        }
+    }
+
+    Context 'Box.Render' {
+        BeforeAll {
+            $script:box = [BoxyBox.Box]::new(20, 5)
+            $script:box.MenuOptions = [System.Collections.Generic.List[string]]@('(F)ocus', '(S)top')
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add('hello')
+            $script:rendered = $script:box.Render($lines)
+        }
+        It 'produces Height rows' {
+            $script:rendered.Count | Should -Be 5
+        }
+        It 'first row is the top border with corners' {
+            [int]$script:rendered[0][0]  | Should -Be ([int][char]0x250c)   # top-left
+            [int]$script:rendered[0][-1] | Should -Be ([int][char]0x2510)   # top-right
+        }
+        It 'every row is exactly Width visible columns' {
+            foreach ($row in $script:rendered) {
+                [BoxyBox.AnsiText]::VisibleLength($row) | Should -Be 20
+            }
+        }
+        It 'content row contains the text padded within side borders' {
+            $script:rendered[1] | Should -Be ("$([char]0x2502)hello             $([char]0x2502)")
+        }
+        It 'unused content rows are blank' {
+            $script:rendered[2] | Should -Be ("$([char]0x2502)                  $([char]0x2502)")
+        }
+        It 'last row is the menu bar with the terminal left cap' {
+            [int]$script:rendered[4][0] | Should -Be ([int][char]0x2558)
+        }
+        It 'right-justified box anchors content to the right' {
+            $rbox = [BoxyBox.Box]::new(20, 3)
+            $rbox.Justification = [BoxyBox.Justify]::Right
+            $rlines = [System.Collections.Generic.List[string]]::new()
+            $rlines.Add('end')
+            $rr = $rbox.Render($rlines)
+            $rr[1] | Should -Be ("$([char]0x2502)               end$([char]0x2502)")
+        }
+    }
+
+    Context 'ScreenRegion.BuildFrame' {
+        BeforeAll {
+            $box = [BoxyBox.Box]::new(20, 5)
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add('x')
+            $script:rendered = $box.Render($lines)
+            $region = [BoxyBox.ScreenRegion]::new(1, 1, 20, 5)
+            $script:frame = $region.BuildFrame($script:rendered)
+        }
+        It 'emits no newline (so the console does not scroll)' {
+            $script:frame.Contains("`n") | Should -BeFalse
+        }
+        It 'positions the cursor absolutely for the first row' {
+            $script:frame.Contains("$($script:ESC)[1;1H") | Should -BeTrue
+        }
+        It 'clears each line before writing' {
+            $script:frame.Contains("$($script:ESC)[2K") | Should -BeTrue
+        }
+        It 'cursor hide/show/clear helpers emit expected sequences' {
+            [BoxyBox.ScreenRegion]::HideCursor()  | Should -Be "$($script:ESC)[?25l"
+            [BoxyBox.ScreenRegion]::ShowCursor()  | Should -Be "$($script:ESC)[?25h"
+            [BoxyBox.ScreenRegion]::ClearScreen() | Should -Be "$($script:ESC)[2J$($script:ESC)[H"
+        }
+    }
+
+    Context 'MenuBar.Build' {
+        It 'fills to the requested width with the double rule' {
+            $opts = [System.Collections.Generic.List[string]]@('(R)esume')
+            $bar = [BoxyBox.MenuBar]::Build($opts, 30, [BoxyBox.MenuBar+Cap]::Terminal)
+            [BoxyBox.AnsiText]::VisibleLength($bar) | Should -Be 30
+            [int]$bar[0]  | Should -Be ([int][char]0x2558)  # ╘
+            [int]$bar[-1] | Should -Be ([int][char]0x255b)  # ╛
+        }
+        It 'uses mid caps for the divider style' {
+            $bar = [BoxyBox.MenuBar]::Build([System.Collections.Generic.List[string]]::new(), 10, [BoxyBox.MenuBar+Cap]::Mid)
+            [int]$bar[0]  | Should -Be ([int][char]0x255e)  # ╞
+            [int]$bar[-1] | Should -Be ([int][char]0x2561)  # ╡
+        }
+        It 'drops options that would overflow the width' {
+            $opts = [System.Collections.Generic.List[string]]@('AAAAAAAA', 'BBBBBBBB', 'CCCCCCCC')
+            $bar = [BoxyBox.MenuBar]::Build($opts, 16, [BoxyBox.MenuBar+Cap]::Terminal)
+            [BoxyBox.AnsiText]::VisibleLength($bar) | Should -Be 16
+            # 16 wide: 2 caps + 14 inner. "══AAAAAAAA" = 10 fits; adding "══BBBBBBBB" (10) => 20 > 14, dropped.
+            $bar.Contains('AAAAAAAA') | Should -BeTrue
+            $bar.Contains('BBBBBBBB') | Should -BeFalse
+        }
+    }
+
+    Context 'TextBox (scrolling buffer)' {
+        It 'reports ContentRows as Height minus borders/menu' {
+            $tb = [BoxyBox.TextBox]::new(40, 6, 1000)
+            $tb.ContentRows | Should -Be 4
+        }
+        It 'RenderTail shows the most recent ContentRows lines anchored at the bottom' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 1000)   # 3 content rows
+            1..10 | ForEach-Object { $tb.Append("line $_") }
+            $frame = $tb.RenderTail()
+            # content rows are indices 1..3; newest (line 10) is the last content row
+            $frame[1].Contains('line 8')  | Should -BeTrue
+            $frame[2].Contains('line 9')  | Should -BeTrue
+            $frame[3].Contains('line 10') | Should -BeTrue
+        }
+        It 'pads the top when fewer lines than ContentRows are present' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 1000)   # 3 content rows
+            $tb.Append('only')
+            $frame = $tb.RenderTail()
+            # newest anchored to bottom content row; upper rows blank
+            $frame[1] | Should -Be ("$([char]0x2502)                  $([char]0x2502)")
+            $frame[3].Contains('only') | Should -BeTrue
+        }
+        It 'bounds the buffer to roughly capacity, trimming oldest lines' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 100)
+            1..300 | ForEach-Object { $tb.Append("L$_") }
+            $tb.LineCount | Should -BeLessOrEqual 150   # capacity + slack margin
+            $tb.LineCount | Should -BeGreaterOrEqual 100
+            # oldest lines were trimmed; L1 is gone
+            $tb.GetLine(0) | Should -Not -Be 'L1'
+        }
+        It 'GetLine returns null for out-of-range indices' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 100)
+            $tb.Append('x')
+            $tb.GetLine(-1) | Should -BeNullOrEmpty
+            $tb.GetLine(99) | Should -BeNullOrEmpty
+        }
+        It 'RenderFrom anchors a given index at the first content row' {
+            $tb = [BoxyBox.TextBox]::new(20, 5, 1000)   # 3 content rows
+            1..10 | ForEach-Object { $tb.Append("L$_") }
+            $frame = $tb.RenderFrom(2)   # 0-based; L3, L4, L5
+            $frame[1].Contains('L3') | Should -BeTrue
+            $frame[2].Contains('L4') | Should -BeTrue
+            $frame[3].Contains('L5') | Should -BeTrue
+        }
+        It 'AppendRange adds a batch of lines' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 1000)
+            $tb.AppendRange([System.Collections.Generic.List[string]]@('a','b','c'))
+            $tb.LineCount | Should -Be 3
+        }
+    }
+
+    Context 'TextBox focus mode (sequence tracking + highlight)' {
+        BeforeAll {
+            $script:ESC = [char]27
+            $script:hlOn  = "$($script:ESC)[7m"
+            $script:hlOff = "$($script:ESC)[0m"
+        }
+        It 'tracks BaseSeq and TotalSeq across appends' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 1000)
+            $tb.BaseSeq | Should -Be 0
+            1..5 | ForEach-Object { $tb.Append("L$_") }
+            $tb.BaseSeq | Should -Be 0
+            $tb.TotalSeq | Should -Be 5
+        }
+        It 'advances BaseSeq when the buffer trims, keeping GetLineBySeq stable' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 100)
+            1..300 | ForEach-Object { $tb.Append("L$_") }
+            # BaseSeq advanced by the number of trimmed lines
+            $tb.BaseSeq | Should -BeGreaterThan 0
+            # A sequence number still in range resolves to the correct line
+            $seq = $tb.TotalSeq - 1
+            $tb.GetLineBySeq($seq) | Should -Be 'L300'
+        }
+        It 'GetLineBySeq returns null for trimmed or future sequences' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 100)
+            1..300 | ForEach-Object { $tb.Append("L$_") }
+            $tb.GetLineBySeq(0) | Should -BeNullOrEmpty          # trimmed
+            $tb.GetLineBySeq($tb.TotalSeq) | Should -BeNullOrEmpty  # future
+        }
+        It 'ClampSeq keeps a sequence within the retained range' {
+            $tb = [BoxyBox.TextBox]::new(20, 6, 1000)
+            1..10 | ForEach-Object { $tb.Append("L$_") }
+            $tb.ClampSeq(-100) | Should -Be $tb.BaseSeq
+            $tb.ClampSeq(100000) | Should -Be ($tb.TotalSeq - 1)
+        }
+        It 'RenderWindow highlights the selected line with the supplied sequences' {
+            $tb = [BoxyBox.TextBox]::new(30, 6, 1000)   # 4 content rows
+            1..10 | ForEach-Object { $tb.Append("L$_") }
+            $frame = $tb.RenderWindow(3, 5, $script:hlOn, $script:hlOff)  # top L4, selected L6
+            # content rows: index 1=L4, 2=L5, 3=L6, 4=L7
+            $frame[1].Contains($script:hlOn) | Should -BeFalse
+            $frame[3].Contains($script:hlOn) | Should -BeTrue   # L6 highlighted
+            $frame[3].Contains('L6') | Should -BeTrue
+        }
+        It 'RenderWindow leaves the selection unhighlighted when it is off-screen' {
+            $tb = [BoxyBox.TextBox]::new(30, 6, 1000)
+            1..10 | ForEach-Object { $tb.Append("L$_") }
+            $frame = $tb.RenderWindow(0, 9, $script:hlOn, $script:hlOff)  # selected below window
+            for ($i = 1; $i -le 4; $i++) { $frame[$i].Contains($script:hlOn) | Should -BeFalse }
+        }
+    }
+
+    Context 'AnsiText.StripAnsi' {
+        BeforeAll { $script:ESC = [char]27 }
+        It 'removes SGR sequences leaving plain text' {
+            $colored = "$($script:ESC)[31mRED$($script:ESC)[0m"
+            [BoxyBox.AnsiText]::StripAnsi($colored) | Should -Be 'RED'
+        }
+        It 'returns plain text unchanged' {
+            [BoxyBox.AnsiText]::StripAnsi('plain') | Should -Be 'plain'
+        }
+        It 'handles null/empty' {
+            [BoxyBox.AnsiText]::StripAnsi($null) | Should -Be ''
+            [BoxyBox.AnsiText]::StripAnsi('') | Should -Be ''
+        }
+    }
+
+    Context 'AnsiText.ApplyBackground' {
+        BeforeAll { $script:ESC = [char]27 }
+        It 'wraps text in a background sequence and preserves inner foreground colors' {
+            $colored = "$($script:ESC)[36mIPv4$($script:ESC)[0m rest"
+            $bg = "$($script:ESC)[44m"; $reset = "$($script:ESC)[0m"
+            $out = [BoxyBox.AnsiText]::ApplyBackground($colored, $bg, $reset)
+            $out.StartsWith($bg) | Should -BeTrue
+            $out.Contains("$($script:ESC)[36m") | Should -BeTrue
+            # background re-applied after every inner reset so it spans the whole string
+            $out.Contains("$reset$bg") | Should -BeTrue
+        }
+        It 'handles null/empty by returning empty' {
+            $bg = "$($script:ESC)[44m"; $reset = "$($script:ESC)[0m"
+            [BoxyBox.AnsiText]::ApplyBackground($null, $bg, $reset) | Should -Be ''
+            [BoxyBox.AnsiText]::ApplyBackground('', $bg, $reset) | Should -Be ''
+        }
+    }
+
+    Context 'Box top-border toggle (seamless merge)' {
+        It 'omits the top border and reduces ContentRows by one when ShowTopBorder is false' {
+            $box = [BoxyBox.Box]::new(30, 5)
+            $box.ContentRows | Should -Be 3   # Height - top border - menu bar
+            $box.ShowTopBorder = $false
+            $box.ContentRows | Should -Be 4   # top border reclaimed as a content row
+            $lines = [System.Collections.Generic.List[string]]@('a', 'b', 'c', 'd')
+            $frame = $box.Render($lines)
+            # first rendered row is content, not a top border corner
+            $frame[0][0] | Should -Not -Be ([char]0x250C)
+        }
+        It 'DetailsBox exposes a 3-arg constructor that suppresses the top border' {
+            $db = [BoxyBox.DetailsBox]::new(40, 6, $false)
+            $db.Box.ShowTopBorder | Should -BeFalse
+            $db2 = [BoxyBox.DetailsBox]::new(40, 6)
+            $db2.Box.ShowTopBorder | Should -BeTrue
+        }
+        It 'Box.Resize updates dimensions in place, clamps, and preserves menu/border state' {
+            $box = [BoxyBox.Box]::new(40, 10)
+            $box.ShowTopBorder = $false
+            $box.MenuOptions = [System.Collections.Generic.List[string]]@('x')
+            $box.Resize(80, 6)
+            $box.Width  | Should -Be 80
+            $box.Height | Should -Be 6
+            $box.ContentRows | Should -Be 5           # 6 - menu (no top border)
+            $box.ShowTopBorder | Should -BeFalse      # preserved
+            $box.MenuOptions.Count | Should -Be 1     # preserved
+            $box.Resize(1, 1)                          # below minimum
+            $box.Width  | Should -BeGreaterOrEqual 2
+            $box.Height | Should -BeGreaterOrEqual 2
+        }
+        It 'DetailsBox.Resize preserves the tree and re-fits the viewport height' {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $ip = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
+            $null = $ip.AddLeaf('Src'); $null = $ip.AddLeaf('Dst')
+            $null = $roots.Add($ip)
+            $db = [BoxyBox.DetailsBox]::new(40, 10, $false)
+            $db.SetTree($roots)
+            $before = $db.RowCount
+            $db.Resize(90, 5)
+            $db.Box.Width | Should -Be 90
+            $db.RowCount  | Should -Be $before        # tree preserved
+            $db.ContentRows | Should -Be 4            # height 5, no top border
+        }
+    }
+
+    Context 'Box highlighted render' {
+        BeforeAll { $script:ESC = [char]27 }
+        It 'wraps the selected row with a highlight background and preserves its foreground color' {
+            $box = [BoxyBox.Box]::new(20, 5)
+            $lines = [System.Collections.Generic.List[string]]@("$($script:ESC)[31msel$($script:ESC)[0m", 'plain')
+            $on = "$($script:ESC)[44m"; $off = "$($script:ESC)[0m"
+            $frame = $box.Render($lines, 0, $on, $off)
+            # selected row (content index 0 => frame[1]) has the highlight background
+            $frame[1].Contains($on) | Should -BeTrue
+            # foreground color is preserved under the highlight (no longer stripped)
+            $frame[1].Contains("$($script:ESC)[31m") | Should -BeTrue
+            # background is re-applied after the inner reset so it spans the whole row
+            $frame[1].Contains("$off$on") | Should -BeTrue
+            # non-selected row unaffected
+            $frame[2].Contains($on) | Should -BeFalse
+        }
+    }
+
+    Context 'PacketLineFormatter text-box mode' {
+        AfterEach {
+            [PacketLineFormatter]::SetTextBoxMode($false)
+        }
+        It 'FormatBatchToLines and SetTextBoxMode exist' {
+            $methods = [PacketLineFormatter].GetMethods() | Where-Object { $_.Name -eq 'FormatBatchToLines' }
+            $methods.Count | Should -BeGreaterOrEqual 1
+            [PacketLineFormatter].GetMethod('SetTextBoxMode') | Should -Not -BeNullOrEmpty
+        }
+        It 'component prefix includes the name in full mode and omits it in text-box mode' {
+            $full = [PacketFormatter]::FormatComponentPrefix(0, 9, 'NetVsc', 0, 1, 1, $true)
+            $compact = [PacketFormatter]::FormatComponentPrefix(0, 9, 'NetVsc', 0, 1, 1, $false)
+            $full.Contains('NetVsc') | Should -BeTrue
+            $compact.Contains('NetVsc') | Should -BeFalse
+            # both share the "GGG:CCC[arrows]" head
+            $compact.Contains('000:009') | Should -BeTrue
+            $compact.Contains('[') | Should -BeTrue
+        }
+        It 'renders the data link at Minimal level (Eth:) in text-box mode but full form otherwise' {
+            # Eth(14) + IPv4/UDP header is enough for the Default line's data link segment.
+            $pkt = [byte[]]@(
+                0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00,
+                0x45,0,0,0x3c,0x8b,0xee,0x40,0,0x40,0x11,0,0,
+                10,24,0,72, 1,1,1,1,
+                0xc5,0x1b,0,0x35,0,8,0,0)
+
+            [PacketLineFormatter]::SetTextBoxMode($true)
+            $sbTb = [System.Text.StringBuilder]::new()
+            $null = [PacketLineFormatter]::FormatDefaultLineInto($sbTb, 0, 0, 9, 1, 0, 0,
+                1, '22-22-22-22-22-22', '11-11-11-11-11-11', 0x0800, 34,
+                3, '10.24.0.72', '1.1.1.1', 50651, 53, 0, [uint32]0, [uint32]0, [uint16]0, 0,
+                0, 0, 0, 0, $null, $pkt, 0, $pkt.Length)
+            $tb = [BoxyBox.AnsiText]::StripAnsi($sbTb.ToString())
+            $tb.Contains('Eth:') | Should -BeTrue
+            $tb.Contains('22-22-22-22-22-22') | Should -BeFalse
+
+            [PacketLineFormatter]::SetTextBoxMode($false)
+            $sbFull = [System.Text.StringBuilder]::new()
+            $null = [PacketLineFormatter]::FormatDefaultLineInto($sbFull, 0, 0, 9, 1, 0, 0,
+                1, '22-22-22-22-22-22', '11-11-11-11-11-11', 0x0800, 34,
+                3, '10.24.0.72', '1.1.1.1', 50651, 53, 0, [uint32]0, [uint32]0, [uint16]0, 0,
+                0, 0, 0, 0, $null, $pkt, 0, $pkt.Length)
+            $full = [BoxyBox.AnsiText]::StripAnsi($sbFull.ToString())
+            $full.Contains('22-22-22-22-22-22 > 11-11-11-11-11-11, type IPv4') | Should -BeTrue
+        }
+    }
+
+    Context 'PacketLineFormatter detailed output' {
+        AfterEach { Set-PspktDetailLevel -Level 0 }
+        It 'indents detail sub-lines with two spaces and no tree connector' {
+            Set-PspktDetailLevel -Level 1   # Detailed
+            # Descriptor: [metadata(40)][packet]. Packet = Eth(14)+IPv4(20)+UDP(8), src port 53.
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ipv4 = [byte[]]::new(20)
+            $ipv4[0]=0x45; $ipv4[8]=51; $ipv4[9]=17; $ipv4[3]=28
+            $ipv4[12]=1;$ipv4[13]=1;$ipv4[14]=1;$ipv4[15]=1
+            $ipv4[16]=10;$ipv4[17]=24;$ipv4[18]=0;$ipv4[19]=72
+            $udp = [byte[]](0,53, 0xC3,0x8C, 0,8, 0,0)
+            $packet = $eth + $ipv4 + $udp
+            $meta = [byte[]]::new(40)
+            $meta[12]=1; $meta[16]=172; $meta[18]=1
+            $data = $meta + $packet
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$packet.Length, [uint32]0, [uint32]0)
+            $res = [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0)
+            $out = [BoxyBox.AnsiText]::StripAnsi($res.Output)
+            $lines = $out.Split("`n") | Where-Object { $_.Length -gt 0 }
+            # First line is the component/data-link header; the network + transport sub-lines follow.
+            $ipLine  = $lines | Where-Object { $_.Contains('IPv4 - Src:') }
+            $udpLine = $lines | Where-Object { $_.Contains('UDP - Src:') }
+            $ipLine  | Should -Not -BeNullOrEmpty
+            $udpLine | Should -Not -BeNullOrEmpty
+            # Flat two-space indent, no U+2514 connector.
+            $ipLine.StartsWith('  IPv4')  | Should -BeTrue
+            $udpLine.StartsWith('  UDP')  | Should -BeTrue
+            $out.Contains([char]0x2514)   | Should -BeFalse
+        }
+    }
+
+    Context 'TreeNode + TreeFlattener' {
+        AfterEach { [BoxyBox.TreeFlattener]::UseConnectors = $false }
+        It 'flattens expandable nodes with +/- and plain two-space leaf indent by default' {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
+            $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
+            $null = $roots.Add($ipv4)
+            $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
+            $rows.Count | Should -Be 3
+            $rows[0].Display.TrimStart().StartsWith('-IPv4') | Should -BeTrue
+            # Default: no tree connectors; leaves use a plain two-space indent.
+            $rows[1].Display.Contains([char]0x251c) | Should -BeFalse   # no ├
+            $rows[2].Display.Contains([char]0x2514) | Should -BeFalse   # no └
+            [BoxyBox.AnsiText]::StripAnsi($rows[1].Display) | Should -Be '      Src'   # indent(4)+2 spaces
+            [BoxyBox.AnsiText]::StripAnsi($rows[2].Display) | Should -Be '      Dst'
+        }
+        It 'draws tree connectors when UseConnectors is enabled (opt-in)' {
+            [BoxyBox.TreeFlattener]::UseConnectors = $true
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
+            $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
+            $null = $roots.Add($ipv4)
+            $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
+            $rows[1].Display.Contains([char]0x251c) | Should -BeTrue    # ├ (mid child)
+            $rows[2].Display.Contains([char]0x2514) | Should -BeTrue    # └ (last child)
+        }
+        It 'collapsed nodes hide their children and show +' {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $eth = [BoxyBox.TreeNode]::new('Eth', 'Eth', $false)
+            $null = $eth.AddLeaf('x')
+            $null = $roots.Add($eth)
+            $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
+            $rows.Count | Should -Be 1
+            $rows[0].Display.TrimStart().StartsWith('+Eth') | Should -BeTrue
+        }
+        It 'FlattenAll includes children even when the node is collapsed' {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $eth = [BoxyBox.TreeNode]::new('Eth', 'Eth', $false)   # collapsed
+            $null = $eth.AddLeaf('x'); $null = $eth.AddLeaf('y')
+            $null = $roots.Add($eth)
+            # Flatten honors collapse (1 row); FlattenAll ignores it (3 rows) and shows '-'.
+            [BoxyBox.TreeFlattener]::Flatten($roots).Count | Should -Be 1
+            $all = [BoxyBox.TreeFlattener]::FlattenAll($roots)
+            $all.Count | Should -Be 3
+            $all[0].Display.TrimStart().StartsWith('-Eth') | Should -BeTrue
+        }
+    }
+
+    Context 'DetailsBox' {
+        BeforeAll {
+            $script:ESC = [char]27
+            $script:on = "$($script:ESC)[7m"; $script:off = "$($script:ESC)[0m"
+            function New-SampleTree {
+                $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+                $comp = [BoxyBox.TreeNode]::new('Component', 'Component', $false); $null = $comp.AddLeaf('c1')
+                $eth  = [BoxyBox.TreeNode]::new('Eth', 'Eth', $false); $null = $eth.AddLeaf('e1')
+                $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true); $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
+                $null = $roots.Add($comp); $null = $roots.Add($eth); $null = $roots.Add($ipv4)
+                return ,$roots
+            }
+        }
+        It 'shows Component/Eth collapsed and IPv4 expanded by default' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $db.RowCount | Should -Be 5   # Component(+) Eth(+) IPv4(-) Src Dst
+        }
+        It 'CollapseSelected hides children; ExpandSelected restores them' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $db.MoveDown(); $db.MoveDown()   # select IPv4
+            $db.SelectedIndex | Should -Be 2
+            $db.CollapseSelected()
+            $db.RowCount | Should -Be 3
+            $db.ExpandSelected()
+            $db.RowCount | Should -Be 5
+        }
+        It 'ExpandAll / CollapseAll toggle every node' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $db.ExpandAll()
+            $db.RowCount | Should -Be 7   # all three parents + their 4 leaves
+            $db.CollapseAll()
+            $db.RowCount | Should -Be 3   # three collapsed parents
+        }
+        It 'persists expand/collapse state by key across packets' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $db.MoveDown(); $db.MoveDown()   # IPv4
+            $db.CollapseSelected()           # persist IPv4 = collapsed
+            $db.SetTree((New-SampleTree))    # new packet, IPv4 default-expanded
+            $db.RowCount | Should -Be 3      # IPv4 stays collapsed via persistence
+        }
+        It 'renders the selected row highlighted' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12)
+            $db.SetTree((New-SampleTree))
+            $frame = $db.Render($script:on, $script:off)
+            # first content row (Component) is selected by default
+            $frame[1].Contains($script:on) | Should -BeTrue
+        }
+        It 'GetAllText returns the whole tree even when collapsed and larger than the viewport' {
+            $db = [BoxyBox.DetailsBox]::new(40, 4)   # tiny viewport
+            $db.SetTree((New-SampleTree))
+            $db.CollapseAll()                        # viewport now shows only 3 collapsed roots
+            $db.GetVisibleText().Count | Should -BeLessOrEqual 3
+            $all = $db.GetAllText()
+            $all.Count | Should -Be 7                # 3 parents + 4 children, all included
+            ($all -join '|').Contains('Src') | Should -BeTrue
+            ($all -join '|').Contains('Dst') | Should -BeTrue
+        }
+    }
+
+    Context 'PacketDetailStore' {
+        It 'stores and retrieves packet bytes by sequence' {
+            $store = [PacketDetailStore]::new(64)
+            # Descriptor: packet(8) at offset 0, metadata nominally at offset 8 (no valid block).
+            $data = [byte[]](1,2,3,4,5,6,7,8)
+            $store.Store(10, $data, 8, 8, 0, 8, 0, 9, 1, 1)
+            $pkt = $null; $c = 0; $e = 0; $d = 0
+            $got = $store.TryGet(10, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d)
+            $got | Should -BeTrue
+            $pkt.Length | Should -Be 8      # packet-only slice
+            $c | Should -Be 9
+            $e | Should -Be 1
+            $d | Should -Be 1
+        }
+        It 'returns false for sequences never stored' {
+            $store = [PacketDetailStore]::new(64)
+            $pkt = $null; $c = 0; $e = 0; $d = 0
+            $store.TryGet(999, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeFalse
+        }
+        It 'evicts entries beyond capacity (ring reuse)' {
+            $store = [PacketDetailStore]::new(16)
+            $data = [byte[]](1)
+            0..100 | ForEach-Object { $store.Store([long]$_, $data, 1, 1, 0, 1, 0, 0, 0, 0) }
+            $pkt = $null; $c = 0; $e = 0; $d = 0
+            # seq 0 was overwritten long ago
+            $store.TryGet(0, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeFalse
+            # a recent seq is retained
+            $store.TryGet(100, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeTrue
+        }
+        It 'WritePcapng writes a valid pcapng of the retained packets' {
+            $store = [PacketDetailStore]::new(64)
+            # Descriptor: packet(20) at offset 0, metadata(40) at offset 20, DataSize=60.
+            $data = [byte[]]::new(60)
+            for ($i = 0; $i -lt 20; $i++) { $data[$i] = [byte]($i + 1) }
+            $data[20 + 12] = 1     # direction @ meta+12
+            $data[20 + 16] = 138   # componentId @ meta+16
+            $data[20 + 18] = 1     # edgeId @ meta+18
+            $qpc = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            $store.Store(1, $data, 60, 20, 0, 20, $qpc, 138, 1, 1)
+            $store.Store(2, $data, 60, 20, 0, 20, $qpc, 138, 1, 1)
+
+            $out = Join-Path $env:TEMP ("pspkt-unit-{0}.pcapng" -f ([guid]::NewGuid().ToString('N')))
+            try {
+                $written = $store.WritePcapng($out)
+                $written | Should -Be 2
+                $bytes = [System.IO.File]::ReadAllBytes($out)
+                $bytes.Length | Should -BeGreaterThan 0
+                # pcapng Section Header Block magic (block type) = 0x0A0D0D0A.
+                $bytes[0] | Should -Be 0x0A
+                $bytes[1] | Should -Be 0x0D
+                $bytes[2] | Should -Be 0x0D
+                $bytes[3] | Should -Be 0x0A
+            } finally {
+                Remove-Item $out -Force -ErrorAction SilentlyContinue
+            }
+        }
+        It 'WritePcapng returns 0 when nothing is retained' {
+            $store = [PacketDetailStore]::new(16)
+            $out = Join-Path $env:TEMP ("pspkt-unit-empty-{0}.pcapng" -f ([guid]::NewGuid().ToString('N')))
+            try { $store.WritePcapng($out) | Should -Be 0 }
+            finally { Remove-Item $out -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    Context 'PacketDetailExtractor' {
+        BeforeAll {
+            # Build Ethernet + IPv4 + UDP + DNS query for example.com.
+            $b = [System.Collections.Generic.List[byte]]::new()
+            0..5 | ForEach-Object { $b.Add([byte]0x11) }   # dst mac
+            0..5 | ForEach-Object { $b.Add([byte]0x22) }   # src mac
+            $b.Add(0x08); $b.Add(0x00)                      # EtherType IPv4
+            $b.Add(0x45); $b.Add(0x00); $b.Add(0x00); $b.Add(0x3c)
+            $b.Add(0x8b); $b.Add(0xee); $b.Add(0x40); $b.Add(0x00)
+            $b.Add(0x40); $b.Add(0x11); $b.Add(0x00); $b.Add(0x00)
+            $b.AddRange([byte[]](10,24,0,72)); $b.AddRange([byte[]](1,1,1,1))
+            $b.Add(0x13); $b.Add(0x88); $b.Add(0x00); $b.Add(0x35)
+            $b.Add(0x00); $b.Add(0x25); $b.Add(0x00); $b.Add(0x00)   # UDP len 37 (8 hdr + 29 DNS)
+            $b.Add(0x23); $b.Add(0xb4); $b.Add(0x01); $b.Add(0x00)
+            $b.Add(0x00); $b.Add(0x01); $b.Add(0x00); $b.Add(0x00)
+            $b.Add(0x00); $b.Add(0x00); $b.Add(0x00); $b.Add(0x00)
+            $b.Add(0x07); 'example'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(0x03); 'com'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(0x00); $b.Add(0x00); $b.Add(0x01); $b.Add(0x00); $b.Add(0x01)
+            $script:pkt = [byte[]]$b.ToArray()
+        }
+        It 'builds Component/Eth/IPv4/UDP/DNS top-level nodes' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $roots.Count | Should -Be 5
+            $roots[0].Key | Should -Be 'Component'
+            $roots[1].Key | Should -Be 'Eth'
+            $roots[2].Key | Should -Be 'IPv4'
+            $roots[3].Key | Should -Be 'UDP'
+            $roots[4].Key | Should -Be 'DNS'
+        }
+        It 'Component and Eth are collapsed by default; IPv4/UDP/DNS expanded' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $roots[0].IsExpanded | Should -BeFalse   # Component
+            $roots[1].IsExpanded | Should -BeFalse   # Eth
+            $roots[2].IsExpanded | Should -BeTrue     # IPv4
+        }
+        It 'extracts IPv4 fields (Src/Dst/id)' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $ipv4 = $roots[2]
+            ($ipv4.Children | Where-Object { $_.Text -eq 'Src: 10.24.0.72' }).Count | Should -Be 1
+            ($ipv4.Children | Where-Object { $_.Text -eq 'Dst: 1.1.1.1' }).Count | Should -Be 1
+            ($ipv4.Children | Where-Object { $_.Text -eq 'id: 0x8bee' }).Count | Should -Be 1
+        }
+        It 'extracts DNS transaction id and query' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $dns = $roots[4]
+            ($dns.Children | Where-Object { $_.Text -eq 'Transaction ID: 0x23b4' }).Count | Should -Be 1
+            ($dns.Children | Where-Object { $_.Text -eq 'RR Count - Qry: 1, Ans: 0, Auth: 0, Adtl: 0' }).Count | Should -Be 1
+            # Queries section with the example.com A query.
+            $queries = $dns.Children | Where-Object { $_.Key -eq 'DNS.Queries' }
+            $queries | Should -Not -BeNullOrEmpty
+            ($queries.Children | Where-Object { $_.Text -eq 'example.com.: type A, class IN' }).Count | Should -Be 1
+            # Flags node present with the bit-breakdown.
+            $flags = $dns.Children | Where-Object { $_.Key -eq 'DNS.Flags' }
+            $flags | Should -Not -BeNullOrEmpty
+            ($flags.Children | Where-Object { $_.Text -like '*Recursion desired: Do query recursively' }).Count | Should -Be 1
+        }
+        It 'returns an error node for too-short input' {
+            $roots = [PacketDetailExtractor]::BuildTree([byte[]](1,2,3), 3, 0, 0, 0)
+            $roots.Count | Should -Be 1
+            $roots[0].Text | Should -Match 'too short'
+        }
+    }
+
+    Context 'MenuRenderer + MenuDefinition' {
+        BeforeAll {
+            $script:def = [BoxyBox.MenuDefinition]::new('Details')
+            $null = $script:def.AddItem('Expand',   'Expand',   "$([char]0x2192)")
+            $null = $script:def.AddItem('Collapse', 'Collapse', "$([char]0x2190)")
+        }
+        It 'renders Full options as [Hotkey]DisplayName (visible text)' {
+            $opts = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $true)
+            [BoxyBox.AnsiText]::StripAnsi($opts[0]) | Should -Be "[$([char]0x2192)]Expand"
+            [BoxyBox.AnsiText]::StripAnsi($opts[1]) | Should -Be "[$([char]0x2190)]Collapse"
+        }
+        It 'colors menu items so they stand out from the border' {
+            $opts = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $true)
+            # both the hotkey and the label carry an SGR color sequence
+            [BoxyBox.AnsiText]::ContainsAnsi($opts[0]) | Should -BeTrue
+            $simple = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $false)
+            [BoxyBox.AnsiText]::ContainsAnsi($simple[0]) | Should -BeTrue
+        }
+        It 'renders Simple options as [Hotkey] only (visible text)' {
+            $opts = [BoxyBox.MenuRenderer]::BuildOptions($script:def, $false)
+            [BoxyBox.AnsiText]::StripAnsi($opts[0]) | Should -Be "[$([char]0x2192)]"
+        }
+        It 'FullFits is true for a wide bar and false for a narrow one' {
+            [BoxyBox.MenuRenderer]::FullFits($script:def, 120) | Should -BeTrue
+            [BoxyBox.MenuRenderer]::FullFits($script:def, 8)   | Should -BeFalse
+        }
+        It 'BuildAuto picks Simple when Full will not fit' {
+            $auto = [BoxyBox.MenuRenderer]::BuildAuto($script:def, 8)
+            [BoxyBox.AnsiText]::StripAnsi($auto[0]) | Should -Be "[$([char]0x2192)]"   # simple (hotkey only)
+        }
+        It 'BuildAuto picks Full when there is room' {
+            $auto = [BoxyBox.MenuRenderer]::BuildAuto($script:def, 120)
+            [BoxyBox.AnsiText]::StripAnsi($auto[0]) | Should -Be "[$([char]0x2192)]Expand"
+        }
+    }
+
+    Context 'Get-PspktTuiMenu' {
+        BeforeAll {
+            $script:mod = Get-Module PspktSession
+        }
+        It 'loads the shipped Details menu with 5 items' {
+            $def = & $script:mod { Get-PspktTuiMenu -Box 'Details' }
+            $def.Box | Should -Be 'Details'
+            $def.Menu.Count | Should -Be 5
+            $def.Menu[0].Name | Should -Be 'Expand'
+        }
+        It 'loads TextLive and TextFocus menus' {
+            $live  = & $script:mod { Get-PspktTuiMenu -Box 'TextLive' }
+            $focus = & $script:mod { Get-PspktTuiMenu -Box 'TextFocus' }
+            $live.Menu.Count  | Should -BeGreaterThan 0
+            $focus.Menu.Count | Should -BeGreaterThan 0
+            ($focus.Menu | Where-Object { $_.Name -eq 'Copy' }).Count | Should -Be 1
+            # Pause ('p') is offered in both live and focus modes.
+            ($live.Menu  | Where-Object { $_.Name -eq 'Pause' -and $_.Hotkey -eq 'P' }).Count | Should -Be 1
+            ($focus.Menu | Where-Object { $_.Name -eq 'Pause' -and $_.Hotkey -eq 'P' }).Count | Should -Be 1
+        }
+        It 'returns an empty definition for an unknown box' {
+            $def = & $script:mod { Get-PspktTuiMenu -Box 'DoesNotExist' }
+            $def.Menu.Count | Should -Be 0
+        }
+    }
+
+    Context 'OverlayBox' {
+        It 'builds a centered bordered box with a title and body' {
+            $body = [System.Collections.Generic.List[string]]@('hello', 'world')
+            $top = 0; $left = 0
+            $lines = [BoxyBox.OverlayBox]::Build(80, 24, 30, ' Title ', $body, [ref]$top, [ref]$left)
+            $lines.Count | Should -Be 4   # top border + 2 body + bottom border
+            [int]$lines[0][0]  | Should -Be ([int][char]0x250c)   # top-left corner
+            [int]$lines[0][-1] | Should -Be ([int][char]0x2510)   # top-right corner
+            $lines[0].Contains('Title') | Should -BeTrue
+            $lines[1].Contains('hello') | Should -BeTrue
+            # centered on an 80x24 screen
+            $left | Should -Be 26   # (80-30)/2 + 1
+        }
+        It 'clamps box width to the screen width' {
+            $body = [System.Collections.Generic.List[string]]@('x')
+            $top = 0; $left = 0
+            $lines = [BoxyBox.OverlayBox]::Build(20, 10, 100, 'T', $body, [ref]$top, [ref]$left)
+            $lines[0].Length | Should -Be 20
         }
     }
 }

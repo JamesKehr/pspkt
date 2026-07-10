@@ -1,0 +1,11 @@
+{
+  "Box": "TextFocus",
+  "Menu": [
+    { "Name": "Resume", "DisplayName": "Resume", "Hotkey": "R" },
+    { "Name": "Pause", "DisplayName": "Pause", "Hotkey": "P" },
+    { "Name": "Stop", "DisplayName": "Stop", "Hotkey": "S" },
+    { "Name": "Save", "DisplayName": "Save pcapng", "Hotkey": "W" },
+    { "Name": "Switch", "DisplayName": "Switch boxes", "Hotkey": "Tab" },
+    { "Name": "Copy", "DisplayName": "Copy pkt", "Hotkey": "Shift+Ctrl+C" }
+  ]
+}

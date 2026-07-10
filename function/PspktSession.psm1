@@ -1339,6 +1339,527 @@ function Set-PspktSession {
     }
 }
 
+# --------------------------------------------------------------------------
+# Analysis mode consumer loop (BoxyBox TUI).
+# --------------------------------------------------------------------------
+
+<#
+.SYNOPSIS
+Loads a BoxyBox TUI menu definition (JSON) for a box, honoring user overrides.
+
+.DESCRIPTION
+Menus are JSON files of {Name, DisplayName, Hotkey} items rendered as
+"[Hotkey]DisplayName". A user copy at $HOME\.pspkt\menus\<Box>.json overrides the
+shipped default at TUI\BoxyBox\menus\<Box>.json, allowing custom text/hotkeys and
+localization. Returns a BoxyBox.MenuDefinition (empty on any load failure).
+
+.PARAMETER Box
+Menu name: TextLive, TextFocus, or Details.
+
+.OUTPUTS
+BoxyBox.MenuDefinition
+#>
+function Get-PspktTuiMenu {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $Box
+    )
+
+    $def = [BoxyBox.MenuDefinition]::new($Box)
+    $userPath    = Join-Path $HOME ".pspkt\menus\$Box.json"
+    $shippedPath = Join-Path $PSScriptRoot "..\TUI\BoxyBox\menus\$Box.json"
+    $path = if (Test-Path -LiteralPath $userPath) { $userPath }
+            elseif (Test-Path -LiteralPath $shippedPath) { $shippedPath }
+            else { $null }
+
+    if ($null -ne $path) {
+        try {
+            $json = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $json.Box) { $def.Box = $json.Box }
+            foreach ($m in $json.Menu) {
+                $null = $def.AddItem([string]$m.Name, [string]$m.DisplayName, [string]$m.Hotkey)
+            }
+        } catch {
+            Write-Verbose "Failed to load TUI menu '$Box' from $path : $_"
+        }
+    }
+    return $def
+}
+
+<#
+.SYNOPSIS
+Runs the BoxyBox Analysis-mode consumer loop: a live scrolling Text Box, with a
+focus mode that opens a Details box and supports copy/save.
+
+.DESCRIPTION
+Internal helper invoked by Start-Pspkt when -ParsingLevel is Analysis. Drains the
+real-time ring, formats each packet into the compact Text Box line (Default-level
+parse with the component name omitted), and feeds them into a scrolling BoxyBox
+TextBox rendered to a fixed console region (no console scroll). Focus ('f') splits
+the screen into a Text box + Details box (Wireshark-style JIT parse tree), 'r'
+resumes, 's' stops. Pause ('p') stops collecting new packets (nothing more is added
+to the Text box or JIT store) and enters Focus so the frozen buffer can be inspected;
+'r' resumes collection. Shift+Ctrl+C copies the selection; the Save hotkey writes the
+retained packets to a pcapng file via an overlay prompt. Menus are JSON-driven and switch
+between Full (hotkey+text) and Simple (hotkey only) by console width.
+
+.PARAMETER Session
+The active pspkt session whose OutputStream[0] ring is drained.
+
+.PARAMETER PollingIntervalMs
+Upper bound on the consumer wait when no packets are available.
+
+.OUTPUTS
+PSCustomObject with PacketCount and DroppedCount.
+#>
+function Invoke-PspktAnalysisLoop {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNull()]
+        [pspktSession]
+        $Session,
+
+        [Parameter(Mandatory = $false)]
+        [int]
+        $PollingIntervalMs = 50
+    )
+
+    $stream = $Session.OutputStream[0]
+    $ESC = [char]27
+
+    # Ensure the parsing color scheme is loaded into the C# formatter so both the Text box
+    # lines and the Details tree render with the active profile's colors. The standard
+    # real-time branch gets this for free via Get-PspktCaptureHeader; the Analysis branch
+    # does not call that, so sync explicitly here (lazy-loads + InitColorScheme on first use).
+    $null = Get-PspktColorScheme
+
+    # Text Box uses the Default single-line parse (level 0) with the compact component
+    # prefix (name omitted — shown in the Details box in a later phase).
+    $prevDetail = Get-PspktDetailLevel
+    Set-PspktDetailLevel -Level 0
+    [PacketLineFormatter]::SetTextBoxMode($true)
+
+    # Console dimensions with fallbacks for non-interactive hosts.
+    $consoleWidth = 100
+    $consoleHeight = 30
+    try { if ([Console]::WindowWidth  -gt 0) { $consoleWidth  = [Console]::WindowWidth } }  catch { }
+    try { if ([Console]::WindowHeight -gt 0) { $consoleHeight = [Console]::WindowHeight } } catch { }
+
+    # Row 1 is a status line; the box area fills the remaining rows.
+    $boxWidth   = $consoleWidth
+    $areaTop    = 2
+    $areaHeight = [Math]::Max(6, $consoleHeight - 1)
+
+    # JSON-driven menus (Full = hotkey+text, Simple = hotkey-only, auto by width).
+    $liveMenuDef    = Get-PspktTuiMenu -Box 'TextLive'
+    $focusMenuDef   = Get-PspktTuiMenu -Box 'TextFocus'
+    $detailsMenuDef = Get-PspktTuiMenu -Box 'Details'
+
+    # Live layout: a single Text Box fills the whole area.
+    $textBox = [BoxyBox.TextBox]::new($boxWidth, $areaHeight, 200000)
+    $liveBox = [BoxyBox.Box]::new($boxWidth, $areaHeight)
+    $liveBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($liveMenuDef, $boxWidth)
+    $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
+
+    # Focus layout: Text Box (~40%, min 5 content lines) + Details Box (~60%). The Text box's
+    # bottom menu bar (Mid caps ╞══╡) doubles as the shared divider; the Details box omits
+    # its own top border and sits flush beneath it so the two boxes merge on one line.
+    $usable = $areaHeight - 3
+    if ($usable -lt 6) { $usable = 6 }
+    $textContent = [Math]::Max(5, [int][Math]::Round($usable * 0.40))
+    if ($textContent -gt $usable - 1) { $textContent = $usable - 1 }
+    $detailContent = $usable - $textContent
+    $textFocusHeight = $textContent + 2    # top border + content + menu (divider)
+    $detailsHeight   = $detailContent + 1  # content + menu (no top border)
+
+    $textFocusBox = [BoxyBox.Box]::new($boxWidth, $textFocusHeight)
+    $textFocusBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Mid   # ╞══╡ shared divider line
+    $textFocusBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($focusMenuDef, $boxWidth)
+    $textFocusRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $textFocusHeight)
+    $detailsBox = [BoxyBox.DetailsBox]::new($boxWidth, $detailsHeight, $false)   # no top border
+    $detailsBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($detailsMenuDef, $boxWidth)
+    $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
+
+    # JIT detail store: retain the last 50,000 packets' raw bytes for on-demand parsing.
+    $detailStore = [PacketDetailStore]::new(50000)
+
+    $lineCounter  = 0
+    $packetCount  = 0
+    $droppedCount = 0
+    $stopRequested = $false
+    $dirty = $true
+
+    # --- Focus state ---
+    $focused = $false
+    $paused = $false         # Pause ('p') freezes collection: drained packets are discarded
+    $activeBox = 'text'      # 'text' or 'details' (Tab switches)
+    [long]$selectedSeq = 0
+    [long]$topSeq = 0
+    # Selection highlight: a distinct background color applied over the row while preserving
+    # the row's own foreground (parsing) colors. Active box uses blue; the inactive box uses
+    # a dimmer gray so it's clear which box has keyboard focus.
+    $hlOn  = "$ESC[44m"      # blue background (active selection)
+    $hlDim = "$ESC[100m"     # gray background (selection in the inactive box)
+    $hlOff = "$ESC[0m"
+
+    # Loads the detail tree for a given absolute sequence number into the Details box,
+    # reparsing the retained raw bytes just-in-time. Shows a placeholder when the packet
+    # has scrolled beyond the retention window.
+    $loadDetails = {
+        param([long]$seq)
+        $pktBytes = $null; $cId = 0; $eId = 0; $dir = 0
+        $got = $detailStore.TryGet($seq, [ref]$pktBytes, [ref]$cId, [ref]$eId, [ref]$dir)
+        if ($got -and $null -ne $pktBytes) {
+            $roots = [PacketDetailExtractor]::BuildTree($pktBytes, $pktBytes.Length, $cId, $eId, $dir)
+        } else {
+            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+            $null = $roots.Add([BoxyBox.TreeNode]::new('(detail not retained - packet scrolled past the JIT window)', 'Info', $true))
+        }
+        $detailsBox.SetTree($roots)
+    }
+
+    # Enters Focus mode: freezes scrolling, splits the screen, selects a line near the tail,
+    # gives the Details box keyboard focus, and plays a short expand-up animation. Dot-source
+    # (". $enterFocus") so its assignments mutate the loop-scope state ($focused, $activeBox,
+    # $topSeq, $selectedSeq) rather than a child scope. Shared by the 'f' and 'p' hotkeys.
+    $enterFocus = {
+        $focused = $true
+        $activeBox = 'details'
+        $topSeq = $textBox.TotalSeq - $textFocusBox.ContentRows
+        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+        $selectedSeq = $textBox.ClampSeq($topSeq + [int]($textFocusBox.ContentRows / 2))
+        & $loadDetails $selectedSeq
+        # Quick expand-up animation of the Details box.
+        $steps = 4
+        for ($s = 1; $s -le $steps; $s++) {
+            $h = [int]($detailsHeight * $s / $steps)
+            if ($h -lt 2) { $h = 2 }
+            $animBox = [BoxyBox.Box]::new($boxWidth, $h)
+            $animRegion = [BoxyBox.ScreenRegion]::new($areaTop + $areaHeight - $h, 1, $boxWidth, $h)
+            [Console]::Write($animRegion.BuildFrame($animBox.Render($null)))
+            Start-Sleep -Milliseconds 12
+        }
+        $dirty = $true
+    }
+
+    # --- Transient notification overlay state (e.g. "Copied to clipboard") ---
+    $notifyText = $null
+    $notifyUntil = [DateTime]::MinValue
+
+    # Writes the retained capture to a pcapng file via a blocking overlay prompt. Returns a
+    # status string for the notification. Restores the cursor/console state around the ReadLine.
+    $saveToFile = {
+        $body = [System.Collections.Generic.List[string]]::new()
+        $null = $body.Add('')
+        $null = $body.Add(' Enter file path to save the capture as pcapng (blank = cancel):')
+        $null = $body.Add('')
+        $null = $body.Add('')
+        $ovW = [Math]::Min(70, $consoleWidth - 4)
+        $ovTop = 0; $ovLeft = 0
+        $ovLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $ovW, ' Save Capture ', $body, [ref]$ovTop, [ref]$ovLeft)
+        $ovRegion = [BoxyBox.ScreenRegion]::new($ovTop, $ovLeft, $ovW, $ovLines.Count)
+        [Console]::Write($ovRegion.BuildFrame($ovLines))
+        # Position the cursor on the input row inside the box and read a line.
+        $inputRow = $ovTop + 3
+        [Console]::Write("$ESC[$inputRow;$($ovLeft + 2)H" + [BoxyBox.ScreenRegion]::ShowCursor())
+        # Temporarily restore processed-input mode so the OS console handles line editing
+        # (Backspace, etc.) during ReadLine. The loop runs with TreatControlCAsInput = true
+        # (for the Shift+Ctrl+C copy hotkey), which clears ENABLE_PROCESSED_INPUT and would
+        # otherwise make Backspace insert a literal 0x08 instead of erasing.
+        $savedCtrlC = $true
+        try { $savedCtrlC = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $false } catch { }
+        $fname = $null
+        try { $fname = [Console]::ReadLine() } catch { $fname = $null }
+        try { [Console]::TreatControlCAsInput = $savedCtrlC } catch { }
+        [Console]::Write([BoxyBox.ScreenRegion]::HideCursor())
+        if ([string]::IsNullOrWhiteSpace($fname)) { return 'Save cancelled' }
+        try {
+            $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($fname.Trim())
+            if (-not $resolved.EndsWith('.pcapng', [StringComparison]::OrdinalIgnoreCase)) {
+                $resolved = $resolved + '.pcapng'
+            }
+            # Write a pcapng of the retained packets (up to the JIT store capacity), reusing the
+            # same serialization as a live -WriteFile capture (real timestamps + comments).
+            $written = $detailStore.WritePcapng($resolved)
+            if ($written -le 0) { return 'No retained packets to save' }
+            return "Saved $written packets to $resolved"
+        } catch {
+            return "Save failed: $($_.Exception.Message)"
+        }
+    }
+
+    # Cap render rate (~30 fps).
+    $frameWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $frameIntervalMs = 33
+
+    # Capture Shift+Ctrl+C as input (for the copy hotkey) rather than terminating; 's' stops.
+    $prevTreatCtrlC = $false
+    try { $prevTreatCtrlC = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $true } catch { }
+
+    [PktMonApi]::SetCaptureActive($true)
+    [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen() + [BoxyBox.ScreenRegion]::HideCursor())
+
+    try {
+        while ($Session.Active -and -not $stopRequested) {
+            # --- Detect a console (Windows Terminal) resize and rebuild the layout in place ---
+            # Boxes and regions are sized from the console dimensions read once at startup; when
+            # the window is resized we recompute the layout so borders span the new width/height.
+            $curW = $consoleWidth; $curH = $consoleHeight
+            try { if ([Console]::WindowWidth  -gt 0) { $curW = [Console]::WindowWidth } }  catch { }
+            try { if ([Console]::WindowHeight -gt 0) { $curH = [Console]::WindowHeight } } catch { }
+            if ($curW -ne $consoleWidth -or $curH -ne $consoleHeight) {
+                $consoleWidth  = $curW
+                $consoleHeight = $curH
+                $boxWidth   = $consoleWidth
+                $areaHeight = [Math]::Max(6, $consoleHeight - 1)
+
+                # Live layout: single box filling the area. Re-fit the menu (Full/Simple by width).
+                $liveBox.Resize($boxWidth, $areaHeight)
+                $liveBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($liveMenuDef, $boxWidth)
+                $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
+
+                # Focus layout: ~40% Text / ~60% Details with the shared divider (see startup).
+                $usable = $areaHeight - 3
+                if ($usable -lt 6) { $usable = 6 }
+                $textContent = [Math]::Max(5, [int][Math]::Round($usable * 0.40))
+                if ($textContent -gt $usable - 1) { $textContent = $usable - 1 }
+                $detailContent = $usable - $textContent
+                $textFocusHeight = $textContent + 2
+                $detailsHeight   = $detailContent + 1
+                $textFocusBox.Resize($boxWidth, $textFocusHeight)
+                $textFocusBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($focusMenuDef, $boxWidth)
+                $textFocusRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $textFocusHeight)
+                $detailsBox.Resize($boxWidth, $detailsHeight)
+                $detailsBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($detailsMenuDef, $boxWidth)
+                $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
+
+                # Clear stale content so shrinking the window leaves no residue, then repaint.
+                [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
+                $dirty = $true
+            }
+
+            $textContentRows = if ($focused) { $textFocusBox.ContentRows } else { $liveBox.ContentRows }
+
+            # --- Non-blocking key handling ---
+            $keyReady = $false
+            try { $keyReady = [Console]::KeyAvailable } catch { $keyReady = $false }
+            if ($keyReady) {
+                $key = [Console]::ReadKey($true)
+                $ch = [char]::ToLower($key.KeyChar)
+                $ctrl  = ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0
+                $shift = ($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
+
+                # Shift+Ctrl+C: copy the selected Text line + the full parsed detail tree
+                # (every node/child, regardless of scroll position or collapse state).
+                if ($ctrl -and $shift -and $key.Key -eq [ConsoleKey]::C) {
+                    if ($focused) {
+                        $copyLines = [System.Collections.Generic.List[string]]::new()
+                        $selLine = $textBox.GetLineBySeq($selectedSeq)
+                        if ($null -ne $selLine) { $null = $copyLines.Add([BoxyBox.AnsiText]::StripAnsi($selLine)) }
+                        foreach ($d in $detailsBox.GetAllText()) { $null = $copyLines.Add($d) }
+                        try {
+                            ($copyLines -join "`r`n") | Set-Clipboard -ErrorAction Stop
+                            $notifyText = "Copied packet ($($copyLines.Count) lines) to clipboard"
+                        } catch {
+                            $notifyText = "Clipboard copy failed"
+                        }
+                        $notifyUntil = [DateTime]::UtcNow.AddSeconds(2)
+                        $dirty = $true
+                    }
+                    continue
+                }
+
+                # Save hotkey ('w'): blocking file-save overlay prompt.
+                if ($ch -eq 'w') {
+                    $notifyText = & $saveToFile
+                    $notifyUntil = [DateTime]::UtcNow.AddSeconds(3)
+                    [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
+                    $dirty = $true
+                    continue
+                }
+
+                if ($ch -eq 's') { $stopRequested = $true; continue }
+
+                # Pause ('p'): stop collecting new packets (drained packets are discarded, so
+                # nothing more is added to the Text box or JIT store) and enter Focus so the
+                # frozen buffer can be inspected. Works from live or existing focus.
+                if ($ch -eq 'p') {
+                    $paused = $true
+                    if (-not $focused) { . $enterFocus }
+                    $dirty = $true
+                    continue
+                }
+
+                if (-not $focused) {
+                    if ($ch -eq 'f') {
+                        . $enterFocus
+                    }
+                } else {
+                    # --- Focus mode ---
+                    if ($ch -eq 'r') {
+                        $focused = $false
+                        $paused = $false        # Resume also clears a pause and restarts collection.
+                        # Clear the whole area so the details box leaves no residue.
+                        [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
+                        $dirty = $true
+                    }
+                    elseif ($key.Key -eq [ConsoleKey]::Tab) {
+                        $activeBox = if ($activeBox -eq 'text') { 'details' } else { 'text' }
+                        $dirty = $true
+                    }
+                    elseif ($activeBox -eq 'details') {
+                        # Ctrl+Up/Down = prev/next packet (moves the Text Box selection + reloads).
+                        # Ctrl+Left/Right = Collapse All / Expand All. Plain arrows navigate or
+                        # collapse/expand only the selected node.
+                        if ($ctrl -and $key.Key -eq [ConsoleKey]::UpArrow) {
+                            $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); & $loadDetails $selectedSeq; $dirty = $true
+                        }
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::DownArrow) {
+                            $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); & $loadDetails $selectedSeq; $dirty = $true
+                        }
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::LeftArrow) {
+                            $detailsBox.CollapseAll(); $dirty = $true
+                        }
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::RightArrow) {
+                            $detailsBox.ExpandAll(); $dirty = $true
+                        }
+                        else {
+                            switch ($key.Key) {
+                                'UpArrow'    { $detailsBox.MoveUp();   $dirty = $true }
+                                'DownArrow'  { $detailsBox.MoveDown(); $dirty = $true }
+                                'PageUp'     { $detailsBox.PageUp();   $dirty = $true }
+                                'PageDown'   { $detailsBox.PageDown(); $dirty = $true }
+                                'LeftArrow'  { $detailsBox.CollapseSelected(); $dirty = $true }
+                                'RightArrow' { $detailsBox.ExpandSelected();   $dirty = $true }
+                            }
+                        }
+                    }
+                    else {
+                        # activeBox = 'text'
+                        switch ($key.Key) {
+                            'UpArrow'    { $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); & $loadDetails $selectedSeq; $dirty = $true }
+                            'DownArrow'  { $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); & $loadDetails $selectedSeq; $dirty = $true }
+                            'PageUp'     { $selectedSeq = $textBox.ClampSeq($selectedSeq - $textContentRows); $topSeq -= $textContentRows; & $loadDetails $selectedSeq; $dirty = $true }
+                            'PageDown'   { $selectedSeq = $textBox.ClampSeq($selectedSeq + $textContentRows); $topSeq += $textContentRows; & $loadDetails $selectedSeq; $dirty = $true }
+                            'LeftArrow'  { $textFocusBox.Justification = [BoxyBox.Justify]::Left;  $dirty = $true }
+                            'RightArrow' { $textFocusBox.Justification = [BoxyBox.Justify]::Right; $dirty = $true }
+                        }
+                    }
+
+                    # Keep the text-box selection inside its visible window + retained range.
+                    if ($focused) {
+                        $selectedSeq = $textBox.ClampSeq($selectedSeq)
+                        $maxTop = [Math]::Max($textBox.BaseSeq, $textBox.TotalSeq - $textContentRows)
+                        if ($topSeq -gt $maxTop) { $topSeq = $maxTop }
+                        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                        if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
+                        elseif ($selectedSeq -gt $topSeq + $textContentRows - 1) { $topSeq = $selectedSeq - $textContentRows + 1 }
+                        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                    }
+                }
+            }
+
+            # --- Drain + format (continues even while focused); retain bytes for JIT detail ---
+            $pktCount = $Session.DrainAllRawPackets()
+            if ($pktCount -gt 0) {
+                if ($paused) {
+                    # Paused: discard the drained batch (return pooled buffers) so no new packets
+                    # are added to the Text box or JIT store, while still draining the ring so the
+                    # producer never overflows on a long pause.
+                    [PktMonApi]::ReturnPacketBuffers($stream.PacketBuffer, $pktCount)
+                } else {
+                    try {
+                        $startSeq = $textBox.TotalSeq
+                        $res = [PacketLineFormatter]::FormatBatchToLines($stream.PacketBuffer, $pktCount, $lineCounter, $startSeq, $detailStore)
+                        if ($null -ne $res) {
+                            $lineCounter  = $res.LineCounter
+                            $packetCount += $res.PacketCount
+                            $droppedCount += $res.DroppedCount
+                            if ($null -ne $res.Lines -and $res.Lines.Count -gt 0) {
+                                $textBox.AppendRange($res.Lines)
+                                $dirty = $true
+                            }
+                            if ($res.TriggerAction -eq 2) { $stopRequested = $true }
+                        }
+                    } finally {
+                        [PktMonApi]::ReturnPacketBuffers($stream.PacketBuffer, $pktCount)
+                    }
+                }
+            } else {
+                $null = [PktMonApi]::WaitForPackets($PollingIntervalMs)
+            }
+
+            # --- Throttled render ---
+            if ($dirty -and $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs) {
+                if ($focused) {
+                    # Re-clamp against any trimming since the last frame.
+                    $selectedSeq = $textBox.ClampSeq($selectedSeq)
+                    if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                    if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
+                    elseif ($selectedSeq -gt $topSeq + $textFocusBox.ContentRows - 1) { $topSeq = $selectedSeq - $textFocusBox.ContentRows + 1 }
+
+                    $activeLabel = if ($activeBox -eq 'text') { 'TEXT' } else { 'DETAILS' }
+                    $modeLabel = if ($paused) { "PAUSED/$activeLabel" } else { "FOCUS/$activeLabel" }
+                    $status = "  Analysis [$modeLabel]  pkt $($selectedSeq + 1)/$($textBox.TotalSeq)  |  (R)esume (S)top [Tab] switch"
+                    # Text box (top): highlight the selected line; dim it when the text box is
+                    # not the active box. Compute the highlight sequence first so the single
+                    # .Render() call returns string[] directly (a PS if-expression would box
+                    # the result into Object[], which BuildFrame's IList<string> rejects).
+                    $textWindow = $textBox.GetWindow($topSeq, $textFocusBox.ContentRows)
+                    $selRow = [int]($selectedSeq - $topSeq)
+                    if ($selRow -lt 0 -or $selRow -ge $textFocusBox.ContentRows) { $selRow = -1 }
+                    $textHlOn    = if ($activeBox -eq 'text')    { $hlOn } else { $hlDim }
+                    $detailsHlOn = if ($activeBox -eq 'details') { $hlOn } else { $hlDim }
+                    $textFrameLines = $textFocusBox.Render($textWindow, $selRow, $textHlOn, $hlOff)
+                    $detailsFrameLines = $detailsBox.Render($detailsHlOn, $hlOff)
+
+                    $frame = $textFocusRegion.BuildFrame($textFrameLines) + $detailsRegion.BuildFrame($detailsFrameLines)
+                } else {
+                    $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (F)ocus (P)ause (S)top"
+                    $liveWindow = $textBox.GetTailWindow($liveBox.ContentRows)
+                    $frame = $liveRegion.BuildFrame($liveBox.Render($liveWindow))
+                }
+                if ($status.Length -gt $boxWidth) { $status = $status.Substring(0, $boxWidth) }
+                $statusLine = "$ESC[1;1H$ESC[2K$status"
+                [Console]::Write($statusLine + $frame)
+
+                # Transient notification overlay (copy/save results) on top of the frame.
+                if ($null -ne $notifyText -and [DateTime]::UtcNow -lt $notifyUntil) {
+                    $nbody = [System.Collections.Generic.List[string]]::new()
+                    $null = $nbody.Add('')
+                    $null = $nbody.Add(' ' + $notifyText)
+                    $null = $nbody.Add('')
+                    $nW = [Math]::Min([Math]::Max(24, $notifyText.Length + 6), $consoleWidth - 4)
+                    $nTop = 0; $nLeft = 0
+                    $nLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $nW, ' pspkt ', $nbody, [ref]$nTop, [ref]$nLeft)
+                    $nRegion = [BoxyBox.ScreenRegion]::new($nTop, $nLeft, $nW, $nLines.Count)
+                    [Console]::Write($nRegion.BuildFrame($nLines))
+                }
+
+                $frameWatch.Restart()
+                $dirty = $false
+                # Keep refreshing while a notification is visible, even when idle.
+                if ($null -ne $notifyText -and [DateTime]::UtcNow -lt $notifyUntil) { $dirty = $true }
+            }
+        }
+    }
+    finally {
+        # Restore console + formatter state.
+        try { [Console]::TreatControlCAsInput = $prevTreatCtrlC } catch { }
+        [Console]::Write([BoxyBox.ScreenRegion]::ShowCursor())
+        $belowRow = $areaTop + $areaHeight
+        [Console]::Write("$ESC[$belowRow;1H`n")
+        [PacketLineFormatter]::SetTextBoxMode($false)
+        Set-PspktDetailLevel -Level $prevDetail
+    }
+
+    return [pscustomobject]@{ PacketCount = $packetCount; DroppedCount = $droppedCount }
+}
+
 <#
 .SYNOPSIS
 Starts a real-time pktmon packet capture with parsed, color-coded console output and optional pcapng file write.
@@ -3267,7 +3788,37 @@ function Start-Pspkt {
         }
 
         try {
-          if ($useRealTime) {
+          if ($useRealTime -and ($ParsingLevel -eq [PspktParsingLevel]::Analysis)) {
+            # --- Analysis mode: BoxyBox TUI (scrolling Text Box) ---
+            $script:ComponentRefreshLocked = $true
+
+            # Resolve drop-trigger values (mirrors the standard real-time branch).
+            [int]$aPauseLoc = 0; [int]$aPauseReason = 0; [int]$aStopLoc = 0; [int]$aStopReason = 0
+            if ($PSBoundParameters.ContainsKey('PauseOnLocation') -and $PauseOnLocation) {
+                $aPauseLoc = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_LOCATION]) -Value $PauseOnLocation)
+            }
+            if ($PSBoundParameters.ContainsKey('PauseOnReason') -and $PauseOnReason) {
+                $aPauseReason = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_REASON]) -Value $PauseOnReason)
+            }
+            if ($PSBoundParameters.ContainsKey('StopOnLocation') -and $StopOnLocation) {
+                $aStopLoc = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_LOCATION]) -Value $StopOnLocation)
+            }
+            if ($PSBoundParameters.ContainsKey('StopOnReason') -and $StopOnReason) {
+                $aStopReason = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_REASON]) -Value $StopOnReason)
+            }
+
+            [PacketLineFormatter]::SetDropTriggers(
+                $StopOnDrop.IsPresent, $PauseOnDrop.IsPresent,
+                $aStopReason, $aStopLoc, $aPauseReason, $aPauseLoc)
+            $icmpEchoOnly = $Ping.IsPresent -or $Ping4.IsPresent -or $Ping6.IsPresent
+            $icmpNdpOnly  = $NDP.IsPresent -or $AA.IsPresent -or $AAv6.IsPresent
+            [PacketLineFormatter]::SetIcmpDisplayFilter($icmpEchoOnly, $icmpNdpOnly)
+
+            $analysisResult = Invoke-PspktAnalysisLoop -Session $Session -PollingIntervalMs $PollingIntervalMs
+            $packetCount += $analysisResult.PacketCount
+            $droppedCount += $analysisResult.DroppedCount
+          }
+          elseif ($useRealTime) {
             # Determine if pause/stop features are active.
             $pauseEnabled = $Pause.IsPresent -or $PauseOnDrop.IsPresent -or
                 $PSBoundParameters.ContainsKey('PauseOnLocation') -or

@@ -3,12 +3,16 @@
 
 $classPath = Join-Path -Path $PSScriptRoot -ChildPath '.'
 $parsersPath = Join-Path -Path (Split-Path $PSScriptRoot -Parent) -ChildPath 'Parsers'
+$tuiPath = Join-Path -Path (Split-Path $PSScriptRoot -Parent) -ChildPath 'TUI'
 
-# Collect .cs files from class/ and Parsers/ (recursively).
+# Collect .cs files from class/, Parsers/, and TUI/ (recursively).
 $csFiles = @()
 $csFiles += Get-ChildItem -Path $classPath -Filter '*.cs' -File -ErrorAction SilentlyContinue
 if (Test-Path $parsersPath) {
     $csFiles += Get-ChildItem -Path $parsersPath -Filter '*.cs' -File -Recurse -ErrorAction SilentlyContinue
+}
+if (Test-Path $tuiPath) {
+    $csFiles += Get-ChildItem -Path $tuiPath -Filter '*.cs' -File -Recurse -ErrorAction SilentlyContinue
 }
 
 if (-not $csFiles -or $csFiles.Count -eq 0) {
@@ -69,6 +73,24 @@ if ($null -eq $typeCheck) {
         [IcmpContext]
         [IcmpAppPredicate]
         [NdpParser]
+        [PacketDetailStore]
+        [PacketDetailExtractor]
+        [BoxyBox.AnsiText]
+        [BoxyBox.TextJustify]
+        [BoxyBox.BoxChars]
+        [BoxyBox.MenuBar]
+        [BoxyBox.Box]
+        [BoxyBox.ScreenRegion]
+        [BoxyBox.TextBox]
+        [BoxyBox.TreeNode]
+        [BoxyBox.TreeRow]
+        [BoxyBox.TreeFlattener]
+        [BoxyBox.DetailsBox]
+        [BoxyBox.MenuItem]
+        [BoxyBox.MenuDefinition]
+        [BoxyBox.MenuRenderer]
+        [BoxyBox.OverlayBox]
+        [BoxyBox.Justify]
         [PACKETMONITOR_REALTIME_STREAM_CONFIGURATION]
         [PACKETMONITOR_STREAM_DATA_DESCRIPTOR]
         [PSPacketData]
