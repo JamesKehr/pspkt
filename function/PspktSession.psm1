@@ -1498,6 +1498,11 @@ The active pspkt session whose OutputStream[0] ring is drained.
 .PARAMETER PollingIntervalMs
 Upper bound on the consumer wait when no packets are available.
 
+.PARAMETER InitialWarnings
+Setup warnings collected by Start-Pspkt before the TUI started (e.g. the Analysis
+PacketSize auto-bump). They are shown in the runtime warning panel at first paint so
+they appear inside the TUI instead of scrolling above it.
+
 .OUTPUTS
 PSCustomObject with PacketCount and DroppedCount.
 #>
@@ -1511,7 +1516,12 @@ function Invoke-PspktAnalysisLoop {
 
         [Parameter(Mandatory = $false)]
         [int]
-        $PollingIntervalMs = 50
+        $PollingIntervalMs = 50,
+
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string[]]
+        $InitialWarnings = $null
     )
 
     $stream = $Session.OutputStream[0]
@@ -1655,6 +1665,16 @@ function Invoke-PspktAnalysisLoop {
                 $warnState.Text  = $Message.Trim()
                 $warnState.Until = [DateTime]::UtcNow.AddSeconds(5)
             }
+        }
+    }
+    # Seed the panel with any setup warnings collected by Start-Pspkt before the TUI took
+    # over the screen (e.g. the Analysis PacketSize auto-bump), so they surface inside the
+    # TUI instead of scrolling above it. The 5-second timer starts now, at first paint.
+    if ($null -ne $InitialWarnings) {
+        $seedWarnings = @($InitialWarnings | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($seedWarnings.Count -gt 0) {
+            $warnState.Text  = ($seedWarnings -join '   |   ')
+            $warnState.Until = [DateTime]::UtcNow.AddSeconds(5)
         }
     }
 
@@ -2986,6 +3006,23 @@ function Start-Pspkt {
             return Get-PspktComponent -NIC | Sort-Object Id | Select-Object Id, Name | Format-Table -AutoSize
         }
 
+        # --- Analysis-mode warning collection ---
+        # In Analysis mode the BoxyBox TUI takes over the screen, so setup warnings emitted
+        # here (PacketSize/ParsingLevel auto-bumps, vmNIC skips, etc.) would scroll ABOVE the
+        # TUI and look "outside" it. Collect them via a nested Write-Warning proxy (dynamic
+        # command scoping routes every Write-Warning from this call tree to it) and hand them
+        # to Invoke-PspktAnalysisLoop, which shows them in the in-TUI warning panel. The proxy
+        # is removed right after the loop so cleanup warnings print normally. -NoWarning still
+        # suppresses these at their source (the auto-bumps guard on it), so nothing is collected.
+        $analysisPendingWarnings = [System.Collections.Generic.List[string]]::new()
+        $analysisWarningCapture = ($ParsingLevel -eq [PspktParsingLevel]::Analysis)
+        if ($analysisWarningCapture) {
+            ${function:Write-Warning} = {
+                param([Parameter(Position = 0, ValueFromPipeline = $true)][string] $Message)
+                process { if (-not [string]::IsNullOrWhiteSpace($Message)) { $null = $analysisPendingWarnings.Add($Message.Trim()) } }
+            }
+        }
+
         # --- DNS application-layer predicate detection + auto-bumps ---
         # Detect *before* session creation so PacketSize bump propagates into the
         # session. ParsingLevel bump must also happen before Set-PspktDetailLevel.
@@ -3935,6 +3972,12 @@ function Start-Pspkt {
             Write-Verbose "Could not set console output encoding to UTF-8: $_"
         }
 
+        # All setup warnings have now been collected (when Analysis). Restore the real
+        # Write-Warning so the capture loop and cleanup warn to the console normally — this
+        # runs on every branch (Analysis, standard real-time, ETL), so the proxy never leaks
+        # past setup even when -pl Analysis is combined with a non-TUI path like -WriteEtl.
+        if ($analysisWarningCapture) { Remove-Item -Path function:Write-Warning -ErrorAction SilentlyContinue }
+
         try {
           if ($useRealTime -and ($ParsingLevel -eq [PspktParsingLevel]::Analysis)) {
             # --- Analysis mode: BoxyBox TUI (scrolling Text Box) ---
@@ -3962,7 +4005,10 @@ function Start-Pspkt {
             $icmpNdpOnly  = $NDP.IsPresent -or $AA.IsPresent -or $AAv6.IsPresent
             [PacketLineFormatter]::SetIcmpDisplayFilter($icmpEchoOnly, $icmpNdpOnly)
 
-            $analysisResult = Invoke-PspktAnalysisLoop -Session $Session -PollingIntervalMs $PollingIntervalMs
+            # Hand the setup warnings collected before the TUI took over to the loop so they
+            # appear in the in-TUI warning panel (the Write-Warning proxy was already restored
+            # above, before this dispatch, so cleanup warns to the console normally).
+            $analysisResult = Invoke-PspktAnalysisLoop -Session $Session -PollingIntervalMs $PollingIntervalMs -InitialWarnings $analysisPendingWarnings.ToArray()
             $packetCount += $analysisResult.PacketCount
             $droppedCount += $analysisResult.DroppedCount
           }

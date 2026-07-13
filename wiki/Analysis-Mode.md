@@ -126,11 +126,12 @@ into view or collapsed.
 - **PacketSize** is automatically raised to a **1500-byte (MTU) floor** in Analysis mode so the
   just-in-time Details parse has enough payload to work with. An explicit larger `-PacketSize`
   is left as-is, and `-PacketSize 0` (full packets) is preserved.
-- Because the TUI owns the screen, any **runtime warning** raised while a capture is running is
-  shown *inside* the UI instead of being printed to the console: a panel expands up from the
-  bottom, sized just tall enough to fit the (yellow) warning text, stays for **5 seconds**, then
-  collapses. (Setup warnings emitted before the TUI starts — e.g. the PacketSize/ParsingLevel
-  auto-bumps — still print normally; suppress those with `-NoWarning`.)
+- Because the TUI owns the screen, **warnings are shown *inside* the UI instead of being
+  printed to the console**: a panel expands up from the bottom, sized just tall enough to fit
+  the (yellow) warning text, stays for **5 seconds**, then collapses. This covers both setup
+  warnings raised before the TUI starts (e.g. the PacketSize/ParsingLevel auto-bumps, which are
+  collected and shown at first paint) and any warning raised while the capture runs. Suppress
+  the auto-bump warnings at their source with `-NoWarning`.
 
 ---
 
