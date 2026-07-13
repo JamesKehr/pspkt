@@ -2929,6 +2929,21 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             ($ipv4.Children | Where-Object { $_.Text -eq 'Dst: 1.1.1.1' }).Count | Should -Be 1
             ($ipv4.Children | Where-Object { $_.Text -eq 'id: 0x8bee' }).Count | Should -Be 1
         }
+        It 'renders the Ethernet detail node with aligned Source/Destination/Type/Length fields' {
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $eth = $roots[1]
+            $eth.Key | Should -Be 'Eth'
+            # Collapsed header carries the one-line summary (with type + len).
+            $eth.Text | Should -Match '^Eth: .+ > .+, type IPv4, len \d+$'
+            $kids = $eth.Children | ForEach-Object { $_.Text }
+            # Labels are padded so every value starts at the same column (13).
+            ($kids | Where-Object { $_ -match '^Source:      \S' }).Count      | Should -Be 1
+            ($kids | Where-Object { $_ -match '^Destination: \S' }).Count      | Should -Be 1
+            ($kids | Where-Object { $_ -match '^Type:        IPv4 \(0x0800\)$' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -match '^Length:      \d+$' }).Count    | Should -Be 1
+            # Every field's value column is aligned at index 13.
+            foreach ($k in $kids) { $k.Substring(0, 12).TrimEnd().EndsWith(':') | Should -BeTrue; $k[12] | Should -Be ' ' }
+        }
         It 'extracts DNS transaction id and query' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $dns = $roots[4]
