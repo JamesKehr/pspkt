@@ -1635,6 +1635,7 @@ function Invoke-PspktAnalysisLoop {
             $h = [int]($detailsHeight * $s / $steps)
             if ($h -lt 2) { $h = 2 }
             $animBox = [BoxyBox.Box]::new($boxWidth, $h)
+            $animBox.MenuStyle = [BoxyBox.MenuBar+Cap]::TerminalSingle   # single-line bottom (matches the Details box)
             $animRegion = [BoxyBox.ScreenRegion]::new($areaTop + $areaHeight - $h, 1, $boxWidth, $h)
             [Console]::Write($animRegion.BuildFrame($animBox.Render($null)))
             Start-Sleep -Milliseconds 12
@@ -1990,7 +1991,7 @@ function Invoke-PspktAnalysisLoop {
                     $divider = [BoxyBox.MenuBar]::Build($emptyMenu, $boxWidth, [BoxyBox.MenuBar+Cap]::Mid)   # ╞══╡
                     $warnBox = [BoxyBox.Box]::new($boxWidth, $wrapped.Count + 1)
                     $warnBox.ShowTopBorder = $false
-                    $warnBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Terminal   # ╘══╛ bottom
+                    $warnBox.MenuStyle = [BoxyBox.MenuBar+Cap]::TerminalSingle   # └──┘ single-line bottom
                     $warnBox.MenuOptions = $emptyMenu
                     $warnLines = [System.Collections.Generic.List[string]]::new()
                     foreach ($wl in $wrapped) { $null = $warnLines.Add(" $ESC[93m$wl$ESC[0m") }   # bright yellow

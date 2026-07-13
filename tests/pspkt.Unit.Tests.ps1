@@ -2424,6 +2424,15 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             [int]$bar[0]  | Should -Be ([int][char]0x255e)  # ╞
             [int]$bar[-1] | Should -Be ([int][char]0x2561)  # ╡
         }
+        It 'uses single-line caps and rule for the TerminalSingle style' {
+            $opts = [System.Collections.Generic.List[string]]@('[X]Go')
+            $bar = [BoxyBox.MenuBar]::Build($opts, 30, [BoxyBox.MenuBar+Cap]::TerminalSingle)
+            [BoxyBox.AnsiText]::VisibleLength($bar) | Should -Be 30
+            [int]$bar[0]  | Should -Be ([int][char]0x2514)  # └
+            [int]$bar[-1] | Should -Be ([int][char]0x2518)  # ┘
+            $bar.Contains([char]0x2500) | Should -BeTrue    # single-line rule ─
+            $bar.Contains([char]0x2550) | Should -BeFalse   # no double-line rule ═
+        }
         It 'drops options that would overflow the width' {
             $opts = [System.Collections.Generic.List[string]]@('AAAAAAAA', 'BBBBBBBB', 'CCCCCCCC')
             $bar = [BoxyBox.MenuBar]::Build($opts, 16, [BoxyBox.MenuBar+Cap]::Terminal)
@@ -2809,6 +2818,15 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $frame = $db.Render($script:on, $script:off)
             # first content row (Component) is selected by default
             $frame[1].Contains($script:on) | Should -BeTrue
+        }
+        It 'renders a single-line bottom border (double lines reserved for the divider/live bottom)' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12, $false)
+            $db.Box.MenuStyle | Should -Be ([BoxyBox.MenuBar+Cap]::TerminalSingle)
+            $db.SetTree((New-SampleTree))
+            $bottom = [BoxyBox.AnsiText]::StripAnsi($db.Render($script:on, $script:off)[-1])
+            [int]$bottom[0]  | Should -Be ([int][char]0x2514)   # └
+            [int]$bottom[-1] | Should -Be ([int][char]0x2518)   # ┘
+            $bottom.Contains([char]0x2550) | Should -BeFalse    # no double-line rule
         }
         It 'GetAllText returns the whole tree even when collapsed and larger than the viewport' {
             $db = [BoxyBox.DetailsBox]::new(40, 4)   # tiny viewport

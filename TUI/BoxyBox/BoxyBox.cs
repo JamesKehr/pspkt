@@ -297,21 +297,34 @@ namespace BoxyBox
     {
         public enum Cap
         {
-            Terminal, // outer bottom border
-            Mid       // divider between two stacked boxes
+            Terminal,       // outer bottom border, double line (live/collapsed bottom)
+            Mid,            // divider between two stacked boxes, double line
+            TerminalSingle  // outer bottom border, single line (expanded Details box bottom)
         }
 
         /// <summary>
         /// Builds a menu bar line of exactly <paramref name="width"/> visible columns.
-        /// Each option is prefixed by the double-line rule; options that would overflow are
-        /// dropped from the right (caller supplies pre-ordered items, most important first).
-        /// Width includes the two cap characters.
+        /// Each option is prefixed by the rule; options that would overflow are dropped from the
+        /// right (caller supplies pre-ordered items, most important first). The rule and caps are
+        /// double-line for <see cref="Cap.Terminal"/> / <see cref="Cap.Mid"/> and single-line for
+        /// <see cref="Cap.TerminalSingle"/>. Width includes the two cap characters.
         /// </summary>
         public static string Build(IList<string> options, int width, Cap cap)
         {
             if (width < 2) return string.Empty;
-            char left  = cap == Cap.Terminal ? BoxChars.MenuBottomLeft : BoxChars.MenuMidLeft;
-            char right = cap == Cap.Terminal ? BoxChars.MenuBottomRight : BoxChars.MenuMidRight;
+            char left, right, rule;
+            switch (cap)
+            {
+                case Cap.Mid:
+                    left = BoxChars.MenuMidLeft; right = BoxChars.MenuMidRight; rule = BoxChars.DblHorizontal;
+                    break;
+                case Cap.TerminalSingle:
+                    left = BoxChars.BottomLeft; right = BoxChars.BottomRight; rule = BoxChars.Horizontal;
+                    break;
+                default: // Cap.Terminal
+                    left = BoxChars.MenuBottomLeft; right = BoxChars.MenuBottomRight; rule = BoxChars.DblHorizontal;
+                    break;
+            }
 
             int inner = width - 2; // columns available between the caps
             var sb = new StringBuilder(width);
@@ -323,7 +336,7 @@ namespace BoxyBox
                 for (int i = 0; i < options.Count; i++)
                 {
                     string opt = options[i] ?? string.Empty;
-                    string chunk = new string(BoxChars.DblHorizontal, 2) + opt;
+                    string chunk = new string(rule, 2) + opt;
                     if (AnsiText.VisibleLength(content.ToString()) + AnsiText.VisibleLength(chunk) > inner) break;
                     content.Append(chunk);
                 }
@@ -332,7 +345,7 @@ namespace BoxyBox
             string contentStr = content.ToString();
             sb.Append(contentStr);
             int fill = inner - AnsiText.VisibleLength(contentStr);
-            if (fill > 0) sb.Append(new string(BoxChars.DblHorizontal, fill));
+            if (fill > 0) sb.Append(new string(rule, fill));
             sb.Append(right);
             return sb.ToString();
         }
@@ -911,7 +924,10 @@ namespace BoxyBox
         {
             _box = new Box(width, height);
             _box.ShowTopBorder = showTopBorder;
-            _box.MenuStyle = MenuBar.Cap.Terminal;
+            // Single-line bottom border: the Details box's bottom is the outer edge of the
+            // screen while expanded, and the double-line style is reserved for the Text/Details
+            // divider and the live (collapsed) bottom border.
+            _box.MenuStyle = MenuBar.Cap.TerminalSingle;
             _box.MenuOptions = new List<string>();
         }
 

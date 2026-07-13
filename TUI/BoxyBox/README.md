@@ -46,7 +46,7 @@ All types live in the `BoxyBox` namespace.
 | Type | Responsibility |
 |---|---|
 | `Box` | A bordered box: optional top border, N content rows, and a bottom **menu bar**. `Render(...)` returns a `string[]` frame (each line exactly `Width` visible columns). Supports a highlighted selected row and in-place `Resize(width, height)`. `ShowTopBorder=false` lets a box sit flush beneath another (shared divider). |
-| `MenuBar` | Builds the bottom bar from option strings, filling with the double rule (`═`) and end caps. `Cap.Terminal` (`╘…╛`) is an outer bottom border; `Cap.Mid` (`╞…╡`) is a divider shared with the box below. |
+| `MenuBar` | Builds the bottom bar from option strings, filling with a rule and end caps. `Cap.Terminal` (`╘══╛`, double) is the outer bottom border of a standalone/collapsed box; `Cap.Mid` (`╞══╡`, double) is a divider shared with the box below; `Cap.TerminalSingle` (`└──┘`, single) is the outer bottom of a box that sits below a divider (e.g. the expanded Details box). Double-line style is reserved for dividers and collapsed/live bottoms; boxes opened beneath a divider close with the single-line cap. |
 | `ScreenRegion` | A fixed rectangle on the console. `BuildFrame(lines)` turns a `string[]` into one absolute-positioned string ready for a single `[Console]::Write`. Also exposes `ClearScreen()`, `ShowCursor()`, `HideCursor()`. |
 
 ### Scrolling text
