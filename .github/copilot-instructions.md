@@ -18,7 +18,7 @@ This module must remain compatible with **Windows PowerShell 5.1**. Avoid PS 7+-
 
 ### Type system layers
 
-1. **C# interop** (`class/pspkt.cs`) – P/Invoke declarations for `pktmonapi.dll`, structs (`PACKETMONITOR_IP_ADDRESS`, `PSPacketData`, etc.), the native callback, the lock-free `SpscPacketRingBuffer`, `PacketBytePool`, and async `PcapngWriter`. Compiled at module load via `Add-Type` in `class/loader.psm1`.
+1. **C# interop** (`class/pspkt.cs`) – P/Invoke declarations for `pktmonapi.dll`, structs (`PACKETMONITOR_IP_ADDRESS`, `PSPacketData`, etc.), the native callback, the lock-free `SpscPacketRingBuffer`, `PacketBytePool`, and async `PcapngWriter`. Compiled at module load via `Add-Type` in `class/loader.psm1`. **`loader.psm1` compiles every `*.cs` under `class/`, `Parsers/`, AND `TUI/` into one assembly** (it dedupes `using` directives and concatenates the bodies), then registers all their types as type accelerators. A C# change anywhere in those three trees requires a fresh shell to recompile.
 2. **PowerShell classes** (`class/*.psm1`) – Domain objects built on top of the C# types:
    - `pspkt` – core handle lifecycle (initialize / uninitialize / enum data sources / create sessions)
    - `pspktSession`, `pspktFilter`, `pspktComponent` – session, filter, and component wrappers
@@ -42,6 +42,17 @@ This module must remain compatible with **Windows PowerShell 5.1**. Avoid PS 7+-
 - The producer (native callback) rents byte buffers from `PacketBytePool`; the consumer must call the pool-return helper after `FormatBatch` so buffers are recycled.
 - File writes are decoupled: when a `FileWriter` is set, the callback enqueues into the writer's own ring; `PcapngWriter` flushes on its own thread.
 
+### Analysis level: the BoxyBox TUI
+
+The `Analysis` parsing level (`PspktParsingLevel::Analysis = 2` in `class/pspktEnum.psm1`) is an **interactive full-screen TUI**, not just a formatter setting. `Start-Pspkt` branches to `Invoke-PspktAnalysisLoop` (`function/PspktSession.psm1`) instead of the standard consumer loop when `-pl Analysis` is set.
+
+- **BoxyBox** (`TUI/BoxyBox/BoxyBox.cs`, namespace `BoxyBox`) is a **project-independent** C# TUI engine (no pspkt dependencies): non-scrolling bordered boxes, scrolling `TextBox` with absolute sequence numbers, expandable `DetailsBox` trees, `OverlayBox` prompts/notifications, and JSON-defined menus (`MenuRenderer` picks Full `[Hotkey]DisplayName` vs Simple `[Hotkey]` by width). Frames are built as `string[]` and written once per tick via `ScreenRegion.BuildFrame` — the console never scrolls. See `TUI/BoxyBox/README.md` for the class-by-class API.
+- **JIT detail parse** – the scrolling Text Box keeps only formatted summary lines. To show the Wireshark-style detail tree for a *selected* packet, `PacketDetailStore` (`Parsers/PacketDetailExtractor.cs`) retains the full descriptor (metadata + packet bytes + QPC) of the most recent **50,000** packets, and `PacketDetailExtractor.BuildTree` / `DnsParser.BuildDnsDetailTree` parse it on demand when the user navigates. This keeps full-message parsing off the capture hot path.
+- `PacketDetailStore.WritePcapng` reuses `PcapngWriter` to export the retained packets (the Analysis "Save" hotkey), so saved files match a live `-WriteFile` capture.
+- Menu definitions live in `TUI/BoxyBox/menus/{TextLive,TextFocus,Details}.json`; a user override may sit at `$HOME/.pspkt/menus/<Box>.json`.
+- The loop pushes the active color scheme into the C# formatter (`Get-PspktColorScheme` → `InitColorScheme`) so Text-box lines and the detail tree keep parsing colors; it runs with `[Console]::TreatControlCAsInput = $true` (for the `Shift+Ctrl+C` copy) and must temporarily restore it around any `[Console]::ReadLine()` (e.g. the Save prompt) or Backspace breaks.
+- Analysis auto-raises the session `PacketSize` to a 1500-byte floor (Start-Pspkt, alongside the other PacketSize bumps) so the JIT parse has enough payload. Because the TUI owns the screen, a nested `${function:Write-Warning}` proxy in `Invoke-PspktAnalysisLoop` captures any runtime `Write-Warning` (PowerShell dynamic command scoping routes warnings from called code to it) and renders it in a bottom panel (sized to fit, yellow, 5s) via the private `Split-PspktWarningText` word-wrap helper — a plain `Write-Warning` inside the loop would otherwise corrupt the frame.
+
 ### Module loading order is critical
 
 `pspkt.psm1` loads sub-modules in a **specific, hard-coded order** to satisfy class dependencies. **Do not** use `Get-ChildItem` to discover and load modules dynamically – the comment in `pspkt.psm1` explains why.
@@ -60,7 +71,7 @@ class/loader.psm1   (Add-Type compiles class/pspkt.cs)
   → function/PspktSession.psm1
 ```
 
-When adding a new class, parser, or function module, insert it in the `$loadList` array in `pspkt.psm1` at the correct position based on its dependencies. Per-protocol parser modules (`Parsers/Network/myproto.psm1`, etc.) are loaded by `libParser.psm1` itself, not by `pspkt.psm1`.
+When adding a new class, parser, or function module, insert it in the `$loadList` array in `pspkt.psm1` at the correct position based on its dependencies. Per-protocol parser modules (`Parsers/Network/myproto.psm1`, etc.) are loaded by `libParser.psm1` itself, not by `pspkt.psm1`. New `TUI/**/*.cs` files need no wiring — `class/loader.psm1` compiles them automatically — but any new **public** type must be added to the `$ExportableTypes` accelerator list in `loader.psm1`.
 
 ### PowerShell ↔ C# bridge
 
@@ -131,8 +142,8 @@ GitHub Actions workflows in `.github/workflows/` use a matrix of `pwsh` (PS 7+) 
 
 ## Build and install
 
-There is **no build step** – the module is pure source. `Add-Type` compiles the embedded C# at module-import time, so any change to `class/pspkt.cs` or any `Parsers/*.cs` file takes effect on the next `Import-Module pspkt -Force` in a fresh PowerShell session (compiled assemblies cannot be unloaded from a running process; restart the shell after C# edits). For local install, copy the repo root into `$HOME\Documents\PowerShell\Modules\pspkt` (Core) or `$HOME\Documents\WindowsPowerShell\Modules\pspkt` (Desktop). The manifest (`pspkt.psd1`) only formally exports `ConvertTo-PspktIpAddress` via `FunctionsToExport`; everything else is surfaced through `Export-ModuleMember` in `pspkt.psm1` because the module is loaded via `Import-Module` on the `.psm1` directly during development.
+There is **no build step** – the module is pure source. `Add-Type` compiles the embedded C# at module-import time, so any change to `class/pspkt.cs`, any `Parsers/*.cs`, or any `TUI/**/*.cs` file takes effect on the next `Import-Module pspkt -Force` in a fresh PowerShell session (compiled assemblies cannot be unloaded from a running process; restart the shell after C# edits). For local install, copy the repo root into `$HOME\Documents\PowerShell\Modules\pspkt` (Core) or `$HOME\Documents\WindowsPowerShell\Modules\pspkt` (Desktop). The manifest (`pspkt.psd1`) only formally exports `ConvertTo-PspktIpAddress` via `FunctionsToExport`; everything else is surfaced through `Export-ModuleMember` in `pspkt.psm1` because the module is loaded via `Import-Module` on the `.psm1` directly during development.
 
 ## User-facing documentation
 
-`wiki/*.md` (rendered on the GitHub wiki) is the canonical end-user reference for cmdlet behavior, quick filters, color profiles, drop triggers, and capture examples. When changing user-visible behavior of an exported cmdlet, update the corresponding wiki page (e.g., `wiki/Start-Pspkt.md`, `wiki/Filters.md`, `wiki/Quick-Filters.md`) in the same change.
+`wiki/*.md` (rendered on the GitHub wiki) is the canonical end-user reference for cmdlet behavior, quick filters, color profiles, drop triggers, and capture examples. When changing user-visible behavior of an exported cmdlet, update the corresponding wiki page (e.g., `wiki/Start-Pspkt.md`, `wiki/Filters.md`, `wiki/Quick-Filters.md`) in the same change. The Analysis TUI has its own end-user page (`wiki/Analysis-Mode.md`) and an engine reference (`TUI/BoxyBox/README.md`); keep both in sync when changing Analysis behavior. Because the wiki renders as a separate GitHub wiki, cross-boundary links between `wiki/` and repo files (e.g. `TUI/BoxyBox/README.md`) must use full `https://github.com/JamesKehr/pspkt/...` URLs, not relative paths.

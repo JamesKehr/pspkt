@@ -121,6 +121,17 @@ into view or collapsed.
 - Resizing the terminal **rebuilds the layout** in place so the boxes track the new size.
 - The detail tree uses a plain two-space indent (no `├`/`└` connectors) by default.
 
+## Capture size and runtime warnings
+
+- **PacketSize** is automatically raised to a **1500-byte (MTU) floor** in Analysis mode so the
+  just-in-time Details parse has enough payload to work with. An explicit larger `-PacketSize`
+  is left as-is, and `-PacketSize 0` (full packets) is preserved.
+- Because the TUI owns the screen, any **runtime warning** raised while a capture is running is
+  shown *inside* the UI instead of being printed to the console: a panel expands up from the
+  bottom, sized just tall enough to fit the (yellow) warning text, stays for **5 seconds**, then
+  collapses. (Setup warnings emitted before the TUI starts — e.g. the PacketSize/ParsingLevel
+  auto-bumps — still print normally; suppress those with `-NoWarning`.)
+
 ---
 
 ## Menu customization

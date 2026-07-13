@@ -3012,6 +3012,37 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
     }
 
+    Context 'Split-PspktWarningText (Analysis runtime-warning wrap)' {
+        BeforeAll {
+            $script:mod = Get-Module PspktSession
+        }
+        It 'returns a single line when the text fits the width' {
+            $r = @(& $script:mod { Split-PspktWarningText -Text 'Short warning.' -Width 40 -MaxLines 6 })
+            $r.Count | Should -Be 1
+            $r[0] | Should -Be 'Short warning.'
+        }
+        It 'word-wraps to lines no wider than -Width' {
+            $r = @(& $script:mod { Split-PspktWarningText -Text 'the quick brown fox jumps over the lazy dog' -Width 15 -MaxLines 10 })
+            $r.Count | Should -BeGreaterThan 1
+            foreach ($line in $r) { $line.Length | Should -BeLessOrEqual 15 }
+        }
+        It 'caps at -MaxLines and marks truncation with an ellipsis within the width' {
+            $r = @(& $script:mod { Split-PspktWarningText -Text ('word ' * 40) -Width 20 -MaxLines 3 })
+            $r.Count | Should -Be 3
+            $r[-1].EndsWith('...') | Should -BeTrue
+            $r[-1].Length | Should -BeLessOrEqual 20
+        }
+        It 'hard-splits a single word longer than the width' {
+            $r = @(& $script:mod { Split-PspktWarningText -Text ('X' * 45) -Width 20 -MaxLines 5 })
+            $r[0].Length | Should -Be 20
+        }
+        It 'returns one empty line for empty input' {
+            $r = @(& $script:mod { Split-PspktWarningText -Text '' -Width 20 -MaxLines 3 })
+            $r.Count | Should -Be 1
+            $r[0] | Should -Be ''
+        }
+    }
+
     Context 'OverlayBox' {
         It 'builds a centered bordered box with a title and body' {
             $body = [System.Collections.Generic.List[string]]@('hello', 'world')
