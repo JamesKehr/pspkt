@@ -203,10 +203,11 @@ public static class PacketDetailExtractor
         var eth = new BoxyBox.TreeNode(
             "Eth: " + srcMac + " > " + dstMac + ", type " + etherName + ", len " + length,
             "Eth", false);
-        eth.AddLeaf("Source: " + srcMac);
-        eth.AddLeaf("Destination: " + dstMac);
-        eth.AddLeaf("Type: " + etherName + " (0x" + etherType.ToString("x4") + ")");
-        eth.AddLeaf("Length: " + length);
+        // Aligned labels (value column at 12) per Ethernet_parser_instructions.md.
+        eth.AddLeaf("Source:".PadRight(12) + " " + srcMac);
+        eth.AddLeaf("Destination:".PadRight(12) + " " + dstMac);
+        eth.AddLeaf("Type:".PadRight(12) + " " + etherName + " (0x" + etherType.ToString("x4") + ")");
+        eth.AddLeaf("Length:".PadRight(12) + " " + length);
         roots.Add(eth);
 
         int ipOffset = 14;

@@ -1391,6 +1391,92 @@ function Get-PspktTuiMenu {
 
 <#
 .SYNOPSIS
+Word-wraps a single string into lines that each fit a given visible width, capped at a
+maximum number of lines.
+
+.DESCRIPTION
+Greedy word wrap used by the Analysis TUI to size the transient runtime-warning panel to
+its text. Splits on whitespace and packs words into lines no wider than -Width. When the
+wrapped text would exceed -MaxLines, the last kept line is truncated with an ellipsis.
+Always returns at least one line.
+
+.PARAMETER Text
+The text to wrap.
+
+.PARAMETER Width
+Maximum visible width (columns) of each wrapped line.
+
+.PARAMETER MaxLines
+Maximum number of lines to return.
+
+.OUTPUTS
+System.String[] — the wrapped lines.
+#>
+function Split-PspktWarningText {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]
+        $Text,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $Width,
+
+        [Parameter(Mandatory = $false)]
+        [int]
+        $MaxLines = 6
+    )
+
+    if ($Width -lt 4) { $Width = 4 }
+    if ($MaxLines -lt 1) { $MaxLines = 1 }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $words = ($Text -split '\s+') | Where-Object { $_.Length -gt 0 }
+
+    foreach ($word in $words) {
+        # Hard-split any single word longer than the line width.
+        $chunk = $word
+        while ($chunk.Length -gt $Width) {
+            if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].Length -eq 0) {
+                $lines[$lines.Count - 1] = $chunk.Substring(0, $Width)
+            } else {
+                $null = $lines.Add($chunk.Substring(0, $Width))
+            }
+            $chunk = $chunk.Substring($Width)
+        }
+        if ($lines.Count -eq 0) {
+            $null = $lines.Add($chunk)
+        } else {
+            $last = $lines[$lines.Count - 1]
+            if ($last.Length -eq 0) {
+                $lines[$lines.Count - 1] = $chunk
+            } elseif (($last.Length + 1 + $chunk.Length) -le $Width) {
+                $lines[$lines.Count - 1] = "$last $chunk"
+            } else {
+                $null = $lines.Add($chunk)
+            }
+        }
+    }
+
+    if ($lines.Count -eq 0) { $null = $lines.Add('') }
+
+    if ($lines.Count -gt $MaxLines) {
+        while ($lines.Count -gt $MaxLines) { $lines.RemoveAt($lines.Count - 1) }
+        $keep = $Width - 3
+        if ($keep -lt 1) { $keep = 1 }
+        $last = $lines[$MaxLines - 1]
+        if ($last.Length -gt $keep) { $last = $last.Substring(0, $keep) }
+        $lines[$MaxLines - 1] = ($last.TrimEnd() + '...')
+    }
+
+    return $lines.ToArray()
+}
+
+<#
+.SYNOPSIS
 Runs the BoxyBox Analysis-mode consumer loop: a live scrolling Text Box, with a
 focus mode that opens a Details box and supports copy/save.
 
@@ -1412,6 +1498,11 @@ The active pspkt session whose OutputStream[0] ring is drained.
 .PARAMETER PollingIntervalMs
 Upper bound on the consumer wait when no packets are available.
 
+.PARAMETER InitialWarnings
+Setup warnings collected by Start-Pspkt before the TUI started (e.g. the Analysis
+PacketSize auto-bump). They are shown in the runtime warning panel at first paint so
+they appear inside the TUI instead of scrolling above it.
+
 .OUTPUTS
 PSCustomObject with PacketCount and DroppedCount.
 #>
@@ -1425,7 +1516,12 @@ function Invoke-PspktAnalysisLoop {
 
         [Parameter(Mandatory = $false)]
         [int]
-        $PollingIntervalMs = 50
+        $PollingIntervalMs = 50,
+
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string[]]
+        $InitialWarnings = $null
     )
 
     $stream = $Session.OutputStream[0]
@@ -1549,6 +1645,38 @@ function Invoke-PspktAnalysisLoop {
     # --- Transient notification overlay state (e.g. "Copied to clipboard") ---
     $notifyText = $null
     $notifyUntil = [DateTime]::MinValue
+
+    # --- Runtime warning panel state ---
+    # A warning emitted while the TUI owns the screen can't go to the console without
+    # corrupting the frame. Install a nested Write-Warning proxy: PowerShell's dynamic
+    # command scoping routes any Write-Warning from code this loop calls to this proxy
+    # (this function is always on the call stack while the loop runs), which records the
+    # message. The render then shows it in a bottom panel sized just tall enough to fit
+    # the text, in yellow, held for 3 seconds, then collapsed on the next repaint.
+    # Defined via ${function:...} rather than 'function Write-Warning {' so it does not
+    # shadow the module's real warnings outside this call and does not trip the Precheck
+    # comment-based-help scan.
+    $warnState = [pscustomobject]@{ Text = $null; Until = [DateTime]::MinValue }
+    $warnDrawn = $false
+    ${function:Write-Warning} = {
+        param([Parameter(Position = 0, ValueFromPipeline = $true)][string] $Message)
+        process {
+            if (-not [string]::IsNullOrWhiteSpace($Message)) {
+                $warnState.Text  = $Message.Trim()
+                $warnState.Until = [DateTime]::UtcNow.AddSeconds(3)
+            }
+        }
+    }
+    # Seed the panel with any setup warnings collected by Start-Pspkt before the TUI took
+    # over the screen (e.g. the Analysis PacketSize auto-bump), so they surface inside the
+    # TUI instead of scrolling above it. The 3-second timer starts now, at first paint.
+    if ($null -ne $InitialWarnings) {
+        $seedWarnings = @($InitialWarnings | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($seedWarnings.Count -gt 0) {
+            $warnState.Text  = ($seedWarnings -join '   |   ')
+            $warnState.Until = [DateTime]::UtcNow.AddSeconds(3)
+        }
+    }
 
     # Writes the retained capture to a pcapng file via a blocking overlay prompt. Returns a
     # status string for the notification. Restores the cursor/console state around the ReadLine.
@@ -1793,6 +1921,12 @@ function Invoke-PspktAnalysisLoop {
                 $null = [PktMonApi]::WaitForPackets($PollingIntervalMs)
             }
 
+            # A runtime warning that just arrived (or just expired) needs a repaint even when
+            # the stream is idle: force a frame when the panel's should-be-visible state differs
+            # from what is currently drawn.
+            $warnShouldShow = ($null -ne $warnState.Text) -and ([DateTime]::UtcNow -lt $warnState.Until)
+            if ($warnShouldShow -ne $warnDrawn) { $dirty = $true }
+
             # --- Throttled render ---
             if ($dirty -and $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs) {
                 if ($focused) {
@@ -1840,10 +1974,43 @@ function Invoke-PspktAnalysisLoop {
                     [Console]::Write($nRegion.BuildFrame($nLines))
                 }
 
+                # Runtime warning panel: a bottom box expanded just enough to fit the (yellow)
+                # warning text. Its top is a ╞══╡ divider (Mid caps) instead of a standalone
+                # ┌──┐ top border, so it merges seamlessly into the Text Box walls above (same
+                # seam the focus Details box uses); the box below the divider has no top border
+                # and a ╘══╛ terminal cap as its bottom. Drawn on top of the base frame; when it
+                # expires the next normal frame repaints over the region (collapse).
+                $warnActive = ($null -ne $warnState.Text) -and ([DateTime]::UtcNow -lt $warnState.Until)
+                if ($warnActive) {
+                    $wrapped = Split-PspktWarningText -Text $warnState.Text -Width ($boxWidth - 4) -MaxLines ([Math]::Max(1, $areaHeight - 2))
+                    $panelHeight = $wrapped.Count + 2   # divider + content rows + bottom cap
+                    $panelTop = $areaTop + $areaHeight - $panelHeight
+                    if ($panelTop -lt $areaTop) { $panelTop = $areaTop }
+                    $emptyMenu = [System.Collections.Generic.List[string]]::new()
+                    $divider = [BoxyBox.MenuBar]::Build($emptyMenu, $boxWidth, [BoxyBox.MenuBar+Cap]::Mid)   # ╞══╡
+                    $warnBox = [BoxyBox.Box]::new($boxWidth, $wrapped.Count + 1)
+                    $warnBox.ShowTopBorder = $false
+                    $warnBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Terminal   # ╘══╛ bottom
+                    $warnBox.MenuOptions = $emptyMenu
+                    $warnLines = [System.Collections.Generic.List[string]]::new()
+                    foreach ($wl in $wrapped) { $null = $warnLines.Add(" $ESC[93m$wl$ESC[0m") }   # bright yellow
+                    $panelFrame = [System.Collections.Generic.List[string]]::new()
+                    $null = $panelFrame.Add($divider)
+                    foreach ($bl in $warnBox.Render($warnLines)) { $null = $panelFrame.Add($bl) }
+                    $warnRegion = [BoxyBox.ScreenRegion]::new($panelTop, 1, $boxWidth, $panelHeight)
+                    [Console]::Write($warnRegion.BuildFrame($panelFrame))
+                    $warnDrawn = $true
+                } elseif ($warnDrawn) {
+                    # Expired: the base frame above already repainted over the panel region.
+                    $warnDrawn = $false
+                    $warnState.Text = $null
+                }
+
                 $frameWatch.Restart()
                 $dirty = $false
-                # Keep refreshing while a notification is visible, even when idle.
+                # Keep refreshing while a notification or warning panel is visible, even when idle.
                 if ($null -ne $notifyText -and [DateTime]::UtcNow -lt $notifyUntil) { $dirty = $true }
+                if ($warnActive) { $dirty = $true }
             }
         }
     }
@@ -2849,6 +3016,23 @@ function Start-Pspkt {
             return Get-PspktComponent -NIC | Sort-Object Id | Select-Object Id, Name | Format-Table -AutoSize
         }
 
+        # --- Analysis-mode warning collection ---
+        # In Analysis mode the BoxyBox TUI takes over the screen, so setup warnings emitted
+        # here (PacketSize/ParsingLevel auto-bumps, vmNIC skips, etc.) would scroll ABOVE the
+        # TUI and look "outside" it. Collect them via a nested Write-Warning proxy (dynamic
+        # command scoping routes every Write-Warning from this call tree to it) and hand them
+        # to Invoke-PspktAnalysisLoop, which shows them in the in-TUI warning panel. The proxy
+        # is removed right after the loop so cleanup warnings print normally. -NoWarning still
+        # suppresses these at their source (the auto-bumps guard on it), so nothing is collected.
+        $analysisPendingWarnings = [System.Collections.Generic.List[string]]::new()
+        $analysisWarningCapture = ($ParsingLevel -eq [PspktParsingLevel]::Analysis)
+        if ($analysisWarningCapture) {
+            ${function:Write-Warning} = {
+                param([Parameter(Position = 0, ValueFromPipeline = $true)][string] $Message)
+                process { if (-not [string]::IsNullOrWhiteSpace($Message)) { $null = $analysisPendingWarnings.Add($Message.Trim()) } }
+            }
+        }
+
         # --- DNS application-layer predicate detection + auto-bumps ---
         # Detect *before* session creation so PacketSize bump propagates into the
         # session. ParsingLevel bump must also happen before Set-PspktDetailLevel.
@@ -3274,6 +3458,17 @@ function Start-Pspkt {
                 $Session.PacketSize = 590
             } elseif ($DNS.IsPresent -and $Session.PacketSize -lt 512) {
                 $Session.PacketSize = 512
+            }
+        }
+
+        # Analysis mode does just-in-time full parsing of the selected packet in its Details
+        # box, so it needs more than the 128-byte default. Bump PacketSize to a 1500-byte (MTU)
+        # floor unless the user already asked for more, or for full packets (-PacketSize 0).
+        if ($ParsingLevel -eq [PspktParsingLevel]::Analysis -and $Session.PacketSize -ne 0 -and $Session.PacketSize -lt 1500) {
+            $previousAnalysisSize = $Session.PacketSize
+            $Session.PacketSize = 1500
+            if (-not $NoWarning.IsPresent) {
+                Write-Warning "Analysis mode benefits from a larger -PacketSize; auto-bumping from $previousAnalysisSize to 1500 bytes (use -PacketSize 0 to capture full packets)."
             }
         }
 
@@ -3787,6 +3982,12 @@ function Start-Pspkt {
             Write-Verbose "Could not set console output encoding to UTF-8: $_"
         }
 
+        # All setup warnings have now been collected (when Analysis). Restore the real
+        # Write-Warning so the capture loop and cleanup warn to the console normally — this
+        # runs on every branch (Analysis, standard real-time, ETL), so the proxy never leaks
+        # past setup even when -pl Analysis is combined with a non-TUI path like -WriteEtl.
+        if ($analysisWarningCapture) { Remove-Item -Path function:Write-Warning -ErrorAction SilentlyContinue }
+
         try {
           if ($useRealTime -and ($ParsingLevel -eq [PspktParsingLevel]::Analysis)) {
             # --- Analysis mode: BoxyBox TUI (scrolling Text Box) ---
@@ -3814,7 +4015,10 @@ function Start-Pspkt {
             $icmpNdpOnly  = $NDP.IsPresent -or $AA.IsPresent -or $AAv6.IsPresent
             [PacketLineFormatter]::SetIcmpDisplayFilter($icmpEchoOnly, $icmpNdpOnly)
 
-            $analysisResult = Invoke-PspktAnalysisLoop -Session $Session -PollingIntervalMs $PollingIntervalMs
+            # Hand the setup warnings collected before the TUI took over to the loop so they
+            # appear in the in-TUI warning panel (the Write-Warning proxy was already restored
+            # above, before this dispatch, so cleanup warns to the console normally).
+            $analysisResult = Invoke-PspktAnalysisLoop -Session $Session -PollingIntervalMs $PollingIntervalMs -InitialWarnings $analysisPendingWarnings.ToArray()
             $packetCount += $analysisResult.PacketCount
             $droppedCount += $analysisResult.DroppedCount
           }
