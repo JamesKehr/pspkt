@@ -2718,6 +2718,25 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $udpLine.StartsWith('  UDP')  | Should -BeTrue
             $out.Contains([char]0x2514)   | Should -BeFalse
         }
+        It 'shows canonical single-char TCP flags in the Default and Detailed one-liners' {
+            # Eth + IPv4(TCP) + TCP SYN+ACK (0x12) on a non-app port so the TCP segment shows.
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40; $ip[8]=64
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $tcp = [byte[]](0xc3,0x50, 0x1f,0x90, 0,0,0,1, 0,0,0,2, 0x50,0x12, 0xff,0xff, 0,0, 0,0)
+            $packet = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=172; $meta[18]=1
+            $data = $meta + $packet
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$packet.Length, [uint32]0, [uint32]0)
+
+            Set-PspktDetailLevel -Level 0   # Default
+            $def = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            $def | Should -Match 'TCP \[\.S\]'   # ACK='.', SYN='S' per the canonical TcpFlagMap
+
+            Set-PspktDetailLevel -Level 1   # Detailed
+            $det = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            $det | Should -Match 'TCP \[\.S\] - Src:'
+        }
     }
 
     Context 'TreeNode + TreeFlattener' {
@@ -2961,6 +2980,49 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             ($kids | Where-Object { $_ -match '^Length:      \d+$' }).Count    | Should -Be 1
             # Every field's value column is aligned at index 13.
             foreach ($k in $kids) { $k.Substring(0, 12).TrimEnd().EndsWith(':') | Should -BeTrue; $k[12] | Should -Be ' ' }
+        }
+        It 'renders the TCP Details node per spec (renamed fields + Wireshark flags breakdown)' {
+            # Eth + IPv4(TCP) + TCP header with SYN+ACK (flags byte 0x12), off 0x50, cksum 0x1234.
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $tcp = [byte[]](0xc3,0x50, 0x01,0xbb, 0,0,0,1, 0,0,0,2, 0x50,0x12, 0xff,0xff, 0x12,0x34, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $roots = [PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)
+            $tcpNode = $roots | Where-Object { $_.Key -eq 'TCP' }
+            $tcpNode | Should -Not -BeNullOrEmpty
+            # Collapsed header carries the tcpdump flags + ports/seq/ack/len summary.
+            $tcpNode.Text | Should -Be 'TCP [.S] - Src Port: 50000, Dst Port: 443, Seq: 1, Ack: 2, Len: 0'
+            $kids = $tcpNode.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Source Port: 50000' }).Count           | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Destination Port: 443' }).Count         | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Sequence Number: 1' }).Count            | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Acknowledgment number: 2' }).Count      | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Window: 65535' }).Count                 | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Checksum: 0x1234' }).Count              | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Urgent Pointer: 0' }).Count             | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'TCP payload (0 bytes)' }).Count         | Should -Be 1
+            ($kids | Where-Object { $_ -eq '0101 .... = Header Length: 20 bytes (0x5)' }).Count | Should -Be 1
+        }
+        It 'renders the TCP Flags node as a Wireshark bit breakdown with the tcpdump char summary' {
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $tcp = [byte[]](0xc3,0x50, 0x01,0xbb, 0,0,0,1, 0,0,0,2, 0x50,0x12, 0xff,0xff, 0x12,0x34, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $roots = [PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)
+            $flags = ($roots | Where-Object { $_.Key -eq 'TCP' }).Children | Where-Object { $_.Key -eq 'TCP.Flags' }
+            $flags | Should -Not -BeNullOrEmpty
+            # Header: 0x[12-bit hex] ([tcpdump single-char flags]); SYN+ACK => 0x012 (.S). Collapsed by default.
+            $flags.Text | Should -Be 'Flags: 0x012 (.S)'
+            $flags.IsExpanded | Should -BeFalse
+            $lines = $flags.Children | ForEach-Object { $_.Text }
+            $lines.Count | Should -Be 10
+            ($lines | Where-Object { $_ -eq '000. .... .... = Reserved: Not set' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -eq '.... ...1 .... = Acknowledgment: Set' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -eq '.... .... ..1. = Syn: Set' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -eq '.... .... ...0 = Fin: Not set' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -eq '.... B... .... = Congestion Window Reduced: Not set' }).Count | Should -Be 0
         }
         It 'extracts DNS transaction id and query' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
