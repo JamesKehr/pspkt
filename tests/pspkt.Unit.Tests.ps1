@@ -2424,6 +2424,15 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             [int]$bar[0]  | Should -Be ([int][char]0x255e)  # ╞
             [int]$bar[-1] | Should -Be ([int][char]0x2561)  # ╡
         }
+        It 'uses single-line caps and rule for the TerminalSingle style' {
+            $opts = [System.Collections.Generic.List[string]]@('[X]Go')
+            $bar = [BoxyBox.MenuBar]::Build($opts, 30, [BoxyBox.MenuBar+Cap]::TerminalSingle)
+            [BoxyBox.AnsiText]::VisibleLength($bar) | Should -Be 30
+            [int]$bar[0]  | Should -Be ([int][char]0x2514)  # └
+            [int]$bar[-1] | Should -Be ([int][char]0x2518)  # ┘
+            $bar.Contains([char]0x2500) | Should -BeTrue    # single-line rule ─
+            $bar.Contains([char]0x2550) | Should -BeFalse   # no double-line rule ═
+        }
         It 'drops options that would overflow the width' {
             $opts = [System.Collections.Generic.List[string]]@('AAAAAAAA', 'BBBBBBBB', 'CCCCCCCC')
             $bar = [BoxyBox.MenuBar]::Build($opts, 16, [BoxyBox.MenuBar+Cap]::Terminal)
@@ -2709,6 +2718,25 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $udpLine.StartsWith('  UDP')  | Should -BeTrue
             $out.Contains([char]0x2514)   | Should -BeFalse
         }
+        It 'shows canonical single-char TCP flags in the Default and Detailed one-liners' {
+            # Eth + IPv4(TCP) + TCP SYN+ACK (0x12) on a non-app port so the TCP segment shows.
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40; $ip[8]=64
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $tcp = [byte[]](0xc3,0x50, 0x1f,0x90, 0,0,0,1, 0,0,0,2, 0x50,0x12, 0xff,0xff, 0,0, 0,0)
+            $packet = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=172; $meta[18]=1
+            $data = $meta + $packet
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$packet.Length, [uint32]0, [uint32]0)
+
+            Set-PspktDetailLevel -Level 0   # Default
+            $def = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            $def | Should -Match 'TCP \[\.S\]'   # ACK='.', SYN='S' per the canonical TcpFlagMap
+
+            Set-PspktDetailLevel -Level 1   # Detailed
+            $det = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            $det | Should -Match 'TCP \[\.S\] - Src:'
+        }
     }
 
     Context 'TreeNode + TreeFlattener' {
@@ -2717,15 +2745,25 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
             $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
             $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
+            $optNode = [BoxyBox.TreeNode]::new('Options', 'opt', $false)
+            $null = $optNode.AddLeaf('MSS')                 # give it a child so it is expandable
+            $null = $ipv4.Add($optNode)                     # expandable sibling of the leaves
             $null = $roots.Add($ipv4)
             $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
-            $rows.Count | Should -Be 3
+            $rows.Count | Should -Be 4
             $rows[0].Display.TrimStart().StartsWith('-IPv4') | Should -BeTrue
-            # Default: no tree connectors; leaves use a plain two-space indent.
+            # Default: no tree connectors.
             $rows[1].Display.Contains([char]0x251c) | Should -BeFalse   # no ├
             $rows[2].Display.Contains([char]0x2514) | Should -BeFalse   # no └
-            [BoxyBox.AnsiText]::StripAnsi($rows[1].Display) | Should -Be '      Src'   # indent(4)+2 spaces
-            [BoxyBox.AnsiText]::StripAnsi($rows[2].Display) | Should -Be '      Dst'
+            # Leaf text is aligned so the +/- marker slot sits immediately left of the text:
+            # depth-1 indent (4) + one marker-slot space + text.
+            [BoxyBox.AnsiText]::StripAnsi($rows[1].Display) | Should -Be '     Src'   # 5 spaces + text
+            [BoxyBox.AnsiText]::StripAnsi($rows[2].Display) | Should -Be '     Dst'
+            # An expandable sibling's text aligns with the leaves; its +/- is immediately left.
+            [BoxyBox.AnsiText]::StripAnsi($rows[3].Display) | Should -Be '    +Options'
+            $leafTextCol = [BoxyBox.AnsiText]::StripAnsi($rows[1].Display).IndexOf('Src')
+            $nodeTextCol = [BoxyBox.AnsiText]::StripAnsi($rows[3].Display).IndexOf('Options')
+            $leafTextCol | Should -Be $nodeTextCol   # first text char aligned
         }
         It 'draws tree connectors when UseConnectors is enabled (opt-in)' {
             [BoxyBox.TreeFlattener]::UseConnectors = $true
@@ -2809,6 +2847,15 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $frame = $db.Render($script:on, $script:off)
             # first content row (Component) is selected by default
             $frame[1].Contains($script:on) | Should -BeTrue
+        }
+        It 'renders a single-line bottom border (double lines reserved for the divider/live bottom)' {
+            $db = [BoxyBox.DetailsBox]::new(40, 12, $false)
+            $db.Box.MenuStyle | Should -Be ([BoxyBox.MenuBar+Cap]::TerminalSingle)
+            $db.SetTree((New-SampleTree))
+            $bottom = [BoxyBox.AnsiText]::StripAnsi($db.Render($script:on, $script:off)[-1])
+            [int]$bottom[0]  | Should -Be ([int][char]0x2514)   # └
+            [int]$bottom[-1] | Should -Be ([int][char]0x2518)   # ┘
+            $bottom.Contains([char]0x2550) | Should -BeFalse    # no double-line rule
         }
         It 'GetAllText returns the whole tree even when collapsed and larger than the viewport' {
             $db = [BoxyBox.DetailsBox]::new(40, 4)   # tiny viewport
@@ -2916,11 +2963,13 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots[3].Key | Should -Be 'UDP'
             $roots[4].Key | Should -Be 'DNS'
         }
-        It 'Component and Eth are collapsed by default; IPv4/UDP/DNS expanded' {
+        It 'Component/Eth/TCP/UDP collapsed by default; IPv4/DNS expanded' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $roots[0].IsExpanded | Should -BeFalse   # Component
             $roots[1].IsExpanded | Should -BeFalse   # Eth
             $roots[2].IsExpanded | Should -BeTrue     # IPv4
+            $roots[3].IsExpanded | Should -BeFalse    # UDP (transport collapsed by default)
+            $roots[4].IsExpanded | Should -BeTrue     # DNS
         }
         It 'extracts IPv4 fields (Src/Dst/id)' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
@@ -2944,6 +2993,62 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             # Every field's value column is aligned at index 13.
             foreach ($k in $kids) { $k.Substring(0, 12).TrimEnd().EndsWith(':') | Should -BeTrue; $k[12] | Should -Be ' ' }
         }
+        It 'renders the TCP Details node per spec (renamed fields + Wireshark flags breakdown)' {
+            # Eth + IPv4(TCP) + TCP header with SYN+ACK (flags byte 0x12), off 0x50, cksum 0x1234.
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $tcp = [byte[]](0xc3,0x50, 0x01,0xbb, 0,0,0,1, 0,0,0,2, 0x50,0x12, 0xff,0xff, 0x12,0x34, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $roots = [PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)
+            $tcpNode = $roots | Where-Object { $_.Key -eq 'TCP' }
+            $tcpNode | Should -Not -BeNullOrEmpty
+            $tcpNode.IsExpanded | Should -BeFalse   # collapsed by default in Analysis mode
+            # Collapsed header carries the tcpdump flags + ports/seq/ack/len summary.
+            $tcpNode.Text | Should -Be 'TCP [.S] - Src Port: 50000, Dst Port: 443, Seq: 1, Ack: 2, Len: 0'
+            $kids = $tcpNode.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Source Port: 50000' }).Count           | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Destination Port: 443' }).Count         | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Sequence Number: 1' }).Count            | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Acknowledgment number: 2' }).Count      | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Window: 65535' }).Count                 | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Checksum: 0x1234' }).Count              | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Urgent Pointer: 0' }).Count             | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'TCP payload (0 bytes)' }).Count         | Should -Be 1
+            ($kids | Where-Object { $_ -eq '0101 .... = Header Length: 20 bytes (0x5)' }).Count | Should -Be 1
+        }
+        It 'renders the TCP Flags node as a Wireshark bit breakdown with the tcpdump char summary' {
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $tcp = [byte[]](0xc3,0x50, 0x01,0xbb, 0,0,0,1, 0,0,0,2, 0x50,0x12, 0xff,0xff, 0x12,0x34, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $roots = [PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)
+            $flags = ($roots | Where-Object { $_.Key -eq 'TCP' }).Children | Where-Object { $_.Key -eq 'TCP.Flags' }
+            $flags | Should -Not -BeNullOrEmpty
+            # Header: 0x[12-bit hex] ([tcpdump single-char flags]); SYN+ACK => 0x012 (.S). Collapsed by default.
+            $flags.Text | Should -Be 'Flags: 0x012 (.S)'
+            $flags.IsExpanded | Should -BeFalse
+            $lines = $flags.Children | ForEach-Object { $_.Text }
+            $lines.Count | Should -Be 10
+            ($lines | Where-Object { $_ -eq '000. .... .... = Reserved: Not set' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -eq '.... ...1 .... = Acknowledgment: Set' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -eq '.... .... ..1. = Syn: Set' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -eq '.... .... ...0 = Fin: Not set' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -eq '.... B... .... = Congestion Window Reduced: Not set' }).Count | Should -Be 0
+        }
+        It 'renders the UDP Details node per spec (renamed fields + payload leaf)' {
+            # The shared $script:pkt is a UDP/DNS packet; roots[3] is the UDP node.
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $udp = $roots[3]
+            $udp.Key | Should -Be 'UDP'
+            $udp.IsExpanded | Should -BeFalse   # collapsed by default in Analysis mode
+            $udp.Text | Should -Match '^UDP - Src Port: \d+, Dst Port: 53, Len: \d+$'
+            $kids = $udp.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -match '^Source Port: \d+$' }).Count      | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Destination Port: 53' }).Count       | Should -Be 1
+            ($kids | Where-Object { $_ -match '^UDP payload \(\d+\)$' }).Count    | Should -Be 1
+        }
         It 'extracts DNS transaction id and query' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $dns = $roots[4]
@@ -2957,6 +3062,61 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $flags = $dns.Children | Where-Object { $_.Key -eq 'DNS.Flags' }
             $flags | Should -Not -BeNullOrEmpty
             ($flags.Children | Where-Object { $_.Text -like '*Recursion desired: Do query recursively' }).Count | Should -Be 1
+        }
+        It 'parses DNS over TCP (RFC 1035 2-byte length prefix) in the Details tree and one-liner' {
+            # Eth + IPv4/TCP(:53, PSH+ACK) + 2-byte DNS length prefix + DNS response.
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $b = [System.Collections.Generic.List[byte]]::new()
+            $b.AddRange([byte[]](0x94,0xf0, 0x81,0x80, 0,1, 0,1, 0,0, 0,0))
+            $b.Add(7); 'example'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(3); 'com'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(0); $b.AddRange([byte[]](0,1, 0,1))
+            $b.AddRange([byte[]](0xc0,0x0c, 0,1, 0,1, 0,0,0,60, 0,4, 150,171,109,117))
+            $dnsBytes = [byte[]]$b.ToArray()
+            $prefix = [byte[]]( ($dnsBytes.Length -shr 8), ($dnsBytes.Length -band 0xff) )
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6
+            $tot = 20 + 20 + 2 + $dnsBytes.Length; $ip[2]=($tot -shr 8); $ip[3]=($tot -band 0xff)
+            $ip[12]=1;$ip[13]=1;$ip[14]=1;$ip[15]=1; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=72
+            $tcp = [byte[]](0,53, 0xe2,0x01, 0,0,0,1, 0,0,0,2, 0x50,0x18, 0,16, 0xaa,0xc8, 0,0)
+            $pkt = $eth + $ip + $tcp + $prefix + $dnsBytes
+
+            # Details tree: DNS node built from the TCP payload (prefix skipped).
+            $roots = [PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)
+            $dns = $roots | Where-Object { $_.Key -eq 'DNS' }
+            $dns | Should -Not -BeNullOrEmpty
+            ($dns.Children | Where-Object { $_.Text -eq 'Transaction ID: 0x94f0' }).Count | Should -Be 1
+
+            # One-liner (Analysis level 0): the app-layer DNS summary, not the raw TCP segment.
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $out | Should -Match 'DNS: 0x94f0 1/0/0 example\.com\. A 150\.171\.109\.117'
+        }
+        It 'shows a contentless TCP:53 segment as plain TCP, not a DNS hint line' {
+            # A FIN/ACK segment on port 53 carries no DNS message; it must render at the
+            # transport layer ("TCP [.F] ...") rather than being labeled "DNS: TCP [.F] ...".
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40
+            $ip[12]=1;$ip[13]=1;$ip[14]=1;$ip[15]=1; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=72
+            $tcp = [byte[]](0,53, 0xc8,0xd1, 0,0,0,1, 0,0,0,2, 0x50,0x11, 0,16, 0xaa,0xc8, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $out | Should -Match 'TCP \[\.F\], seq 1, ack 2, win 16, len 0'
+            $out | Should -Not -Match 'DNS'
         }
         It 'returns an error node for too-short input' {
             $roots = [PacketDetailExtractor]::BuildTree([byte[]](1,2,3), 3, 0, 0, 0)

@@ -383,19 +383,32 @@ public static class PacketDetailExtractor
             int dp = PacketParseHelper.ReadUInt16BE(p, off + 2);
             uint seq = PacketParseHelper.ReadUInt32BE(p, off + 4);
             uint ack = PacketParseHelper.ReadUInt32BE(p, off + 8);
-            int dataOff = (p[off + 12] >> 4) * 4;
-            byte flags = p[off + 13];
+            int offByte = p[off + 12];              // data offset (high nibble) + reserved/AE (low nibble)
+            int dataOffWords = offByte >> 4;
+            int dataOff = dataOffWords * 4;
+            byte flags = p[off + 13];               // 8 standard flags (tcpdump uses this byte)
+            int flags12 = ((offByte & 0x0F) << 8) | flags;  // 12-bit flags field (AE + reserved + 8 flags)
             int win = PacketParseHelper.ReadUInt16BE(p, off + 14);
+            int checksum = PacketParseHelper.ReadUInt16BE(p, off + 16);
+            int urgptr = PacketParseHelper.ReadUInt16BE(p, off + 18);
             int payloadLen = Math.Max(0, len - dataOff);
+            string flagStr = PacketParseHelper.FormatTcpFlags(flags);
 
-            var tcp = new BoxyBox.TreeNode("TCP", "TCP", true);
-            tcp.AddLeaf("Src: " + sp);
-            tcp.AddLeaf("Dst: " + dp);
-            tcp.AddLeaf("Seq: " + seq);
-            tcp.AddLeaf("Ack: " + ack);
-            tcp.AddLeaf("Flags: " + TcpFlags(flags));
+            // Collapsed by default in Analysis mode; the header carries the one-line summary.
+            var tcp = new BoxyBox.TreeNode(
+                "TCP [" + flagStr + "] - Src Port: " + sp + ", Dst Port: " + dp +
+                ", Seq: " + seq + ", Ack: " + ack + ", Len: " + payloadLen,
+                "TCP", false);
+            tcp.AddLeaf("Source Port: " + sp);
+            tcp.AddLeaf("Destination Port: " + dp);
+            tcp.AddLeaf("Sequence Number: " + seq);
+            tcp.AddLeaf("Acknowledgment number: " + ack);
+            tcp.Add(BuildTcpFlagsNode(offByte, flags));
+            tcp.AddLeaf(TcpBits(offByte, "BBBB ....") + " = Header Length: " + dataOff + " bytes (0x" + dataOffWords.ToString("x") + ")");
             tcp.AddLeaf("Window: " + win);
-            tcp.AddLeaf("len: " + payloadLen);
+            tcp.AddLeaf("Checksum: 0x" + checksum.ToString("x4"));
+            tcp.AddLeaf("Urgent Pointer: " + urgptr);
+            tcp.AddLeaf("TCP payload (" + payloadLen + " bytes)");
             roots.Add(tcp);
 
             BuildAppNode(p, off + dataOff, payloadLen, sp, dp, false, roots);
@@ -407,10 +420,13 @@ public static class PacketDetailExtractor
             int ulen = PacketParseHelper.ReadUInt16BE(p, off + 4);
             int payloadLen = Math.Max(0, ulen - 8);
 
-            var udp = new BoxyBox.TreeNode("UDP", "UDP", true);
-            udp.AddLeaf("Src: " + sp);
-            udp.AddLeaf("Dst: " + dp);
-            udp.AddLeaf("len: " + payloadLen);
+            // Collapsed by default in Analysis mode; the header carries the one-line summary.
+            var udp = new BoxyBox.TreeNode(
+                "UDP - Src Port: " + sp + ", Dst Port: " + dp + ", Len: " + payloadLen,
+                "UDP", false);
+            udp.AddLeaf("Source Port: " + sp);
+            udp.AddLeaf("Destination Port: " + dp);
+            udp.AddLeaf("UDP payload (" + payloadLen + ")");
             roots.Add(udp);
 
             BuildAppNode(p, off + 8, Math.Min(payloadLen, len - 8), sp, dp, true, roots);
@@ -444,9 +460,24 @@ public static class PacketDetailExtractor
         byte[] payload = new byte[len];
         Buffer.BlockCopy(p, off, payload, 0, len);
 
-        if (udp && (sp == 53 || dp == 53 || sp == 5353 || dp == 5353))
+        if (sp == 53 || dp == 53 || sp == 5353 || dp == 5353)
         {
-            List<BoxyBox.TreeNode> dnsRoots = DnsParser.BuildDnsDetailTree(payload, len, sp, dp);
+            byte[] dnsMsg = payload;
+            int dnsLen = len;
+            if (!udp)
+            {
+                // DNS over TCP (RFC 1035 §4.2.2): the DNS message is prefixed by a 2-byte
+                // big-endian length. Skip it before parsing. (mDNS/5353 is UDP-only, so only
+                // the port-53 case realistically reaches here.)
+                if (len < 2) return;
+                int msgLen = PacketParseHelper.ReadUInt16BE(payload, 0);
+                int avail = len - 2;
+                dnsLen = Math.Min(msgLen, avail);
+                if (dnsLen <= 0) return;
+                dnsMsg = new byte[dnsLen];
+                Buffer.BlockCopy(payload, 2, dnsMsg, 0, dnsLen);
+            }
+            List<BoxyBox.TreeNode> dnsRoots = DnsParser.BuildDnsDetailTree(dnsMsg, dnsLen, sp, dp);
             for (int i = 0; i < dnsRoots.Count; i++) roots.Add(dnsRoots[i]);
         }
     }
@@ -491,16 +522,74 @@ public static class PacketDetailExtractor
         return "none";
     }
 
-    private static string TcpFlags(byte flags)
+    // Renders a Wireshark-style flag bit line from a template over the 12-bit TCP flags field
+    // (bits 11..0 = 3 reserved, AE, CWR, ECE, URG, ACK, PSH, RST, SYN, FIN). A 'B' in the
+    // template is replaced by the actual bit at that position (MSB first); '.', digits and
+    // spaces are copied verbatim. For the Header Length line the template's 'B's map to the
+    // data-offset nibble (the high 4 of the offset byte).
+    private static string TcpBits(int offByte, string template)
     {
-        var sb = new StringBuilder(16);
-        if ((flags & 0x02) != 0) sb.Append("S");
-        if ((flags & 0x10) != 0) sb.Append("A");
-        if ((flags & 0x01) != 0) sb.Append("F");
-        if ((flags & 0x04) != 0) sb.Append("R");
-        if ((flags & 0x08) != 0) sb.Append("P");
-        if ((flags & 0x20) != 0) sb.Append("U");
-        return sb.Length == 0 ? "none" : sb.ToString();
+        // Header Length uses the offset byte's high nibble as the 4 leading bits.
+        int value = (offByte >> 4) & 0x0F;
+        var sb = new StringBuilder(template.Length);
+        int bitIndex = 0;
+        for (int i = 0; i < template.Length; i++)
+        {
+            char c = template[i];
+            if (c == ' ') { sb.Append(' '); continue; }
+            if (c == 'B')
+            {
+                int bit = 3 - bitIndex; // 4-bit nibble, MSB first
+                sb.Append(bit >= 0 && ((value >> bit) & 1) == 1 ? '1' : '0');
+            }
+            else { sb.Append(c); }
+            bitIndex++;
+        }
+        return sb.ToString();
+    }
+
+    private static string TcpFlagBits(int flags12, string template)
+    {
+        var sb = new StringBuilder(template.Length);
+        int bitIndex = 0;
+        for (int i = 0; i < template.Length; i++)
+        {
+            char c = template[i];
+            if (c == ' ') { sb.Append(' '); continue; }
+            if (c == 'B')
+            {
+                int bit = 11 - bitIndex; // 12-bit field, MSB first
+                sb.Append(bit >= 0 && ((flags12 >> bit) & 1) == 1 ? '1' : '0');
+            }
+            else { sb.Append(c); }
+            bitIndex++;
+        }
+        return sb.ToString();
+    }
+
+    private static string SetState(bool set) { return set ? "Set" : "Not set"; }
+
+    /// <summary>
+    /// Builds the collapsible TCP "Flags" node per the parser spec: a header of
+    /// "Flags: 0x[12-bit hex] ([tcpdump flags])" and a Wireshark-style bit breakdown of each
+    /// flag. Collapsed by default.
+    /// </summary>
+    private static BoxyBox.TreeNode BuildTcpFlagsNode(int offByte, byte flags)
+    {
+        int flags12 = ((offByte & 0x0F) << 8) | flags;
+        string tcpdump = PacketParseHelper.FormatTcpFlags(flags);
+        var node = new BoxyBox.TreeNode("Flags: 0x" + flags12.ToString("x3") + " (" + tcpdump + ")", "TCP.Flags", false);
+        node.AddLeaf(TcpFlagBits(flags12, "000. .... ....") + " = Reserved: Not set");
+        node.AddLeaf(TcpFlagBits(flags12, "...B .... ....") + " = Accurate ECN: " + SetState((flags12 & 0x100) != 0));
+        node.AddLeaf(TcpFlagBits(flags12, ".... B... ....") + " = Congestion Window Reduced: " + SetState((flags & 0x80) != 0));
+        node.AddLeaf(TcpFlagBits(flags12, ".... .B.. ....") + " = ECN-Echo: " + SetState((flags & 0x40) != 0));
+        node.AddLeaf(TcpFlagBits(flags12, ".... ..B. ....") + " = Urgent: " + SetState((flags & 0x20) != 0));
+        node.AddLeaf(TcpFlagBits(flags12, ".... ...B ....") + " = Acknowledgment: " + SetState((flags & 0x10) != 0));
+        node.AddLeaf(TcpFlagBits(flags12, ".... .... B...") + " = Push: " + SetState((flags & 0x08) != 0));
+        node.AddLeaf(TcpFlagBits(flags12, ".... .... .B..") + " = Reset: " + SetState((flags & 0x04) != 0));
+        node.AddLeaf(TcpFlagBits(flags12, ".... .... ..B.") + " = Syn: " + SetState((flags & 0x02) != 0));
+        node.AddLeaf(TcpFlagBits(flags12, ".... .... ...B") + " = Fin: " + SetState((flags & 0x01) != 0));
+        return node;
     }
 
     private static string DscpName(int dscp)
