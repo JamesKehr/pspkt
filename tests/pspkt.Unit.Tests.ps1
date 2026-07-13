@@ -3024,6 +3024,17 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             ($lines | Where-Object { $_ -eq '.... .... ...0 = Fin: Not set' }).Count | Should -Be 1
             ($lines | Where-Object { $_ -eq '.... B... .... = Congestion Window Reduced: Not set' }).Count | Should -Be 0
         }
+        It 'renders the UDP Details node per spec (renamed fields + payload leaf)' {
+            # The shared $script:pkt is a UDP/DNS packet; roots[3] is the UDP node.
+            $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
+            $udp = $roots[3]
+            $udp.Key | Should -Be 'UDP'
+            $udp.Text | Should -Match '^UDP - Src Port: \d+, Dst Port: 53, Len: \d+$'
+            $kids = $udp.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -match '^Source Port: \d+$' }).Count      | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Destination Port: 53' }).Count       | Should -Be 1
+            ($kids | Where-Object { $_ -match '^UDP payload \(\d+\)$' }).Count    | Should -Be 1
+        }
         It 'extracts DNS transaction id and query' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $dns = $roots[4]

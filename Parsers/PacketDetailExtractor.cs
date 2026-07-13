@@ -420,10 +420,13 @@ public static class PacketDetailExtractor
             int ulen = PacketParseHelper.ReadUInt16BE(p, off + 4);
             int payloadLen = Math.Max(0, ulen - 8);
 
-            var udp = new BoxyBox.TreeNode("UDP", "UDP", true);
-            udp.AddLeaf("Src: " + sp);
-            udp.AddLeaf("Dst: " + dp);
-            udp.AddLeaf("len: " + payloadLen);
+            // Collapsed header carries the one-line summary (ports + payload length).
+            var udp = new BoxyBox.TreeNode(
+                "UDP - Src Port: " + sp + ", Dst Port: " + dp + ", Len: " + payloadLen,
+                "UDP", true);
+            udp.AddLeaf("Source Port: " + sp);
+            udp.AddLeaf("Destination Port: " + dp);
+            udp.AddLeaf("UDP payload (" + payloadLen + ")");
             roots.Add(udp);
 
             BuildAppNode(p, off + 8, Math.Min(payloadLen, len - 8), sp, dp, true, roots);
