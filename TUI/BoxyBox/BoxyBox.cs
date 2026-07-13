@@ -878,9 +878,10 @@ namespace BoxyBox
             }
             else
             {
-                // Default: no connectors — a plain two-space indent occupies the columns the
-                // connector + space would have used, so leaf text keeps the same alignment.
-                line = indent + "  " + node.Text;
+                // Default: no connectors. Reserve exactly one column (a space) for the absent
+                // +/- marker so a leaf's text aligns with sibling expandable nodes' text — the
+                // marker (or its blank slot) sits immediately left of the first text character.
+                line = indent + " " + node.Text;
             }
             rows.Add(new TreeRow(line, node, depth));
 

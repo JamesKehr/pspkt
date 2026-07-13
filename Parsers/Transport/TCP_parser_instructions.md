@@ -131,5 +131,6 @@ Accurate ECN, then the 8 standard flags):
 
 Example header for a SYN+ACK segment: `Flags: 0x012 (.S)`.
 
-**Default expand state:** the TCP node is expanded by default (like the IPv4/UDP nodes); its
-`Flags` child is collapsed by default.
+**Default expand state:** the TCP node is **collapsed by default** in Analysis mode (it shows
+its collapsed one-line header); its `Flags` child is also collapsed. Expand state persists
+across packets.

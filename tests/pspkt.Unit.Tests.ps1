@@ -2745,15 +2745,25 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
             $ipv4 = [BoxyBox.TreeNode]::new('IPv4', 'IPv4', $true)
             $null = $ipv4.AddLeaf('Src'); $null = $ipv4.AddLeaf('Dst')
+            $optNode = [BoxyBox.TreeNode]::new('Options', 'opt', $false)
+            $null = $optNode.AddLeaf('MSS')                 # give it a child so it is expandable
+            $null = $ipv4.Add($optNode)                     # expandable sibling of the leaves
             $null = $roots.Add($ipv4)
             $rows = [BoxyBox.TreeFlattener]::Flatten($roots)
-            $rows.Count | Should -Be 3
+            $rows.Count | Should -Be 4
             $rows[0].Display.TrimStart().StartsWith('-IPv4') | Should -BeTrue
-            # Default: no tree connectors; leaves use a plain two-space indent.
+            # Default: no tree connectors.
             $rows[1].Display.Contains([char]0x251c) | Should -BeFalse   # no ├
             $rows[2].Display.Contains([char]0x2514) | Should -BeFalse   # no └
-            [BoxyBox.AnsiText]::StripAnsi($rows[1].Display) | Should -Be '      Src'   # indent(4)+2 spaces
-            [BoxyBox.AnsiText]::StripAnsi($rows[2].Display) | Should -Be '      Dst'
+            # Leaf text is aligned so the +/- marker slot sits immediately left of the text:
+            # depth-1 indent (4) + one marker-slot space + text.
+            [BoxyBox.AnsiText]::StripAnsi($rows[1].Display) | Should -Be '     Src'   # 5 spaces + text
+            [BoxyBox.AnsiText]::StripAnsi($rows[2].Display) | Should -Be '     Dst'
+            # An expandable sibling's text aligns with the leaves; its +/- is immediately left.
+            [BoxyBox.AnsiText]::StripAnsi($rows[3].Display) | Should -Be '    +Options'
+            $leafTextCol = [BoxyBox.AnsiText]::StripAnsi($rows[1].Display).IndexOf('Src')
+            $nodeTextCol = [BoxyBox.AnsiText]::StripAnsi($rows[3].Display).IndexOf('Options')
+            $leafTextCol | Should -Be $nodeTextCol   # first text char aligned
         }
         It 'draws tree connectors when UseConnectors is enabled (opt-in)' {
             [BoxyBox.TreeFlattener]::UseConnectors = $true
@@ -2953,11 +2963,13 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots[3].Key | Should -Be 'UDP'
             $roots[4].Key | Should -Be 'DNS'
         }
-        It 'Component and Eth are collapsed by default; IPv4/UDP/DNS expanded' {
+        It 'Component/Eth/TCP/UDP collapsed by default; IPv4/DNS expanded' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $roots[0].IsExpanded | Should -BeFalse   # Component
             $roots[1].IsExpanded | Should -BeFalse   # Eth
             $roots[2].IsExpanded | Should -BeTrue     # IPv4
+            $roots[3].IsExpanded | Should -BeFalse    # UDP (transport collapsed by default)
+            $roots[4].IsExpanded | Should -BeTrue     # DNS
         }
         It 'extracts IPv4 fields (Src/Dst/id)' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
@@ -2991,6 +3003,7 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots = [PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)
             $tcpNode = $roots | Where-Object { $_.Key -eq 'TCP' }
             $tcpNode | Should -Not -BeNullOrEmpty
+            $tcpNode.IsExpanded | Should -BeFalse   # collapsed by default in Analysis mode
             # Collapsed header carries the tcpdump flags + ports/seq/ack/len summary.
             $tcpNode.Text | Should -Be 'TCP [.S] - Src Port: 50000, Dst Port: 443, Seq: 1, Ack: 2, Len: 0'
             $kids = $tcpNode.Children | ForEach-Object { $_.Text }
@@ -3029,6 +3042,7 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $udp = $roots[3]
             $udp.Key | Should -Be 'UDP'
+            $udp.IsExpanded | Should -BeFalse   # collapsed by default in Analysis mode
             $udp.Text | Should -Match '^UDP - Src Port: \d+, Dst Port: 53, Len: \d+$'
             $kids = $udp.Children | ForEach-Object { $_.Text }
             ($kids | Where-Object { $_ -match '^Source Port: \d+$' }).Count      | Should -Be 1

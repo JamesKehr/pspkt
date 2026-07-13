@@ -78,6 +78,7 @@ The header is unchanged when expanded; expanding reveals the child fields:
   UDP payload ([datagram payload length])
 ```
 
-**Default expand state:** the UDP node is expanded by default (like the IPv4/TCP nodes).
+**Default expand state:** the UDP node is **collapsed by default** in Analysis mode (it shows
+its collapsed one-line header). Expand state persists across packets.
 
 `[datagram payload length]` is the UDP length header field minus the 8-byte UDP header.

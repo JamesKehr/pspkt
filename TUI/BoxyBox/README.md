@@ -61,7 +61,7 @@ All types live in the `BoxyBox` namespace.
 |---|---|
 | `TreeNode` | A node with `Text`, a stable `Key` (for expand/collapse persistence), `IsExpanded`, and `Children`. `Add(child)` / `AddLeaf(text)`. |
 | `TreeRow` | One flattened visible row: display string + originating node + depth. |
-| `TreeFlattener` | `Flatten(roots)` honors each node's expanded state; `FlattenAll(roots)` ignores collapse (used for "copy everything"). Leaves use a **plain two-space indent** by default; set `UseConnectors = true` to draw `├`/`└` tree connectors instead. |
+| `TreeFlattener` | `Flatten(roots)` honors each node's expanded state; `FlattenAll(roots)` ignores collapse (used for "copy everything"). Every node reserves one column for its `+`/`-` marker immediately left of its text, so a leaf's text (blank marker slot) aligns with sibling expandable nodes' text. Set `UseConnectors = true` to draw `├`/`└` tree connectors instead. |
 | `DetailsBox` | Wraps a `Box` around a tree: selection, scrolling, expand/collapse (`MoveUp/Down`, `PageUp/Down`, `ExpandSelected/CollapseSelected`, `ExpandAll/CollapseAll`), per-`Key` expand-state persistence across trees, `Resize`, `GetVisibleText()` (viewport) and `GetAllText()` (whole tree). |
 
 ### Overlays and menus

@@ -394,11 +394,11 @@ public static class PacketDetailExtractor
             int payloadLen = Math.Max(0, len - dataOff);
             string flagStr = PacketParseHelper.FormatTcpFlags(flags);
 
-            // Collapsed header carries the one-line summary (tcpdump flags + ports/seq/ack/len).
+            // Collapsed by default in Analysis mode; the header carries the one-line summary.
             var tcp = new BoxyBox.TreeNode(
                 "TCP [" + flagStr + "] - Src Port: " + sp + ", Dst Port: " + dp +
                 ", Seq: " + seq + ", Ack: " + ack + ", Len: " + payloadLen,
-                "TCP", true);
+                "TCP", false);
             tcp.AddLeaf("Source Port: " + sp);
             tcp.AddLeaf("Destination Port: " + dp);
             tcp.AddLeaf("Sequence Number: " + seq);
@@ -420,10 +420,10 @@ public static class PacketDetailExtractor
             int ulen = PacketParseHelper.ReadUInt16BE(p, off + 4);
             int payloadLen = Math.Max(0, ulen - 8);
 
-            // Collapsed header carries the one-line summary (ports + payload length).
+            // Collapsed by default in Analysis mode; the header carries the one-line summary.
             var udp = new BoxyBox.TreeNode(
                 "UDP - Src Port: " + sp + ", Dst Port: " + dp + ", Len: " + payloadLen,
-                "UDP", true);
+                "UDP", false);
             udp.AddLeaf("Source Port: " + sp);
             udp.AddLeaf("Destination Port: " + dp);
             udp.AddLeaf("UDP payload (" + payloadLen + ")");
