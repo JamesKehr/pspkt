@@ -460,9 +460,24 @@ public static class PacketDetailExtractor
         byte[] payload = new byte[len];
         Buffer.BlockCopy(p, off, payload, 0, len);
 
-        if (udp && (sp == 53 || dp == 53 || sp == 5353 || dp == 5353))
+        if (sp == 53 || dp == 53 || sp == 5353 || dp == 5353)
         {
-            List<BoxyBox.TreeNode> dnsRoots = DnsParser.BuildDnsDetailTree(payload, len, sp, dp);
+            byte[] dnsMsg = payload;
+            int dnsLen = len;
+            if (!udp)
+            {
+                // DNS over TCP (RFC 1035 §4.2.2): the DNS message is prefixed by a 2-byte
+                // big-endian length. Skip it before parsing. (mDNS/5353 is UDP-only, so only
+                // the port-53 case realistically reaches here.)
+                if (len < 2) return;
+                int msgLen = PacketParseHelper.ReadUInt16BE(payload, 0);
+                int avail = len - 2;
+                dnsLen = Math.Min(msgLen, avail);
+                if (dnsLen <= 0) return;
+                dnsMsg = new byte[dnsLen];
+                Buffer.BlockCopy(payload, 2, dnsMsg, 0, dnsLen);
+            }
+            List<BoxyBox.TreeNode> dnsRoots = DnsParser.BuildDnsDetailTree(dnsMsg, dnsLen, sp, dp);
             for (int i = 0; i < dnsRoots.Count; i++) roots.Add(dnsRoots[i]);
         }
     }

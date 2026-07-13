@@ -24,6 +24,17 @@ actually emits.
 - The one-line RR count triple is **Answer/Authority/Additional** (`[An]/[Ns]/[Ar]`).
 - mDNS (port 5353) uses the prefix `mDNS` in place of `DNS`.
 
+## Transport (UDP vs TCP)
+
+DNS is parsed over both UDP and TCP (port 53).
+
+- **UDP:** the DNS message begins at the first byte of the UDP payload.
+- **TCP (RFC 1035 §4.2.2):** the DNS message is prefixed with a **2-byte big-endian
+  length** field. The parsers skip this 2-byte prefix and parse the DNS message that
+  follows; the length prefix itself is never rendered. This applies to both the one-line
+  summary (e.g. `DNS: 0x94f0 1/0/0 example.com. A 150.171.109.117`) and the Analysis
+  Details tree, so DNS-over-TCP produces the same output as DNS-over-UDP.
+
 ## Tree indentation
 
 The Analysis Details tree uses a **plain two-space indent per level** with no `├`/`└`

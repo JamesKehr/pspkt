@@ -3063,6 +3063,41 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $flags | Should -Not -BeNullOrEmpty
             ($flags.Children | Where-Object { $_.Text -like '*Recursion desired: Do query recursively' }).Count | Should -Be 1
         }
+        It 'parses DNS over TCP (RFC 1035 2-byte length prefix) in the Details tree and one-liner' {
+            # Eth + IPv4/TCP(:53, PSH+ACK) + 2-byte DNS length prefix + DNS response.
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $b = [System.Collections.Generic.List[byte]]::new()
+            $b.AddRange([byte[]](0x94,0xf0, 0x81,0x80, 0,1, 0,1, 0,0, 0,0))
+            $b.Add(7); 'example'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(3); 'com'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(0); $b.AddRange([byte[]](0,1, 0,1))
+            $b.AddRange([byte[]](0xc0,0x0c, 0,1, 0,1, 0,0,0,60, 0,4, 150,171,109,117))
+            $dnsBytes = [byte[]]$b.ToArray()
+            $prefix = [byte[]]( ($dnsBytes.Length -shr 8), ($dnsBytes.Length -band 0xff) )
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6
+            $tot = 20 + 20 + 2 + $dnsBytes.Length; $ip[2]=($tot -shr 8); $ip[3]=($tot -band 0xff)
+            $ip[12]=1;$ip[13]=1;$ip[14]=1;$ip[15]=1; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=72
+            $tcp = [byte[]](0,53, 0xe2,0x01, 0,0,0,1, 0,0,0,2, 0x50,0x18, 0,16, 0xaa,0xc8, 0,0)
+            $pkt = $eth + $ip + $tcp + $prefix + $dnsBytes
+
+            # Details tree: DNS node built from the TCP payload (prefix skipped).
+            $roots = [PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)
+            $dns = $roots | Where-Object { $_.Key -eq 'DNS' }
+            $dns | Should -Not -BeNullOrEmpty
+            ($dns.Children | Where-Object { $_.Text -eq 'Transaction ID: 0x94f0' }).Count | Should -Be 1
+
+            # One-liner (Analysis level 0): the app-layer DNS summary, not the raw TCP segment.
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $out | Should -Match 'DNS: 0x94f0 1/0/0 example\.com\. A 150\.171\.109\.117'
+        }
         It 'returns an error node for too-short input' {
             $roots = [PacketDetailExtractor]::BuildTree([byte[]](1,2,3), 3, 0, 0, 0)
             $roots.Count | Should -Be 1

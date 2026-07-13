@@ -1274,6 +1274,11 @@ public static class PacketLineFormatter
                 suffix = DetectTlsContent(udpData, dataLen);
                 if (suffix != null) appLayer = 4;
             }
+            if (suffix == null && (srcPort == 53 || dstPort == 53))
+            {
+                suffix = DetectTcpDns(udpData, dataLen, srcPort, dstPort, false);
+                if (suffix != null) appLayer = 4;
+            }
 
             if (suffix == null)
             {
@@ -1544,6 +1549,7 @@ public static class PacketLineFormatter
     private static bool NeedsTcpPayload(int srcPort, int dstPort)
     {
         if (srcPort == 445 || dstPort == 445) return true;
+        if (srcPort == 53 || dstPort == 53) return true;   // DNS over TCP
         if (IsHttpPort(srcPort) || IsHttpPort(dstPort)) return true;
         if (IsTlsPort(srcPort) || IsTlsPort(dstPort)) return true;
         return false;
@@ -1660,7 +1666,31 @@ public static class PacketLineFormatter
             string tls = DetectTlsContent(data, dataLen);
             if (tls != null) return tls;
         }
+        if (srcPort == 53 || dstPort == 53)
+        {
+            string dns = DetectTcpDns(data, dataLen, srcPort, dstPort, false);
+            if (dns != null) return dns;
+        }
         return "";
+    }
+
+    /// <summary>
+    /// Detects and formats DNS carried over TCP (port 53). DNS-over-TCP (RFC 1035 §4.2.2)
+    /// prefixes the DNS message with a 2-byte big-endian length, which is skipped here before
+    /// parsing. Handshake / ACK-only segments (no DNS payload) return null so they fall back to
+    /// the normal TCP segment display. <paramref name="detailed"/> selects the "DNS - " form.
+    /// </summary>
+    private static string DetectTcpDns(byte[] tcpPayload, int dataLen, int srcPort, int dstPort, bool detailed)
+    {
+        if (tcpPayload == null) return null;
+        int avail = Math.Min(dataLen, tcpPayload.Length);
+        if (avail < 2 + 12) return null;   // need the 2-byte length prefix + a DNS header
+        int msgLen = PacketParseHelper.ReadUInt16BE(tcpPayload, 0);
+        int dnsLen = Math.Min(msgLen, avail - 2);
+        if (dnsLen < 12) return null;
+        byte[] dnsMsg = new byte[dnsLen];
+        Buffer.BlockCopy(tcpPayload, 2, dnsMsg, 0, dnsLen);
+        return DnsParser.FormatDnsSegment(dnsMsg, srcPort, dstPort, detailed);
     }
 
     private static string DetectUdpApp(int srcPort, int dstPort, byte[] data)
@@ -1713,6 +1743,14 @@ public static class PacketLineFormatter
     {
         if (data == null || data.Length == 0)
             return null;
+
+        // DNS over TCP (port 53): 2-byte length prefix + DNS message. Detected by port before
+        // the content-based HTTP/TLS probes so it isn't misclassified.
+        if (srcPort == 53 || dstPort == 53)
+        {
+            string dns = DetectTcpDns(data, data.Length, srcPort, dstPort, true);
+            if (dns != null) return dns;
+        }
 
         if ((srcPort == 445 || dstPort == 445) && Smb2Parser.IsSmb2Packet(data, srcPort, dstPort))
         {
