@@ -1593,7 +1593,11 @@ public static class PacketLineFormatter
         }
         else if (transportProto == 6) // TCP
         {
-            if (srcPort == 53    || dstPort == 53)    return "DNS";
+            // Note: TCP port 53 (DNS over TCP) is intentionally NOT hinted here. DNS over TCP
+            // is a fully parsed app protocol (see DetectTcpDns); a TCP:53 packet only reaches
+            // this hint fallback when it carries no DNS message (handshake / ACK / FIN
+            // segments), which is a pure transport-layer event and must render as a plain
+            // "TCP [flags] ..." segment rather than "DNS: TCP [flags] ...".
             if (srcPort == 80    || dstPort == 80)    return "HTTP";
             if (srcPort == 443   || dstPort == 443)   return "HTTPS";
             if (srcPort == 445   || dstPort == 445)   return "SMB";

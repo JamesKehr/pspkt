@@ -3098,6 +3098,26 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             }
             $out | Should -Match 'DNS: 0x94f0 1/0/0 example\.com\. A 150\.171\.109\.117'
         }
+        It 'shows a contentless TCP:53 segment as plain TCP, not a DNS hint line' {
+            # A FIN/ACK segment on port 53 carries no DNS message; it must render at the
+            # transport layer ("TCP [.F] ...") rather than being labeled "DNS: TCP [.F] ...".
+            $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40
+            $ip[12]=1;$ip[13]=1;$ip[14]=1;$ip[15]=1; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=72
+            $tcp = [byte[]](0,53, 0xc8,0xd1, 0,0,0,1, 0,0,0,2, 0x50,0x11, 0,16, 0xaa,0xc8, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $out | Should -Match 'TCP \[\.F\], seq 1, ack 2, win 16, len 0'
+            $out | Should -Not -Match 'DNS'
+        }
         It 'returns an error node for too-short input' {
             $roots = [PacketDetailExtractor]::BuildTree([byte[]](1,2,3), 3, 0, 0, 0)
             $roots.Count | Should -Be 1
