@@ -64,21 +64,22 @@ Eth:
 
 ### Details: Collapsed
 
-The Ethernet node's fixed header (the `[+|-]` is the tree expand/collapse marker):
+The Ethernet node is **collapsed by default** in Analysis mode (like the Component node; the
+network/transport/application nodes are expanded). Its fixed header (the `[+|-]` is the tree
+expand/collapse marker) is:
 
 ```
-[+|-]Eth: [src MAC addr] > [dst MAC addr], type [EtherType], len [frame length]
++Eth: [src MAC addr] > [dst MAC addr], type [EtherType], len [frame length]
 ```
-
-The Ethernet node is **collapsed by default**.
 
 ### Details: Expanded
 
-The header is unchanged when expanded (a tree node's text is fixed); expanding reveals the
-child fields. Child labels are padded so every value aligns at the same column:
+The user can expand the node to reveal the child fields (that expand state then persists across
+packets). The header is unchanged when expanded — a tree node's text is fixed. Child labels are
+padded so every value aligns at the same column:
 
 ```
-[+|-]Eth: [src MAC addr] > [dst MAC addr], type [EtherType], len [frame length]
+-Eth: [src MAC addr] > [dst MAC addr], type [EtherType], len [frame length]
   Source:      [src MAC addr]
   Destination: [dst MAC addr]
   Type:        [EtherType] (0x[ethertype hex])
