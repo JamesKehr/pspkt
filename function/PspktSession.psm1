@@ -1652,7 +1652,7 @@ function Invoke-PspktAnalysisLoop {
     # command scoping routes any Write-Warning from code this loop calls to this proxy
     # (this function is always on the call stack while the loop runs), which records the
     # message. The render then shows it in a bottom panel sized just tall enough to fit
-    # the text, in yellow, held for 5 seconds, then collapsed on the next repaint.
+    # the text, in yellow, held for 3 seconds, then collapsed on the next repaint.
     # Defined via ${function:...} rather than 'function Write-Warning {' so it does not
     # shadow the module's real warnings outside this call and does not trip the Precheck
     # comment-based-help scan.
@@ -1663,18 +1663,18 @@ function Invoke-PspktAnalysisLoop {
         process {
             if (-not [string]::IsNullOrWhiteSpace($Message)) {
                 $warnState.Text  = $Message.Trim()
-                $warnState.Until = [DateTime]::UtcNow.AddSeconds(5)
+                $warnState.Until = [DateTime]::UtcNow.AddSeconds(3)
             }
         }
     }
     # Seed the panel with any setup warnings collected by Start-Pspkt before the TUI took
     # over the screen (e.g. the Analysis PacketSize auto-bump), so they surface inside the
-    # TUI instead of scrolling above it. The 5-second timer starts now, at first paint.
+    # TUI instead of scrolling above it. The 3-second timer starts now, at first paint.
     if ($null -ne $InitialWarnings) {
         $seedWarnings = @($InitialWarnings | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         if ($seedWarnings.Count -gt 0) {
             $warnState.Text  = ($seedWarnings -join '   |   ')
-            $warnState.Until = [DateTime]::UtcNow.AddSeconds(5)
+            $warnState.Until = [DateTime]::UtcNow.AddSeconds(3)
         }
     }
 
@@ -1975,20 +1975,30 @@ function Invoke-PspktAnalysisLoop {
                 }
 
                 # Runtime warning panel: a bottom box expanded just enough to fit the (yellow)
-                # warning text. Drawn on top of the base frame; when it expires, the next normal
-                # frame repaints over the panel region (collapse), so we only clear our state.
+                # warning text. Its top is a ╞══╡ divider (Mid caps) instead of a standalone
+                # ┌──┐ top border, so it merges seamlessly into the Text Box walls above (same
+                # seam the focus Details box uses); the box below the divider has no top border
+                # and a ╘══╛ terminal cap as its bottom. Drawn on top of the base frame; when it
+                # expires the next normal frame repaints over the region (collapse).
                 $warnActive = ($null -ne $warnState.Text) -and ([DateTime]::UtcNow -lt $warnState.Until)
                 if ($warnActive) {
                     $wrapped = Split-PspktWarningText -Text $warnState.Text -Width ($boxWidth - 4) -MaxLines ([Math]::Max(1, $areaHeight - 2))
-                    $panelHeight = $wrapped.Count + 2   # top border + content rows + bottom menu bar
+                    $panelHeight = $wrapped.Count + 2   # divider + content rows + bottom cap
                     $panelTop = $areaTop + $areaHeight - $panelHeight
                     if ($panelTop -lt $areaTop) { $panelTop = $areaTop }
-                    $warnBox = [BoxyBox.Box]::new($boxWidth, $panelHeight)
-                    $warnBox.MenuOptions = [System.Collections.Generic.List[string]]::new()
+                    $emptyMenu = [System.Collections.Generic.List[string]]::new()
+                    $divider = [BoxyBox.MenuBar]::Build($emptyMenu, $boxWidth, [BoxyBox.MenuBar+Cap]::Mid)   # ╞══╡
+                    $warnBox = [BoxyBox.Box]::new($boxWidth, $wrapped.Count + 1)
+                    $warnBox.ShowTopBorder = $false
+                    $warnBox.MenuStyle = [BoxyBox.MenuBar+Cap]::Terminal   # ╘══╛ bottom
+                    $warnBox.MenuOptions = $emptyMenu
                     $warnLines = [System.Collections.Generic.List[string]]::new()
                     foreach ($wl in $wrapped) { $null = $warnLines.Add(" $ESC[93m$wl$ESC[0m") }   # bright yellow
+                    $panelFrame = [System.Collections.Generic.List[string]]::new()
+                    $null = $panelFrame.Add($divider)
+                    foreach ($bl in $warnBox.Render($warnLines)) { $null = $panelFrame.Add($bl) }
                     $warnRegion = [BoxyBox.ScreenRegion]::new($panelTop, 1, $boxWidth, $panelHeight)
-                    [Console]::Write($warnRegion.BuildFrame($warnBox.Render($warnLines)))
+                    [Console]::Write($warnRegion.BuildFrame($panelFrame))
                     $warnDrawn = $true
                 } elseif ($warnDrawn) {
                     # Expired: the base frame above already repainted over the panel region.
