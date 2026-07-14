@@ -1299,17 +1299,14 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $ctx = [DhcpContext]::new()
             $null = [DhcpParser]::TryParseDhcp($script:dhcpV4Discover, 68, 67, [ref]$ctx)
             $line = [DhcpParser]::FormatDhcpFromContext([ref]$ctx)
-            $line | Should -Match '^DHCP Discover'
-            $line | Should -Match 'xid: 0xdeadbeef'
-            $line | Should -Match 'chaddr: aa-bb-cc-dd-ee-ff'
+            $line | Should -Be 'DHCP DISCOVER, XID: 0xdeadbeef, chaddr: aa-bb-cc-dd-ee-ff'
         }
 
         It 'DhcpParser.FormatDhcpFromContext renders v6 Solicit line' {
             $ctx = [DhcpContext]::new()
             $null = [DhcpParser]::TryParseDhcp($script:dhcpV6Solicit, 546, 547, [ref]$ctx)
             $line = [DhcpParser]::FormatDhcpFromContext([ref]$ctx)
-            $line | Should -Match '^DHCPv6 Solicit'
-            $line | Should -Match 'txid: 0xabcd01'
+            $line | Should -Be 'DHCPv6 SOLICIT, XID: 0xabcd01, CID: ?'
         }
 
         It 'DhcpAppPredicate V4MessageTypes filters v4 Discover and rejects v6' {
@@ -1401,6 +1398,115 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             [PacketLineFormatter]::HasAppPredicate | Should -BeTrue
             [PacketLineFormatter]::ClearAppPredicates()
             [PacketLineFormatter]::HasAppPredicate | Should -BeFalse
+        }
+    }
+
+    Context 'DHCP parser output (Default / Detailed / Details tree)' {
+        BeforeAll {
+            # --- DHCPv4 OFFER (op=2), yiaddr 192.168.1.100, xid 0xdeadbeef ---
+            $offer = [byte[]]::new(236)
+            $offer[0]=2; $offer[1]=1; $offer[2]=6; $offer[3]=0
+            $offer[4]=0xde; $offer[5]=0xad; $offer[6]=0xbe; $offer[7]=0xef
+            $offer[10]=0x80; $offer[11]=0x00
+            $offer[16]=192; $offer[17]=168; $offer[18]=1; $offer[19]=100   # yiaddr
+            $offer[20]=192; $offer[21]=168; $offer[22]=1; $offer[23]=1     # siaddr
+            $offer[28]=0xaa;$offer[29]=0xbb;$offer[30]=0xcc;$offer[31]=0xdd;$offer[32]=0xee;$offer[33]=0xff
+            $magic = [byte[]](0x63,0x82,0x53,0x63)
+            $offerOpts = [byte[]](53,1,2, 54,4,192,168,1,1, 51,4,0,0,0x0e,0x10, 3,4,192,168,1,1, 6,4,8,8,8,8, 255)
+            $script:dhcpOffer = [byte[]]($offer + $magic + $offerOpts)
+
+            # --- DHCPv4 REQUEST (op=1) with option 50 requested IP ---
+            $req = [byte[]]::new(236)
+            $req[0]=1; $req[1]=1; $req[2]=6
+            $req[4]=0xde; $req[5]=0xad; $req[6]=0xbe; $req[7]=0xef
+            $req[28]=0xaa;$req[29]=0xbb;$req[30]=0xcc;$req[31]=0xdd;$req[32]=0xee;$req[33]=0xff
+            $reqOpts = [byte[]](53,1,3, 50,4,192,168,1,100, 54,4,192,168,1,1, 255)
+            $script:dhcpRequest = [byte[]]($req + $magic + $reqOpts)
+
+            # --- DHCPv6 ADVERTISE with Client Identifier (opt 1) + IA_NA (opt 3) -> IAADDR ---
+            $duid = [byte[]](0,1,0,1,0x2a,0xbb,0xcc,0xdd,0xaa,0xbb,0xcc,0xdd,0xee,0xff)
+            $cidOpt = [byte[]](0,1) + [byte[]](0,$duid.Length) + $duid
+            $addr = [byte[]](0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,0x05)
+            $iaaddr = [byte[]](0,5) + [byte[]](0,24) + $addr + [byte[]](0,0,0,60, 0,0,0,120)
+            $iana = [byte[]](0,3) + [byte[]](0,($iaaddr.Length + 12)) + [byte[]](0,0,0,1) + [byte[]](0,0,0,0) + [byte[]](0,0,0,0) + $iaaddr
+            $script:dhcpV6Advertise = [byte[]]([byte[]](2, 0xab,0xcd,0x01) + $cidOpt + $iana)
+        }
+
+        It 'Default one-liner: v4 OFFER with type/XID/chaddr' {
+            $line = [DhcpParser]::FormatDhcpSegment($script:dhcpOffer, 67, 68)
+            $line | Should -Be 'DHCP OFFER, XID: 0xdeadbeef, chaddr: aa-bb-cc-dd-ee-ff'
+        }
+        It 'Detailed: v4 OFFER appends yiaddr' {
+            $ctx = [DhcpContext]::new()
+            $null = [DhcpParser]::TryParseDhcp($script:dhcpOffer, 67, 68, [ref]$ctx)
+            [DhcpParser]::FormatDhcpFromContext([ref]$ctx) | Should -Be 'DHCP OFFER, XID: 0xdeadbeef, chaddr: aa-bb-cc-dd-ee-ff, yiaddr: 192.168.1.100'
+        }
+        It 'Detailed: v4 REQUEST appends the requested IP (option 50)' {
+            $ctx = [DhcpContext]::new()
+            $null = [DhcpParser]::TryParseDhcp($script:dhcpRequest, 68, 67, [ref]$ctx)
+            $ctx.RequestedIp | Should -Be '192.168.1.100'
+            [DhcpParser]::FormatDhcpFromContext([ref]$ctx) | Should -Be 'DHCP REQUEST, XID: 0xdeadbeef, chaddr: aa-bb-cc-dd-ee-ff, Requested: 192.168.1.100'
+        }
+        It 'Default/Detailed: v6 ADVERTISE with CID and IAA' {
+            $ctx = [DhcpContext]::new()
+            $null = [DhcpParser]::TryParseDhcp($script:dhcpV6Advertise, 547, 546, [ref]$ctx)
+            $ctx.ClientId | Should -Be '00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff'
+            $ctx.IaAddress | Should -Be '2001:db8::5'
+            [DhcpParser]::FormatDhcpDefaultFromContext([ref]$ctx) | Should -Be 'DHCPv6 ADVERTISE, XID: 0xabcd01, CID: 00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff'
+            [DhcpParser]::FormatDhcpFromContext([ref]$ctx) | Should -Be 'DHCPv6 ADVERTISE, XID: 0xabcd01, CID: 00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff, IAA: 2001:db8::5'
+        }
+        It 'Details tree: v4 OFFER COMMON fields + expandable Options' {
+            $node = ([DhcpParser]::BuildDhcpDetailTree($script:dhcpOffer, 67, 68))[0]
+            $node.Key | Should -Be 'DHCP'
+            $node.Text | Should -Be 'DHCP OFFER'
+            $kids = $node.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Message type: OFFER (2)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Hardware type: Ethernet (0x01)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Transaction ID: 0xdeadbeef' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Bootp flags: 0x8000 (Broadcast)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Your (client) IP address: 192.168.1.100' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Client MAC address: aa-bb-cc-dd-ee-ff' }).Count | Should -Be 1
+            $opts = $node.Children | Where-Object { $_.Key -eq 'DHCP.Options' }
+            $opts | Should -Not -BeNullOrEmpty
+            $optKids = $opts.Children | ForEach-Object { $_.Text }
+            ($optKids | Where-Object { $_ -eq 'DHCP Message Type (53): OFFER (2)' }).Count | Should -Be 1
+            ($optKids | Where-Object { $_ -eq 'DHCP Server Identifier (54): 192.168.1.1' }).Count | Should -Be 1
+            ($optKids | Where-Object { $_ -eq 'IP Address Lease Time (51): 3600s' }).Count | Should -Be 1
+            ($optKids | Where-Object { $_ -eq 'Domain Name Server (6): 8.8.8.8' }).Count | Should -Be 1
+        }
+        It 'Details tree: v6 ADVERTISE COMMON + Options (Client Identifier, IA_NA)' {
+            $node = ([DhcpParser]::BuildDhcpDetailTree($script:dhcpV6Advertise, 547, 546))[0]
+            $node.Key | Should -Be 'DHCP'
+            $node.Text | Should -Be 'DHCPv6 ADVERTISE'
+            $kids = $node.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Message type: ADVERTISE (2)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Transaction ID: 0xabcd01' }).Count | Should -Be 1
+            $opts = $node.Children | Where-Object { $_.Key -eq 'DHCP.Options' }
+            $opts | Should -Not -BeNullOrEmpty
+            $optKids = $opts.Children | ForEach-Object { $_.Text }
+            ($optKids | Where-Object { $_ -eq 'Client Identifier (1): 00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff' }).Count | Should -Be 1
+            ($optKids | Where-Object { $_ -eq 'Identity Association for Non-temporary Address (3): IAADDR 2001:db8::5' }).Count | Should -Be 1
+        }
+        It 'end-to-end: BuildTree wires a DHCP node and the Default one-liner shows the DHCP line' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $udpLen = 8 + $script:dhcpOffer.Length
+            $udp = [byte[]](0,67, 0,68, [byte](($udpLen -shr 8) -band 0xff), [byte]($udpLen -band 0xff), 0,0)
+            $ipLen = 20 + $udpLen
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=17
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[16]=255;$ip[17]=255;$ip[18]=255;$ip[19]=255
+            $pkt = $eth + $ip + $udp + $script:dhcpOffer
+            $dhcp = ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) | Where-Object { $_.Key -eq 'DHCP' }
+            $dhcp | Should -Not -BeNullOrEmpty
+            $dhcp.Text | Should -Be 'DHCP OFFER'
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'DHCP OFFER, XID: 0xdeadbeef, chaddr: aa-bb-cc-dd-ee-ff'
         }
     }
 

@@ -37,9 +37,9 @@ Pass `-NoWarning` to silence the auto-bump warnings without affecting operationa
 
 ## v1 limitations
 
-- **No DHCPv6 client identification.** The DHCPv6 client identifier is a variable-length DUID transported as an option, not at a fixed offset like DHCPv4's `chaddr`. v1 doesn't decode it. `-DhcpClientMac` is therefore DHCPv4-only and always rejects DHCPv6 packets.
+- **`-DhcpClientMac` is DHCPv4-only.** The DHCPv6 client identifier is a variable-length DUID transported as an option, not at a fixed offset like DHCPv4's `chaddr`. The DUID is decoded for *display* (shown as the `CID:` field and under the Details `Options` node), but the `-DhcpClientMac` filter matches DHCPv4 `chaddr` only and always rejects DHCPv6 packets.
 - **Option-53 only for v4 message type.** DHCPv4 message type comes from option 53, which sits in the variable-length options block. If `-PacketSize` cuts the packet before option 53, the predicate has no message type to compare against and rejects the packet (use `-DhcpMatchTruncated` to relax this).
-- **No DHCPv6 options parsed.** Beyond the first message-type byte and the 3-byte transaction ID, v1 reads no DHCPv6 options. `-DhcpMessageType` is the only filter that works against DHCPv6.
+- **DHCPv6 filtering is message-type-only.** DHCPv6 options (Client Identifier, IA_NA/IA Address, etc.) are decoded for *display* — the one-liner and the Analysis Details tree — but `-DhcpMessageType` is the only *filter* that works against DHCPv6.
 
 ## Examples
 

@@ -251,7 +251,8 @@ public static class PacketDetailExtractor
             case "ICMP":
             case "ICMPv6":    return 3; // LAYER_TRANSPORT
             case "DNS":
-            case "mDNS":      return 4; // LAYER_APPLICATION
+            case "mDNS":
+            case "DHCP":      return 4; // LAYER_APPLICATION
             default:          return -1;
         }
     }
@@ -660,6 +661,11 @@ public static class PacketDetailExtractor
             }
             List<BoxyBox.TreeNode> dnsRoots = DnsParser.BuildDnsDetailTree(dnsMsg, dnsLen, sp, dp);
             for (int i = 0; i < dnsRoots.Count; i++) roots.Add(dnsRoots[i]);
+        }
+        else if (udp && DhcpParser.IsDhcpPort(sp, dp))
+        {
+            List<BoxyBox.TreeNode> dhcpRoots = DhcpParser.BuildDhcpDetailTree(payload, sp, dp);
+            for (int i = 0; i < dhcpRoots.Count; i++) roots.Add(dhcpRoots[i]);
         }
     }
 
