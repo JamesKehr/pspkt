@@ -230,23 +230,38 @@ public static class HttpParser
     /// </summary>
     public static string FormatHttpFromContext(ref HttpContext ctx)
     {
-        return FormatHttpDefaultFromContext(ref ctx);
+        return FormatHttpDefaultCorrelated(ref ctx, null);
+    }
+
+    /// <summary>Detailed one-liner with connection correlation (see the connKey overloads below).</summary>
+    public static string FormatHttpFromContext(ref HttpContext ctx, string connKey)
+    {
+        return FormatHttpDefaultCorrelated(ref ctx, connKey);
+    }
+
+    /// <summary>Default one-liner from a parsed context, without connection correlation.</summary>
+    public static string FormatHttpDefaultFromContext(ref HttpContext ctx)
+    {
+        return FormatHttpDefaultCorrelated(ref ctx, null);
     }
 
     /// <summary>
     /// Default one-liner formatter from a parsed context (per HTTP_parser_instructions.md):
     ///   request:  "HTTP: [Method], URI: [Host][Request-URI]"
-    ///   response: "HTTP: [Status Code] [Response Phrase]"
-    /// The response URI is not shown — pspkt parses single packets and does not correlate a
-    /// response with its earlier request, so the Host + Request-URI aren't available here.
+    ///   response: "HTTP: [Status Code] [Response Phrase], URI: [Host + Request-URI]"
+    /// The response URI comes from connection correlation: when a request is formatted its
+    /// Host+URI is remembered against the (unordered) connection key, and a later response on
+    /// the same connection looks it up. When <paramref name="connKey"/> is null (or no request
+    /// was seen), a response shows no URI.
     /// </summary>
-    public static string FormatHttpDefaultFromContext(ref HttpContext ctx)
+    public static string FormatHttpDefaultCorrelated(ref HttpContext ctx, string connKey)
     {
         if (!ctx.Valid) return null;
 
         if (ctx.IsRequest)
         {
             string uri = BuildRequestUri(ref ctx);
+            if (!string.IsNullOrEmpty(uri)) RememberRequestUri(connKey, uri);
             string line = "HTTP: " + (ctx.Method ?? "?");
             if (!string.IsNullOrEmpty(uri)) line += ", URI: " + uri;
             return line;
@@ -254,7 +269,42 @@ public static class HttpParser
 
         // Response.
         string phrase = string.IsNullOrEmpty(ctx.StatusText) ? "" : " " + ctx.StatusText;
-        return "HTTP: " + ctx.StatusCode + phrase;
+        string resp = "HTTP: " + ctx.StatusCode + phrase;
+        string reqUri;
+        if (TryGetRequestUri(connKey, out reqUri) && !string.IsNullOrEmpty(reqUri))
+        {
+            resp += ", URI: " + reqUri;
+        }
+        return resp;
+    }
+
+    // ---- Request/response correlation ----
+    // Maps an unordered connection key (client<->server endpoints) to the last request's
+    // Host+Request-URI, so a response line can show the URI its request targeted. Runs on the
+    // single consumer thread, mirroring the other static caches in the formatter.
+    private static readonly Dictionary<string, string> _connUri = new Dictionary<string, string>();
+
+    /// <summary>Builds an order-independent connection key so a request and its response map to the same entry.</summary>
+    public static string BuildConnKey(string ip1, int port1, string ip2, int port2)
+    {
+        string a = ip1 + ":" + port1;
+        string b = ip2 + ":" + port2;
+        return string.CompareOrdinal(a, b) <= 0 ? a + "|" + b : b + "|" + a;
+    }
+
+    /// <summary>Remembers the Host+Request-URI for a connection (best-effort; capped in size).</summary>
+    public static void RememberRequestUri(string connKey, string uri)
+    {
+        if (string.IsNullOrEmpty(connKey) || string.IsNullOrEmpty(uri)) return;
+        if (_connUri.Count > 4096) _connUri.Clear();
+        _connUri[connKey] = uri;
+    }
+
+    /// <summary>Looks up the remembered Host+Request-URI for a connection.</summary>
+    public static bool TryGetRequestUri(string connKey, out string uri)
+    {
+        uri = null;
+        return !string.IsNullOrEmpty(connKey) && _connUri.TryGetValue(connKey, out uri);
     }
 
     /// <summary>Host + Request-URI concatenation (e.g. "example.com/index.html"). Empty when neither is present.</summary>
@@ -271,9 +321,15 @@ public static class HttpParser
     /// </summary>
     public static string FormatHttpSegment(byte[] data, int dataLen)
     {
+        return FormatHttpSegment(data, dataLen, null);
+    }
+
+    /// <summary>Default-tier formatter for a raw HTTP payload with connection correlation.</summary>
+    public static string FormatHttpSegment(byte[] data, int dataLen, string connKey)
+    {
         HttpContext ctx;
         if (!TryParseHttp(data, out ctx)) return null;
-        return FormatHttpDefaultFromContext(ref ctx);
+        return FormatHttpDefaultCorrelated(ref ctx, connKey);
     }
 
     // ==================== Analysis Details tree ====================
@@ -287,11 +343,17 @@ public static class HttpParser
     /// </summary>
     public static List<BoxyBox.TreeNode> BuildHttpDetailTree(byte[] data)
     {
+        return BuildHttpDetailTree(data, null);
+    }
+
+    /// <summary>Builds the HTTP Details tree, correlating a response with its request URI via connKey.</summary>
+    public static List<BoxyBox.TreeNode> BuildHttpDetailTree(byte[] data, string connKey)
+    {
         var roots = new List<BoxyBox.TreeNode>();
         HttpContext ctx;
         if (!TryParseHttp(data, out ctx)) return roots;
 
-        var node = new BoxyBox.TreeNode(FormatHttpDefaultFromContext(ref ctx), "HTTP", true);
+        var node = new BoxyBox.TreeNode(FormatHttpDefaultCorrelated(ref ctx, connKey), "HTTP", true);
 
         if (ctx.IsRequest)
         {

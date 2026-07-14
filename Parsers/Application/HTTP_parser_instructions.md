@@ -24,10 +24,12 @@ level. It reflects what the code actually emits.
 
 - Only HTTP/1.x over cleartext TCP (ports 80 / 8000 / 8080 / 8888) is parsed. HTTPS/TLS is not
   decrypted.
-- **Response URI:** the `URI: [Host + Request URI]` shown in the spec for a RESPONSE requires
-  correlating the response with its earlier request. pspkt parses single packets without
-  request/response correlation, so a response line omits the `, URI: ...` part and shows only
-  `HTTP: [Status Code] [Response Phrase]`.
+- **Response URI (connection correlation):** a RESPONSE line shows `URI: [Host + Request-URI]`
+  by correlating the response with its request. When a request is formatted, its Host+URI is
+  remembered against an order-independent connection key (client/server endpoints); a later
+  response on the same connection looks it up. If the request wasn't seen (e.g. capture started
+  mid-connection, or `-PacketSize` cut it), the response omits the `, URI: ...` part and shows
+  only `HTTP: [Status Code] [Response Phrase]`.
 - The Analysis Details node header is the Default one-liner (so the collapsed view matches the
   Default level). Expanding it reveals the request-line / status-line sub-node and the parsed
   headers.
@@ -91,7 +93,7 @@ HTTP: [Request Method], URI: [Host + Request URI]
 #### RESPONSE
 
 ```
-HTTP: [Status Code] [Response Phrase]
+HTTP: [Status Code] [Response Phrase], URI: [Host + Request URI]
   [+|-]HTTP/1.1 200 OK\r\n
       Response Version: HTTP/1.1
       Status Code: 200

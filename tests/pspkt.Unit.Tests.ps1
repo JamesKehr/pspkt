@@ -1149,6 +1149,71 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $out | Should -Match 'IPv6 .+: HTTP: GET, URI: api\.example\.com/api/users\?id=1'
         }
 
+        It 'contentless TCP on an HTTP port renders as plain TCP, not an HTTP hint' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6; $ip[3]=40
+            $ip[12]=10;$ip[13]=24;$ip[14]=0;$ip[15]=72; $ip[16]=34;$ip[17]=160;$ip[18]=111;$ip[19]=145
+            $tcp = [byte[]](0xe4,0x37, 0,80, 0,0,0,1, 0,0,0,2, 0x50,0x11, 0,255, 0,0, 0,0)   # FIN+ACK, no payload
+            $pkt = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'TCP \[\.F\], seq 1, ack 2'
+            $out | Should -Not -Match 'HTTP'
+        }
+
+        It 'HttpParser.BuildConnKey is order-independent (request and response map to the same key)' {
+            $k1 = [HttpParser]::BuildConnKey('10.24.0.72', 58423, '34.160.111.145', 80)
+            $k2 = [HttpParser]::BuildConnKey('34.160.111.145', 80, '10.24.0.72', 58423)
+            $k1 | Should -Be $k2
+        }
+
+        It 'HTTP response shows the request URI via connection correlation' {
+            $keyFwd = [HttpParser]::BuildConnKey('10.24.0.72', 58423, '34.160.111.145', 80)
+            $reqCtx = [HttpContext]::new()
+            $null = [HttpParser]::TryParseHttp($script:httpReqGet, [ref]$reqCtx)
+            $null = [HttpParser]::FormatHttpDefaultCorrelated([ref]$reqCtx, $keyFwd)   # remembers the URI
+            $respCtx = [HttpContext]::new()
+            $null = [HttpParser]::TryParseHttp($script:httpResp404, [ref]$respCtx)
+            $keyRev = [HttpParser]::BuildConnKey('34.160.111.145', 80, '10.24.0.72', 58423)
+            [HttpParser]::FormatHttpDefaultCorrelated([ref]$respCtx, $keyRev) | Should -Be 'HTTP: 404 Not Found, URI: api.example.com/api/users?id=1'
+        }
+
+        It 'end-to-end: a response line shows the request URI when the request precedes it in the batch' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            # Request: client 10.24.0.72:58423 -> server 34.160.111.145:80
+            $tcpReq = [byte[]](0xe4,0x37, 0,80, 0,0,0,1, 0,0,0,2, 0x50,0x18, 0xff,0xff, 0,0, 0,0)
+            $ipReqLen = 20 + $tcpReq.Length + $script:httpReqGet.Length
+            $ipReq = [byte[]]::new(20); $ipReq[0]=0x45; $ipReq[8]=64; $ipReq[9]=6
+            $ipReq[2]=[byte](($ipReqLen -shr 8) -band 0xff); $ipReq[3]=[byte]($ipReqLen -band 0xff)
+            $ipReq[12]=10;$ipReq[13]=24;$ipReq[14]=0;$ipReq[15]=72; $ipReq[16]=34;$ipReq[17]=160;$ipReq[18]=111;$ipReq[19]=145
+            $reqPkt = $eth + $ipReq + $tcpReq + $script:httpReqGet
+            # Response: server 34.160.111.145:80 -> client 10.24.0.72:58423
+            $tcpResp = [byte[]](0,80, 0xe4,0x37, 0,0,0,2, 0,0,0,1, 0x50,0x18, 0xff,0xff, 0,0, 0,0)
+            $ipRespLen = 20 + $tcpResp.Length + $script:httpResp404.Length
+            $ipResp = [byte[]]::new(20); $ipResp[0]=0x45; $ipResp[8]=64; $ipResp[9]=6
+            $ipResp[2]=[byte](($ipRespLen -shr 8) -band 0xff); $ipResp[3]=[byte]($ipRespLen -band 0xff)
+            $ipResp[12]=34;$ipResp[13]=160;$ipResp[14]=111;$ipResp[15]=145; $ipResp[16]=10;$ipResp[17]=24;$ipResp[18]=0;$ipResp[19]=72
+            $respPkt = $eth + $ipResp + $tcpResp + $script:httpResp404
+
+            function script:New-Pd($pkt) {
+                $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+                $data = $meta + $pkt
+                [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            }
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@((New-Pd $reqPkt), (New-Pd $respPkt)), 2, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $lines = $out.Split("`n") | Where-Object { $_.Length -gt 0 }
+            ($lines | Where-Object { $_ -match 'HTTP: GET, URI: api\.example\.com/api/users\?id=1' }).Count | Should -Be 1
+            ($lines | Where-Object { $_ -match 'HTTP: 404 Not Found, URI: api\.example\.com/api/users\?id=1' }).Count | Should -Be 1
+        }
+
         It 'HttpAppPredicate Methods filters request methods' {
             $p = [HttpAppPredicate]::new()
             $p.Methods = @('GET')
