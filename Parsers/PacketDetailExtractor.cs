@@ -288,15 +288,21 @@ public static class PacketDetailExtractor
         string dirArrow = (direction == 1 || direction == 3 || direction == 5) ? "\u2191"
                         : (direction == 2 || direction == 4 || direction == 6) ? "\u2193" : " ";
         string edgeArrow = (edgeId == 1) ? "\u2192" : (edgeId == 2) ? "\u2190" : " ";
+        string dirBracket = "[" + dirArrow + "]";
+        string edgeBracket = "[" + edgeArrow + "]";
 
-        string header = "[" + dirArrow + "]" + parentName + " [" + parentId.ToString("D3") + "]:"
-                      + "[" + edgeArrow + "]" + (name ?? compId.ToString()) + " [" + compId.ToString("D3") + "]";
+        string groupName = !string.IsNullOrEmpty(group) ? group : parentName;
+        string compName = name ?? compId.ToString();
+
+        // Header: [dir]Group Name (Group ID):[edge]Component Name (Component ID)
+        string header = dirBracket + groupName + " (" + parentId + "):"
+                      + edgeBracket + compName + " (" + compId + ")";
 
         var node = new BoxyBox.TreeNode(header, "Component", false);
-        if (!string.IsNullOrEmpty(group)) node.AddLeaf("Group: " + group);
-        node.AddLeaf("Component: " + (name ?? compId.ToString()) + " (" + compId + ")");
-        node.AddLeaf("Edge: " + EdgeName(edgeId));
-        node.AddLeaf("Direction: " + DirectionName(direction));
+        node.AddLeaf("Direction".PadRight(9) + " : " + DirectionName(direction) + " " + dirBracket);
+        node.AddLeaf("Group".PadRight(9) + " : " + groupName + " (" + parentId + ")");
+        node.AddLeaf("Component".PadRight(9) + " : " + compName + " (" + compId + ")");
+        node.AddLeaf("Edge".PadRight(9) + " : " + EdgeName(edgeId) + " " + edgeBracket);
         return node;
     }
 

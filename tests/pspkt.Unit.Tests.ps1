@@ -3260,6 +3260,29 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             ($kids | Where-Object { $_ -eq 'Target Address : 2001::a' }).Count | Should -Be 1
             ($kids | Where-Object { $_ -eq 'Solicited : Set' }).Count | Should -Be 1
         }
+        It 'Component node renders the Group/Component/Edge/Direction format' {
+            [PacketLineFormatter]::ClearComponents()
+            [PacketLineFormatter]::RegisterComponent(199, 'Microsoft NetVsc Nic #5', 0, 'Microsoft NetVsc Nic #5')
+            [PacketLineFormatter]::RegisterComponent(200, 'WFP Native Filter', 199, 'Microsoft NetVsc Nic #5')
+            try {
+                $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+                $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=1; $ip[3]=44
+                $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+                $pkt = $eth + $ip + ([byte[]](8,0,0,0,0,1,0,1) + [byte[]]::new(8))
+                # compId 200, edge 2 (Egress -> left arrow), direction 3 (Rx -> up arrow)
+                $up = [char]0x2191; $left = [char]0x2190
+                $comp = ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 200, 2, 3))[0]
+                $comp.Key | Should -Be 'Component'
+                [BoxyBox.AnsiText]::StripAnsi($comp.Text) | Should -Be "[$up]Microsoft NetVsc Nic #5 (199):[$left]WFP Native Filter (200)"
+                $kids = $comp.Children | ForEach-Object { [BoxyBox.AnsiText]::StripAnsi($_.Text) }
+                $kids[0] | Should -Be "Direction : Rx [$up]"
+                $kids[1] | Should -Be 'Group     : Microsoft NetVsc Nic #5 (199)'
+                $kids[2] | Should -Be 'Component : WFP Native Filter (200)'
+                $kids[3] | Should -Be "Edge      : Egress [$left]"
+            } finally {
+                [PacketLineFormatter]::ClearComponents()
+            }
+        }
     }
 
     Context 'Network parser one-liners' {
