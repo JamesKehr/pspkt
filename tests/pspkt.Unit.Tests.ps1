@@ -3260,6 +3260,34 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             ($kids | Where-Object { $_ -eq 'Target Address : 2001::a' }).Count | Should -Be 1
             ($kids | Where-Object { $_ -eq 'Solicited : Set' }).Count | Should -Be 1
         }
+        It 'ICMPv6 Router Advertisement expands the options (Prefix/MTU/RDNSS) into children' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            # RA header: type 134, code 0, checksum, CurHopLimit 64, flags 0, RtrLifetime 1800, Reach 0, Retrans 0
+            $ra = [byte[]](134,0, 0,0, 64, 0, 0x07,0x08, 0,0,0,0, 0,0,0,0)
+            # Prefix Info option: /64, L+A (0xC0), valid 2745, pref 2745, prefix 2600:1700:5aa0:30cf::
+            $ra += [byte[]](3,4, 64, 0xC0, 0,0,0x0A,0xB9, 0,0,0x0A,0xB9, 0,0,0,0)
+            $ra += [byte[]](0x26,0x00,0x17,0x00,0x5a,0xa0,0x30,0xcf, 0,0,0,0,0,0,0,0)
+            # MTU option: 9216 (0x2400)
+            $ra += [byte[]](5,1, 0,0, 0,0,0x24,0x00)
+            # RDNSS option: lifetime 1800, two servers ::60 and ::61
+            $ra += [byte[]](25,5, 0,0, 0,0,0x07,0x08)
+            $ra += [byte[]](0x26,0x00,0x17,0x00,0x5a,0xa0,0x30,0xcf, 0,0,0,0,0,0,0,0x60)
+            $ra += [byte[]](0x26,0x00,0x17,0x00,0x5a,0xa0,0x30,0xcf, 0,0,0,0,0,0,0,0x61)
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,($ra.Length),58,255) + ([byte[]](0xfe,0x80)+[byte[]]::new(14)) + ([byte[]](0xff,0x02)+[byte[]]::new(13)+[byte[]](1))
+            $pkt = $eth + $ip6 + $ra
+            $node = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'ICMPv6'
+            $opts = $node.Children | Where-Object { $_.Key -eq 'ICMPv6.Options' }
+            $opts | Should -Not -BeNullOrEmpty
+            $opts.IsExpanded | Should -BeTrue
+            # Header keeps the one-liner summary.
+            [BoxyBox.AnsiText]::StripAnsi($opts.Text) | Should -Be 'Options : Prefix 2600:1700:5aa0:30cf::/64 L=1 A=1 Valid 2745s Pref 2745s, MTU 9216, RDNSS Lifetime 1800s 2600:1700:5aa0:30cf::60 2600:1700:5aa0:30cf::61'
+            # Each option is broken out as a child.
+            $kids = $opts.Children | ForEach-Object { [BoxyBox.AnsiText]::StripAnsi($_.Text) }
+            $kids.Count | Should -Be 3
+            $kids[0] | Should -Be 'Prefix 2600:1700:5aa0:30cf::/64 L=1 A=1 Valid 2745s Pref 2745s'
+            $kids[1] | Should -Be 'MTU 9216'
+            $kids[2] | Should -Be 'RDNSS Lifetime 1800s 2600:1700:5aa0:30cf::60 2600:1700:5aa0:30cf::61'
+        }
         It 'Component node renders the Group/Component/Edge/Direction format' {
             [PacketLineFormatter]::ClearComponents()
             [PacketLineFormatter]::RegisterComponent(199, 'Microsoft NetVsc Nic #5', 0, 'Microsoft NetVsc Nic #5')
