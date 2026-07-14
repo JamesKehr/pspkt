@@ -2974,9 +2974,14 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         It 'extracts IPv4 fields (Src/Dst/id)' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $ipv4 = $roots[2]
-            ($ipv4.Children | Where-Object { $_.Text -eq 'Src: 10.24.0.72' }).Count | Should -Be 1
-            ($ipv4.Children | Where-Object { $_.Text -eq 'Dst: 1.1.1.1' }).Count | Should -Be 1
-            ($ipv4.Children | Where-Object { $_.Text -eq 'id: 0x8bee' }).Count | Should -Be 1
+            # Collapsed header matches the Detailed one-liner (Src/Dst).
+            $ipv4.Text | Should -Be 'IPv4 - Src: 10.24.0.72, Dst: 1.1.1.1'
+            $kids = $ipv4.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Source Address: 10.24.0.72' }).Count      | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Destination Address: 1.1.1.1' }).Count    | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Identification: 0x8bee (35822)' }).Count  | Should -Be 1
+            ($kids | Where-Object { $_ -eq '0100 .... = Version: 4' }).Count          | Should -Be 1
+            ($kids | Where-Object { $_ -eq '.... 0101 = Header Length: 20 bytes (5)' }).Count | Should -Be 1
         }
         It 'renders the Ethernet detail node with aligned Source/Destination/Type/Length fields' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
@@ -3122,6 +3127,167 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots = [PacketDetailExtractor]::BuildTree([byte[]](1,2,3), 3, 0, 0, 0)
             $roots.Count | Should -Be 1
             $roots[0].Text | Should -Match 'too short'
+        }
+    }
+
+    Context 'Network parser Details trees' {
+        # Helper: find a root node by key.
+        function script:GetNode($roots, $key) { $roots | Where-Object { $_.Key -eq $key } | Select-Object -First 1 }
+
+        It 'IPv4 renders the full Wireshark-style bitfield breakdown (DF set)' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[6]=0x40; $ip[8]=64; $ip[9]=1; $ip[2]=0; $ip[3]=44
+            $ip[10]=0x1a;$ip[11]=0x2b   # header checksum 0x1a2b
+            $ip[12]=192;$ip[13]=168;$ip[14]=0;$ip[15]=1; $ip[16]=8;$ip[17]=8;$ip[18]=8;$ip[19]=8
+            $icmp = [byte[]](8,0, 0,0, 0,0, 0,0) + [byte[]]::new(8)
+            $pkt = $eth + $ip + $icmp
+            $ipv4 = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'IPv4'
+            $ipv4.Text | Should -Be 'IPv4 - Src: 192.168.0.1, Dst: 8.8.8.8'
+            $kids = $ipv4.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq '0100 .... = Version: 4' }).Count                     | Should -Be 1
+            ($kids | Where-Object { $_ -eq '.... 0101 = Header Length: 20 bytes (5)' }).Count    | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'DSCP: BE, ECN: Not-ECT' }).Count                     | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Total Length: 44' }).Count                           | Should -Be 1
+            ($kids | Where-Object { $_ -eq '...0 0000 0000 0000 = Fragment Offset: 0' }).Count   | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Time to Live: 64' }).Count                           | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Protocol: ICMP (1)' }).Count                         | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Header Checksum: 0x1a2b' }).Count                    | Should -Be 1
+        }
+        It 'IPv4 Flags node breaks out Reserved/DF/MF with the DF bit set' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[6]=0x40; $ip[8]=64; $ip[9]=6; $ip[3]=40
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $tcp = [byte[]](0,80, 0,80, 0,0,0,1, 0,0,0,2, 0x50,0x02, 0,0, 0,0, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $ipv4 = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'IPv4'
+            $flags = $ipv4.Children | Where-Object { $_.Key -eq 'IPv4.Flags' }
+            $flags | Should -Not -BeNullOrEmpty
+            $flags.Text | Should -Be "010. .... = Flags: 0x40, Don't fragment"
+            $flags.IsExpanded | Should -BeFalse
+            $fk = $flags.Children | ForEach-Object { $_.Text }
+            ($fk | Where-Object { $_ -eq '0... .... = Reserved bit: Not set' }).Count       | Should -Be 1
+            ($fk | Where-Object { $_ -eq ".1.. .... = Don't fragment: Set" }).Count          | Should -Be 1
+            ($fk | Where-Object { $_ -eq '..0. .... = More fragments: Not set' }).Count      | Should -Be 1
+        }
+        It 'IPv6 renders Version, Traffic Class node (DSCP/ECN), Flow Label and addresses' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            $ip6 = [byte[]](0x60,0x02,0xff,0xf8) + [byte[]](0,16, 58, 255)
+            $ip6 += ([byte[]](0x20,0x01) + [byte[]]::new(14))
+            $ip6 += ([byte[]](0x20,0x01) + [byte[]]::new(13) + [byte[]](2))
+            $ic6 = [byte[]](128,0, 0xaa,0xbb, 0x43,0x21, 0x00,0x05) + [byte[]]::new(8)
+            $pkt = $eth + $ip6 + $ic6
+            $ipv6 = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'IPv6'
+            $ipv6.Text | Should -Be 'IPv6 - Src: 2001::, Dst: 2001::2'
+            $kids = $ipv6.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq '0110 .... = Version: 6' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq '.... 0010 1111 1111 1111 1000 = Flow Label: 0x2fff8' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Payload Length: 16' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Next Header: IPv6-ICMP (58)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Hop Limit: 255' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Source Address: 2001::' }).Count | Should -Be 1
+            $tc = $ipv6.Children | Where-Object { $_.Key -eq 'IPv6.TrafficClass' }
+            $tc | Should -Not -BeNullOrEmpty
+            $tc.Text | Should -Be '.... 0000 0000 .... .... .... .... .... = Traffic Class: 0x00 (BE)'
+            ($tc.Children | Where-Object { $_.Text -eq '.... 0000 00.. .... .... .... .... .... = Differentiated Services Codepoint: BE (0)' }).Count | Should -Be 1
+            ($tc.Children | Where-Object { $_.Text -eq '.... .... ..00 .... .... .... .... .... = Explicit Congestion Notification: Not ECN-Capable Transport, Not-ECT (0)' }).Count | Should -Be 1
+        }
+        It 'ARP request/reply headers + aligned label fields' {
+            $ethA = [byte[]](0xff,0xff,0xff,0xff,0xff,0xff, 0xaa,0xbb,0xcc,0xdd,0xee,0xff, 0x08,0x06)
+            $req = [byte[]](0,1, 8,0, 6, 4, 0,1) + [byte[]](0xaa,0xbb,0xcc,0xdd,0xee,0xff) + [byte[]](192,168,0,10) + [byte[]](0,0,0,0,0,0) + [byte[]](192,168,0,1)
+            $arp = GetNode ([PacketDetailExtractor]::BuildTree(($ethA+$req), ($ethA+$req).Length, 9, 1, 1)) 'ARP'
+            $arp.Text | Should -Be 'ARP, Request who-has 192.168.0.1 tell 192.168.0.10'
+            $kids = $arp.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Operation  : Request' }).Count            | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Sender MAC : aa-bb-cc-dd-ee-ff' }).Count  | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Target IP  : 192.168.0.1' }).Count        | Should -Be 1
+            # Reply: sender's mapping is advertised (tcpdump-style).
+            $rep = [byte[]](0,1, 8,0, 6, 4, 0,2) + [byte[]](0xaa,0xbb,0xcc,0xdd,0xee,0xff) + [byte[]](192,168,0,1) + [byte[]](0x11,0x22,0x33,0x44,0x55,0x66) + [byte[]](192,168,0,10)
+            $arpR = GetNode ([PacketDetailExtractor]::BuildTree(($ethA+$rep), ($ethA+$rep).Length, 9, 1, 1)) 'ARP'
+            $arpR.Text | Should -Be 'ARP, Reply 192.168.0.1 is-at aa-bb-cc-dd-ee-ff'
+        }
+        It 'ICMP Echo renders the full field template' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=1; $ip[3]=44
+            $ip[12]=192;$ip[13]=168;$ip[14]=0;$ip[15]=1; $ip[16]=8;$ip[17]=8;$ip[18]=8;$ip[19]=8
+            $icmp = [byte[]](8,0, 0xf7,0xff, 0x12,0x34, 0x00,0x01) + [byte[]]::new(8)
+            $pkt = $eth + $ip + $icmp
+            $node = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'ICMP'
+            $node.Text | Should -Be 'ICMP.Echo Request: 192.168.0.1 > 8.8.8.8, id 4660, seq 1'
+            $kids = $node.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Type       : Echo (ping) request (8)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Checksum   : 0xf7ff' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Identifier : 4660 (0x1234)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Sequence   : 1 (0x0001)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Data (8 bytes)' }).Count | Should -Be 1
+        }
+        It 'ICMP Destination Unreachable renders the code string' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=1; $ip[3]=56
+            $ip[12]=1;$ip[13]=1;$ip[14]=1;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=5
+            $icmp = [byte[]](3,3, 0,0, 0,0,0,0) + [byte[]]::new(28)
+            $pkt = $eth + $ip + $icmp
+            $node = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'ICMP'
+            $node.Text | Should -Be 'ICMP.Destination Unreachable -  Destination port unreachable (3)'
+            ($node.Children | Where-Object { $_.Text -eq 'Code       : Destination port unreachable (3)' }).Count | Should -Be 1
+        }
+        It 'ICMPv6 Echo renders the full field template' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,16, 58, 64) + ([byte[]](0x20,0x01)+[byte[]]::new(14)) + ([byte[]](0x20,0x01)+[byte[]]::new(13)+[byte[]](2))
+            $ic6 = [byte[]](128,0, 0xaa,0xbb, 0x43,0x21, 0x00,0x05) + [byte[]]::new(8)
+            $pkt = $eth + $ip6 + $ic6
+            $node = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'ICMPv6'
+            $node.Text | Should -Be 'ICMPv6.Echo Request: 2001:: > 2001::2, id 17185, seq 5'
+            ($node.Children | Where-Object { $_.Text -eq 'Type       : Echo (ping) request (128)' }).Count | Should -Be 1
+            ($node.Children | Where-Object { $_.Text -eq 'Identifier : 17185 (0x4321)' }).Count | Should -Be 1
+        }
+        It 'ICMPv6 Neighbor Advertisement renders header, target and NA flags' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            $na = [byte[]](136,0, 0,0, 0xE0,0,0,0)
+            $na += ([byte[]](0x20,0x01) + [byte[]]::new(13) + [byte[]](0x0a))
+            $na += [byte[]](2, 1, 0x54,0x0f,0x2c,0x72,0x5e,0x1c)
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,($na.Length),58,255) + ([byte[]](0x20,0x01)+[byte[]]::new(14)) + ([byte[]](0xff,0x02)+[byte[]]::new(13)+[byte[]](1))
+            $pkt = $eth + $ip6 + $na
+            $node = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'ICMPv6'
+            $node.Text | Should -Be 'ICMPv6.Neighbor Advertisement 2001::a (rtr, sol, ovr) is at 54-0f-2c-72-5e-1c'
+            $kids = $node.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Type       : Neighbor Advertisement (136)' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Target Address : 2001::a' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'Solicited : Set' }).Count | Should -Be 1
+        }
+    }
+
+    Context 'Network parser one-liners' {
+        function script:EmitLine($pkt, $lvl) {
+            Set-PspktDetailLevel -Level $lvl
+            try {
+                $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+                $data = $meta + $pkt
+                $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+                [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+        }
+        It 'ICMP Destination Unreachable shows the code string at Default and Detailed' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=1; $ip[3]=56
+            $ip[12]=1;$ip[13]=1;$ip[14]=1;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=5
+            $icmp = [byte[]](3,3, 0,0, 0,0,0,0) + [byte[]]::new(28)
+            $pkt = $eth + $ip + $icmp
+            (EmitLine $pkt 0) | Should -Match 'ICMP\.Destination Unreachable -  Destination port unreachable \(3\)'
+            (EmitLine $pkt 1) | Should -Match 'ICMP\.Destination Unreachable -  Destination port unreachable \(3\)'
+        }
+        It 'ICMPv6 NDP Router Solicitation uses the spec format with the sender MAC' {
+            $eth = [byte[]](0x33,0x33,0,0,0,2, 0x54,0x0f,0x2c,0x72,0x5e,0x1c, 0x86,0xdd)
+            $rs = [byte[]](133,0,0,0, 0,0,0,0) + [byte[]](1,1,0x54,0x0f,0x2c,0x72,0x5e,0x1c)
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,($rs.Length),58,255) + ([byte[]](0xfe,0x80)+[byte[]]::new(14)) + ([byte[]](0xff,0x02)+[byte[]]::new(13)+[byte[]](2))
+            $pkt = $eth + $ip6 + $rs
+            (EmitLine $pkt 0) | Should -Match 'ICMPv6\.Router Solicitation from 54-0f-2c-72-5e-1c'
+        }
+        It 'ICMPv6 Destination Unreachable shows the code string' {
+            $eth = [byte[]](0x33,0x33,0,0,0,2, 0x54,0x0f,0x2c,0x72,0x5e,0x1c, 0x86,0xdd)
+            $du = [byte[]](1,4,0,0, 0,0,0,0) + [byte[]]::new(40)
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,($du.Length),58,64) + ([byte[]](0x20,0x01)+[byte[]]::new(14)) + ([byte[]](0x20,0x01)+[byte[]]::new(13)+[byte[]](9))
+            $pkt = $eth + $ip6 + $du
+            (EmitLine $pkt 0) | Should -Match 'ICMPv6\.Destination Unreachable -  Port unreachable \(4\)'
         }
     }
 

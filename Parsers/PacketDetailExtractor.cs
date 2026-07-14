@@ -302,79 +302,137 @@ public static class PacketDetailExtractor
 
     private static BoxyBox.TreeNode BuildArpNode(byte[] p, int off, int len)
     {
-        var arp = new BoxyBox.TreeNode("ARP", "ARP", true);
-        if (len < off + 28) { arp.AddLeaf("(truncated)"); return arp; }
+        if (len < off + 28)
+        {
+            var t = new BoxyBox.TreeNode("ARP", "ARP", true);
+            t.AddLeaf("(truncated)");
+            return t;
+        }
         int op = PacketParseHelper.ReadUInt16BE(p, off + 6);
         string senderMac = PacketParseHelper.FormatMac(p, off + 8);
         string senderIp = PacketParseHelper.FormatIPv4(p, off + 14);
         string targetMac = PacketParseHelper.FormatMac(p, off + 18);
         string targetIp = PacketParseHelper.FormatIPv4(p, off + 24);
-        arp.AddLeaf("Operation: " + (op == 1 ? "Request" : op == 2 ? "Reply" : op.ToString()));
-        arp.AddLeaf("Sender MAC: " + senderMac);
-        arp.AddLeaf("Sender IP: " + senderIp);
-        arp.AddLeaf("Target MAC: " + targetMac);
-        arp.AddLeaf("Target IP: " + targetIp);
+
+        // Collapsed header matches the Default one-liner. The reply advertises the sender's
+        // IP -> MAC mapping (tcpdump-style), so it reads "Reply <senderIp> is-at <senderMac>".
+        string header;
+        if (op == 1) header = "ARP, Request who-has " + targetIp + " tell " + senderIp;
+        else if (op == 2) header = "ARP, Reply " + senderIp + " is-at " + senderMac;
+        else header = "ARP op " + op;
+
+        var arp = new BoxyBox.TreeNode(header, "ARP", true);
+        arp.AddLeaf("Operation".PadRight(10) + " : " + (op == 1 ? "Request" : op == 2 ? "Reply" : op.ToString()));
+        arp.AddLeaf("Sender MAC".PadRight(10) + " : " + senderMac);
+        arp.AddLeaf("Sender IP".PadRight(10) + " : " + senderIp);
+        arp.AddLeaf("Target MAC".PadRight(10) + " : " + targetMac);
+        arp.AddLeaf("Target IP".PadRight(10) + " : " + targetIp);
         return arp;
     }
 
     private static void BuildIPv4(byte[] p, int off, int len, List<BoxyBox.TreeNode> roots)
     {
         if (len < off + 20) { roots.Add(new BoxyBox.TreeNode("IPv4 (truncated)", "IPv4", true)); return; }
-        int ihl = (p[off] & 0x0F) * 4;
+        int verIhlByte = p[off];
+        int ihlWords = verIhlByte & 0x0F;
+        int ihl = ihlWords * 4;
         int tos = p[off + 1];
+        int dscp = tos >> 2;
+        int ecn = tos & 0x3;
         int total = PacketParseHelper.ReadUInt16BE(p, off + 2);
         int id = PacketParseHelper.ReadUInt16BE(p, off + 4);
         int flagsFrag = PacketParseHelper.ReadUInt16BE(p, off + 6);
+        byte flagsHigh = (byte)(flagsFrag >> 8);
+        int fragOffset = flagsFrag & 0x1FFF;
         int ttl = p[off + 8];
         int proto = p[off + 9];
+        int checksum = PacketParseHelper.ReadUInt16BE(p, off + 10);
         string src = PacketParseHelper.FormatIPv4(p, off + 12);
         string dst = PacketParseHelper.FormatIPv4(p, off + 16);
 
-        var ip = new BoxyBox.TreeNode("IPv4", "IPv4", true);
-        ip.AddLeaf("Src: " + src);
-        ip.AddLeaf("Dst: " + dst);
-        ip.AddLeaf("Flags: " + Ipv4Flags((byte)(flagsFrag >> 8)));
-        ip.AddLeaf("DSCP: " + DscpName(tos >> 2));
-        ip.AddLeaf("len: " + total);
-        ip.AddLeaf("TTL: " + ttl);
+        // Collapsed header matches the Detailed one-liner (spec: Details Collapsed == Detailed).
+        var ip = new BoxyBox.TreeNode("IPv4 - Src: " + src + ", Dst: " + dst, "IPv4", true);
+        ip.AddLeaf(RenderBits(verIhlByte, 8, "BBBB ....") + " = Version: 4");
+        ip.AddLeaf(RenderBits(verIhlByte, 8, ".... BBBB") + " = Header Length: " + ihl + " bytes (" + ihlWords + ")");
+        ip.AddLeaf("DSCP: " + DscpName(dscp) + ", ECN: " + (ecn != 0 ? "ECT" : "Not-ECT"));
+        ip.AddLeaf("Total Length: " + total);
+        ip.AddLeaf("Identification: 0x" + id.ToString("x4") + " (" + id + ")");
+
+        string flagNames = Ipv4FlagNames(flagsHigh);
+        var flags = new BoxyBox.TreeNode(
+            RenderBits(flagsHigh, 8, "BBB. ....") + " = Flags: 0x" + (flagsHigh & 0xE0).ToString("x2")
+                + (flagNames.Length > 0 ? ", " + flagNames : ""),
+            "IPv4.Flags", false);
+        flags.AddLeaf(RenderBits(flagsHigh, 8, "0... ....") + " = Reserved bit: Not set");
+        flags.AddLeaf(RenderBits(flagsHigh, 8, ".B.. ....") + " = Don't fragment: " + SetState((flagsHigh & 0x40) != 0));
+        flags.AddLeaf(RenderBits(flagsHigh, 8, "..B. ....") + " = More fragments: " + SetState((flagsHigh & 0x20) != 0));
+        ip.Add(flags);
+
+        ip.AddLeaf(RenderBits(flagsFrag, 16, "...B BBBB BBBB BBBB") + " = Fragment Offset: " + fragOffset);
+        ip.AddLeaf("Time to Live: " + ttl);
         ip.AddLeaf("Protocol: " + ProtoName(proto) + " (" + proto + ")");
-        ip.AddLeaf("id: 0x" + id.ToString("x4"));
+        ip.AddLeaf("Header Checksum: 0x" + checksum.ToString("x4"));
+        ip.AddLeaf("Source Address: " + src);
+        ip.AddLeaf("Destination Address: " + dst);
         roots.Add(ip);
 
         int transOff = off + ihl;
         int transLen = len - transOff;
-        BuildTransport(p, transOff, transLen, proto, roots);
+        BuildTransport(p, transOff, transLen, proto, src, dst, roots);
     }
 
     private static void BuildIPv6(byte[] p, int off, int len, List<BoxyBox.TreeNode> roots)
     {
         if (len < off + 40) { roots.Add(new BoxyBox.TreeNode("IPv6 (truncated)", "IPv6", true)); return; }
+        uint firstWord = PacketParseHelper.ReadUInt32BE(p, off);
+        int trafficClass = (int)((firstWord >> 20) & 0xFF);
+        int dscp = trafficClass >> 2;
+        int ecn = trafficClass & 0x3;
+        int flowLabel = (int)(firstWord & 0xFFFFF);
         int payloadLen = PacketParseHelper.ReadUInt16BE(p, off + 4);
         int hopLimit = p[off + 7];
         string src = PacketParseHelper.FormatIPv6(p, off + 8);
         string dst = PacketParseHelper.FormatIPv6(p, off + 24);
 
-        var ip = new BoxyBox.TreeNode("IPv6", "IPv6", true);
-        ip.AddLeaf("Src: " + src);
-        ip.AddLeaf("Dst: " + dst);
-        ip.AddLeaf("Payload len: " + payloadLen);
-        ip.AddLeaf("Hop Limit: " + hopLimit);
+        // Collapsed header matches the Detailed one-liner (spec: Details Collapsed == Detailed).
+        var ip = new BoxyBox.TreeNode("IPv6 - Src: " + src + ", Dst: " + dst, "IPv6", true);
+        ip.AddLeaf(RenderBits(p[off], 8, "BBBB ....") + " = Version: 6");
+
+        var tc = new BoxyBox.TreeNode(
+            RenderBits((int)firstWord, 32, ".... BBBB BBBB .... .... .... .... ....")
+                + " = Traffic Class: 0x" + trafficClass.ToString("x2") + " (" + DscpName(dscp) + ")",
+            "IPv6.TrafficClass", false);
+        tc.AddLeaf(RenderBits((int)firstWord, 32, ".... BBBB BB.. .... .... .... .... ....")
+            + " = Differentiated Services Codepoint: " + DscpName(dscp) + " (" + dscp + ")");
+        tc.AddLeaf(RenderBits((int)firstWord, 32, ".... .... ..BB .... .... .... .... ....")
+            + " = Explicit Congestion Notification: " + EcnName(ecn) + " (" + ecn + ")");
+        ip.Add(tc);
+
+        ip.AddLeaf(RenderBits((int)(firstWord & 0xFFFFFF), 24, ".... BBBB BBBB BBBB BBBB BBBB")
+            + " = Flow Label: 0x" + flowLabel.ToString("x5"));
+        ip.AddLeaf("Payload Length: " + payloadLen);
 
         int nextHdr, transOff;
         if (PacketParseHelper.FindIPv6UpperLayer(p, off, len, out nextHdr, out transOff))
         {
             ip.AddLeaf("Next Header: " + ProtoName(nextHdr) + " (" + nextHdr + ")");
+            ip.AddLeaf("Hop Limit: " + hopLimit);
+            ip.AddLeaf("Source Address: " + src);
+            ip.AddLeaf("Destination Address: " + dst);
             roots.Add(ip);
-            BuildTransport(p, transOff, len - transOff, nextHdr, roots);
+            BuildTransport(p, transOff, len - transOff, nextHdr, src, dst, roots);
         }
         else
         {
-            ip.AddLeaf("Next Header: " + p[off + 6]);
+            ip.AddLeaf("Next Header: " + ProtoName(p[off + 6]) + " (" + p[off + 6] + ")");
+            ip.AddLeaf("Hop Limit: " + hopLimit);
+            ip.AddLeaf("Source Address: " + src);
+            ip.AddLeaf("Destination Address: " + dst);
             roots.Add(ip);
         }
     }
 
-    private static void BuildTransport(byte[] p, int off, int len, int proto, List<BoxyBox.TreeNode> roots)
+    private static void BuildTransport(byte[] p, int off, int len, int proto, string src, string dst, List<BoxyBox.TreeNode> roots)
     {
         if (len < 0) len = 0;
         if (proto == 6 && len >= 20) // TCP
@@ -433,23 +491,134 @@ public static class PacketDetailExtractor
         }
         else if ((proto == 1 || proto == 58) && len >= 2) // ICMP / ICMPv6
         {
-            int type = p[off];
-            int code = p[off + 1];
-            string label = proto == 1 ? "ICMP" : "ICMPv6";
-            var icmp = new BoxyBox.TreeNode(label, label, true);
-            icmp.AddLeaf("Type: " + type);
-            icmp.AddLeaf("Code: " + code);
-            if ((proto == 1 && (type == 0 || type == 8)) || (proto == 58 && (type == 128 || type == 129)))
-            {
-                if (len >= 8)
-                {
-                    icmp.AddLeaf("Id: " + PacketParseHelper.ReadUInt16BE(p, off + 4));
-                    icmp.AddLeaf("Seq: " + PacketParseHelper.ReadUInt16BE(p, off + 6));
-                }
-            }
-            roots.Add(icmp);
+            roots.Add(BuildIcmpNode(p, off, len, proto, src, dst));
         }
     }
+
+    // ---- ICMP / ICMPv6 Details node ----
+    // Renders the Analysis Details tree for ICMP (proto 1) and ICMPv6 (proto 58) per the
+    // ICMP/ICMPv6 parser specs: Echo gets the full field breakdown, Destination Unreachable
+    // gets a code-string breakdown, and ICMPv6 NDP (types 133-137) gets a message + option
+    // breakdown. The collapsed header mirrors the Default one-liner.
+    private static BoxyBox.TreeNode BuildIcmpNode(byte[] p, int off, int len, int proto, string src, string dst)
+    {
+        bool v6 = proto == 58;
+        string label = v6 ? "ICMPv6" : "ICMP";
+        int type = p[off];
+        int code = p[off + 1];
+        int checksum = len >= 4 ? PacketParseHelper.ReadUInt16BE(p, off + 2) : 0;
+
+        bool isEcho = v6 ? (type == 128 || type == 129) : (type == 0 || type == 8);
+        bool isRequest = v6 ? (type == 128) : (type == 8);
+        bool isUnreachable = v6 ? (type == 1) : (type == 3);
+
+        if (isEcho)
+        {
+            int id = len >= 8 ? PacketParseHelper.ReadUInt16BE(p, off + 4) : 0;
+            int seq = len >= 8 ? PacketParseHelper.ReadUInt16BE(p, off + 6) : 0;
+            int dataLen = Math.Max(0, len - 8);
+            string dir = isRequest ? "Request" : "Reply";
+
+            var node = new BoxyBox.TreeNode(
+                label + ".Echo " + dir + ": " + src + " > " + dst + ", id " + id + ", seq " + seq,
+                label, true);
+            node.AddLeaf("Type".PadRight(10) + " : Echo (ping) " + (isRequest ? "request" : "reply") + " (" + type + ")");
+            node.AddLeaf("Code".PadRight(10) + " : " + code);
+            node.AddLeaf("Checksum".PadRight(10) + " : 0x" + checksum.ToString("x4"));
+            node.AddLeaf("Identifier".PadRight(10) + " : " + id + " (0x" + id.ToString("x4") + ")");
+            node.AddLeaf("Sequence".PadRight(10) + " : " + seq + " (0x" + seq.ToString("x4") + ")");
+            node.AddLeaf("Data (" + dataLen + " bytes)");
+            return node;
+        }
+
+        if (isUnreachable)
+        {
+            string codeStr = v6 ? Icmp6UnreachableCode(code) : Icmp4UnreachableCode(code);
+            var node = new BoxyBox.TreeNode(
+                label + ".Destination Unreachable -  " + codeStr + " (" + code + ")",
+                label, true);
+            node.AddLeaf("Type".PadRight(10) + " : Destination Unreachable (" + type + ")");
+            node.AddLeaf("Code".PadRight(10) + " : " + codeStr + " (" + code + ")");
+            node.AddLeaf("Checksum".PadRight(10) + " : 0x" + checksum.ToString("x4"));
+            return node;
+        }
+
+        if (v6 && type >= 133 && type <= 137)
+        {
+            return BuildNdpNode(p, off, len, code, checksum, src);
+        }
+
+        // Fallback: generic type/code breakdown.
+        var generic = new BoxyBox.TreeNode(label + " type " + type + " code " + code, label, true);
+        generic.AddLeaf("Type".PadRight(10) + " : " + type);
+        generic.AddLeaf("Code".PadRight(10) + " : " + code);
+        generic.AddLeaf("Checksum".PadRight(10) + " : 0x" + checksum.ToString("x4"));
+        return generic;
+    }
+
+    // Builds the ICMPv6 NDP (types 133-137) Details node: the spec one-liner header plus
+    // Type/Code/Checksum and the message-specific fields + options extracted by NdpParser.
+    private static BoxyBox.TreeNode BuildNdpNode(byte[] p, int off, int len, int code, int checksum, string src)
+    {
+        int type = p[off];
+        string name = NdpTypeName(type);
+        string header = NdpParser.FormatNdpSpec(p, off, len, false);
+        string targetAddr = (type == 135 || type == 136) && len >= 24 ? PacketParseHelper.FormatIPv6(p, off + 8) : null;
+
+        var node = new BoxyBox.TreeNode(header, "ICMPv6", true);
+        node.AddLeaf("Type".PadRight(10) + " : " + name + " (" + type + ")");
+        node.AddLeaf("Code".PadRight(10) + " : " + code);
+        node.AddLeaf("Checksum".PadRight(10) + " : 0x" + checksum.ToString("x4"));
+
+        if (type == 134 && len >= 16) // Router Advertisement
+        {
+            byte flags = p[off + 5];
+            node.AddLeaf("Cur Hop Limit".PadRight(16) + " : " + p[off + 4]);
+            node.AddLeaf("Flags".PadRight(16) + " : M=" + ((flags >> 7) & 1) + " O=" + ((flags >> 6) & 1));
+            node.AddLeaf("Router Lifetime".PadRight(16) + " : " + PacketParseHelper.ReadUInt16BE(p, off + 6) + "s");
+            node.AddLeaf("Reachable Time".PadRight(16) + " : " + PacketParseHelper.ReadUInt32BE(p, off + 8) + "ms");
+            node.AddLeaf("Retrans Timer".PadRight(16) + " : " + PacketParseHelper.ReadUInt32BE(p, off + 12) + "ms");
+        }
+        else if ((type == 135 || type == 136) && targetAddr != null)
+        {
+            node.AddLeaf("Target Address : " + targetAddr);
+            if (type == 136)
+            {
+                byte naFlags = p[off + 4];
+                node.AddLeaf("Router".PadRight(9) + " : " + SetState(((naFlags >> 7) & 1) != 0));
+                node.AddLeaf("Solicited".PadRight(9) + " : " + SetState(((naFlags >> 6) & 1) != 0));
+                node.AddLeaf("Override".PadRight(9) + " : " + SetState(((naFlags >> 5) & 1) != 0));
+            }
+        }
+
+        // Append any parsed NDP options (Prefix/MTU/RDNSS/etc.) as a single summary leaf. Only
+        // real option segments are kept; message fields already broken out above are dropped.
+        string opts = NdpOptionSummary(p, off, len);
+        if (opts.Length > 0) node.AddLeaf("Options : " + opts);
+        return node;
+    }
+
+    // Extracts only the option segments (Prefix/MTU/RDNSS/DNSSL/Route/etc.) from the NdpParser
+    // one-liner, dropping the message-specific fields that are broken out structurally.
+    private static string NdpOptionSummary(byte[] p, int off, int len)
+    {
+        string detail = NdpParser.FormatNdpDetailed(p, off, len);
+        if (string.IsNullOrEmpty(detail)) return "";
+        string[] segs = detail.Split(';');
+        var kept = new List<string>();
+        for (int i = 1; i < segs.Length; i++)
+        {
+            string seg = segs[i].Trim();
+            if (seg.StartsWith("Prefix") || seg.StartsWith("MTU") || seg.StartsWith("RDNSS")
+                || seg.StartsWith("DNSSL") || seg.StartsWith("Route") || seg.StartsWith("RedirHdr")
+                || seg.StartsWith("Opt"))
+            {
+                kept.Add(seg);
+            }
+        }
+        return string.Join(", ", kept.ToArray());
+    }
+
 
     private static void BuildAppNode(byte[] p, int off, int len, int sp, int dp, bool udp, List<BoxyBox.TreeNode> roots)
     {
@@ -512,16 +681,6 @@ public static class PacketDetailExtractor
         }
     }
 
-    private static string Ipv4Flags(byte flagsHigh)
-    {
-        bool df = (flagsHigh & 0x40) != 0;
-        bool mf = (flagsHigh & 0x20) != 0;
-        if (df && mf) return "DF,MF";
-        if (df) return "DF";
-        if (mf) return "MF";
-        return "none";
-    }
-
     // Renders a Wireshark-style flag bit line from a template over the 12-bit TCP flags field
     // (bits 11..0 = 3 reserved, AE, CWR, ECE, URG, ACK, PSH, RST, SYN, FIN). A 'B' in the
     // template is replaced by the actual bit at that position (MSB first); '.', digits and
@@ -568,6 +727,109 @@ public static class PacketDetailExtractor
     }
 
     private static string SetState(bool set) { return set ? "Set" : "Not set"; }
+
+    /// <summary>
+    /// Renders a Wireshark-style bit line from a template. A 'B' is replaced by the actual
+    /// bit at that position (MSB first over <paramref name="totalBits"/> bits, counting only
+    /// non-space template slots); '.', digits and spaces are copied verbatim.
+    /// </summary>
+    private static string RenderBits(int value, int totalBits, string template)
+    {
+        var sb = new StringBuilder(template.Length);
+        int bitIndex = 0;
+        for (int i = 0; i < template.Length; i++)
+        {
+            char c = template[i];
+            if (c == ' ') { sb.Append(' '); continue; }
+            if (c == 'B')
+            {
+                int bit = (totalBits - 1) - bitIndex;
+                sb.Append(bit >= 0 && ((value >> bit) & 1) == 1 ? '1' : '0');
+            }
+            else { sb.Append(c); }
+            bitIndex++;
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Comma-separated human-readable IPv4 flag names (empty when none set).</summary>
+    private static string Ipv4FlagNames(byte flagsHigh)
+    {
+        bool df = (flagsHigh & 0x40) != 0;
+        bool mf = (flagsHigh & 0x20) != 0;
+        if (df && mf) return "Don't fragment, More fragments";
+        if (df) return "Don't fragment";
+        if (mf) return "More fragments";
+        return "";
+    }
+
+    /// <summary>2-bit ECN codepoint name (RFC 3168), used by IPv6 Traffic Class breakdown.</summary>
+    private static string EcnName(int ecn)
+    {
+        switch (ecn & 0x3)
+        {
+            case 0: return "Not ECN-Capable Transport, Not-ECT";
+            case 1: return "ECN Capable Transport(1), ECT(1)";
+            case 2: return "ECN Capable Transport(0), ECT(0)";
+            default: return "Congestion Experienced, CE";
+        }
+    }
+
+    /// <summary>ICMPv4 Destination Unreachable code strings (RFC 792 / IANA).</summary>
+    internal static string Icmp4UnreachableCode(int code)
+    {
+        switch (code)
+        {
+            case 0: return "Destination network unreachable";
+            case 1: return "Destination host unreachable";
+            case 2: return "Destination protocol unreachable";
+            case 3: return "Destination port unreachable";
+            case 4: return "Fragmentation required, and DF flag set";
+            case 5: return "Source route failed";
+            case 6: return "Destination network unknown";
+            case 7: return "Destination host unknown";
+            case 8: return "Source host isolated";
+            case 9: return "Network administratively prohibited";
+            case 10: return "Host administratively prohibited";
+            case 11: return "Network unreachable for ToS";
+            case 12: return "Host unreachable for ToS";
+            case 13: return "Communication administratively prohibited";
+            case 14: return "Host Precedence Violation";
+            case 15: return "Precedence cutoff in effect";
+            default: return "Unknown";
+        }
+    }
+
+    /// <summary>ICMPv6 Destination Unreachable code strings (RFC 4443).</summary>
+    internal static string Icmp6UnreachableCode(int code)
+    {
+        switch (code)
+        {
+            case 0: return "No route to destination";
+            case 1: return "Communication with destination administratively prohibited";
+            case 2: return "Beyond scope of source address";
+            case 3: return "Address unreachable";
+            case 4: return "Port unreachable";
+            case 5: return "Source address failed ingress/egress policy";
+            case 6: return "Reject route to destination";
+            case 7: return "Error in Source Routing Header";
+            default: return "Unknown";
+        }
+    }
+
+    /// <summary>Human-readable ICMPv6 NDP message name (types 133-137).</summary>
+    internal static string NdpTypeName(int type)
+    {
+        switch (type)
+        {
+            case 133: return "Router Solicitation";
+            case 134: return "Router Advertisement";
+            case 135: return "Neighbor Solicitation";
+            case 136: return "Neighbor Advertisement";
+            case 137: return "Redirect";
+            default: return "NDP type " + type;
+        }
+    }
 
     /// <summary>
     /// Builds the collapsible TCP "Flags" node per the parser spec: a header of

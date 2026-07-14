@@ -52,6 +52,110 @@ public static class NdpParser
         }
     }
 
+    /// <summary>
+    /// Formats an NDP message (types 133-137) in the ICMPv6 parser spec's one-liner form
+    /// (e.g. "ICMPv6.Router Solicitation from &lt;mac&gt;"). When <paramref name="detailed"/> is
+    /// true the rich option/field tail from <see cref="FormatNdpDetailed"/> is appended so no
+    /// information is lost at the Detailed level.
+    /// </summary>
+    public static string FormatNdpSpec(byte[] data, int icmpv6Off, int icmpv6Len, bool detailed)
+    {
+        if (data == null || icmpv6Off < 0 || icmpv6Len < 4 || icmpv6Off + icmpv6Len > data.Length)
+        {
+            return null;
+        }
+
+        int type = data[icmpv6Off];
+        int end = icmpv6Off + icmpv6Len;
+        string lead;
+        switch (type)
+        {
+            case 133: // Router Solicitation
+            {
+                string srcLL = FindLinkLayerAddr(data, icmpv6Off + 8, end, OPT_SOURCE_LINK_ADDR);
+                lead = "ICMPv6.Router Solicitation" + (srcLL != null ? " from " + srcLL : "");
+                break;
+            }
+            case 134: // Router Advertisement
+            {
+                string srcLL = icmpv6Len >= 16 ? FindLinkLayerAddr(data, icmpv6Off + 16, end, OPT_SOURCE_LINK_ADDR) : null;
+                lead = "ICMPv6.Router Advertisement" + (srcLL != null ? " from " + srcLL : "");
+                break;
+            }
+            case 135: // Neighbor Solicitation
+            {
+                string target = icmpv6Len >= 24 ? FormatIPv6(data, icmpv6Off + 8) : "?";
+                string srcLL = icmpv6Len >= 24 ? FindLinkLayerAddr(data, icmpv6Off + 24, end, OPT_SOURCE_LINK_ADDR) : null;
+                lead = "ICMPv6.Neighbor Solicitation for " + target + (srcLL != null ? " from " + srcLL : "");
+                break;
+            }
+            case 136: // Neighbor Advertisement
+            {
+                string target = icmpv6Len >= 24 ? FormatIPv6(data, icmpv6Off + 8) : "?";
+                string tgtLL = icmpv6Len >= 24 ? FindLinkLayerAddr(data, icmpv6Off + 24, end, OPT_TARGET_LINK_ADDR) : null;
+                byte naFlags = icmpv6Len >= 5 ? data[icmpv6Off + 4] : (byte)0;
+                lead = "ICMPv6.Neighbor Advertisement " + target + " (" + NaFlags(naFlags) + ")"
+                     + (tgtLL != null ? " is at " + tgtLL : "");
+                break;
+            }
+            case 137: // Redirect
+            {
+                string target = icmpv6Len >= 40 ? FormatIPv6(data, icmpv6Off + 8) : "?";
+                string dest = icmpv6Len >= 40 ? FormatIPv6(data, icmpv6Off + 24) : "?";
+                lead = "ICMPv6.Redirect for " + dest + " to " + target;
+                break;
+            }
+            default:
+                lead = "ICMPv6.NDP type " + type;
+                break;
+        }
+
+        if (!detailed) return lead;
+
+        string full = FormatNdpDetailed(data, icmpv6Off, icmpv6Len);
+        if (string.IsNullOrEmpty(full)) return lead;
+        // Append the option/field tail, dropping the Source/Target Link-layer segments already
+        // represented in the "from" / "is at" lead.
+        string[] segs = full.Split(';');
+        StringBuilder tail = new StringBuilder(full.Length);
+        for (int i = 1; i < segs.Length; i++)
+        {
+            string seg = segs[i].Trim();
+            if (seg.StartsWith("SrcLL") || seg.StartsWith("TgtLL")) continue;
+            tail.Append("; ").Append(seg);
+        }
+        return lead + tail.ToString();
+    }
+
+    // NA flag summary (rtr/sol/ovr) per the ICMPv6 parser spec.
+    private static string NaFlags(byte naFlags)
+    {
+        StringBuilder sb = new StringBuilder(16);
+        if (((naFlags >> 7) & 1) != 0) sb.Append("rtr");
+        if (((naFlags >> 6) & 1) != 0) { if (sb.Length > 0) sb.Append(", "); sb.Append("sol"); }
+        if (((naFlags >> 5) & 1) != 0) { if (sb.Length > 0) sb.Append(", "); sb.Append("ovr"); }
+        return sb.ToString();
+    }
+
+    // Scans an NDP option block for a Source/Target Link-layer Address option and returns its MAC.
+    private static string FindLinkLayerAddr(byte[] data, int optOff, int optEnd, int wantType)
+    {
+        if (optOff < 0 || optEnd > data.Length) return null;
+        int pos = optOff;
+        int safety = 32;
+        while (pos + 2 <= optEnd && safety-- > 0)
+        {
+            int optType = data[pos];
+            int optLen8 = data[pos + 1];
+            if (optLen8 == 0) break;
+            int optBytes = optLen8 * 8;
+            if (pos + optBytes > optEnd) break;
+            if (optType == wantType && optBytes >= 8) return FormatMac(data, pos + 2);
+            pos += optBytes;
+        }
+        return null;
+    }
+
     // ---- Router Solicitation (RS, RFC 4861 §4.1) ----
     // Body: Type(1) Code(1) Checksum(2) Reserved(4); options follow.
     private static string FormatRouterSolicitation(byte[] data, int off, int len)
