@@ -50,6 +50,7 @@ Same as `Detailed`.
 ### Details: Collapsed
 
 Same as `Detailed` — the collapsed node header is `IPv6 - Src: [Src addr], Dst: [Dst addr]`.
+IPv6 is **collapsed by default** in Analysis mode.
 
 ### Details: Expanded
 

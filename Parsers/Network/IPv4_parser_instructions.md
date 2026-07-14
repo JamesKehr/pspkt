@@ -51,6 +51,7 @@ Same as `Detailed`.
 ### Details: Collapsed
 
 Same as `Detailed` — the collapsed node header is `IPv4 - Src: [Src addr], Dst: [Dst addr]`.
+IPv4 is **collapsed by default** in Analysis mode.
 
 ### Details: Expanded
 

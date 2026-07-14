@@ -2963,11 +2963,11 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $roots[3].Key | Should -Be 'UDP'
             $roots[4].Key | Should -Be 'DNS'
         }
-        It 'Component/Eth/TCP/UDP collapsed by default; IPv4/DNS expanded' {
+        It 'Component/Eth/IPv4/TCP/UDP collapsed by default; DNS expanded' {
             $roots = [PacketDetailExtractor]::BuildTree($script:pkt, $script:pkt.Length, 9, 1, 1)
             $roots[0].IsExpanded | Should -BeFalse   # Component
             $roots[1].IsExpanded | Should -BeFalse   # Eth
-            $roots[2].IsExpanded | Should -BeTrue     # IPv4
+            $roots[2].IsExpanded | Should -BeFalse    # IPv4 (network collapsed by default)
             $roots[3].IsExpanded | Should -BeFalse    # UDP (transport collapsed by default)
             $roots[4].IsExpanded | Should -BeTrue     # DNS
         }
@@ -3143,6 +3143,7 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $pkt = $eth + $ip + $icmp
             $ipv4 = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'IPv4'
             $ipv4.Text | Should -Be 'IPv4 - Src: 192.168.0.1, Dst: 8.8.8.8'
+            $ipv4.IsExpanded | Should -BeFalse   # collapsed by default in Analysis mode
             $kids = $ipv4.Children | ForEach-Object { $_.Text }
             ($kids | Where-Object { $_ -eq '0100 .... = Version: 4' }).Count                     | Should -Be 1
             ($kids | Where-Object { $_ -eq '.... 0101 = Header Length: 20 bytes (5)' }).Count    | Should -Be 1
@@ -3178,6 +3179,7 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $pkt = $eth + $ip6 + $ic6
             $ipv6 = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'IPv6'
             $ipv6.Text | Should -Be 'IPv6 - Src: 2001::, Dst: 2001::2'
+            $ipv6.IsExpanded | Should -BeFalse   # collapsed by default in Analysis mode
             $kids = $ipv6.Children | ForEach-Object { $_.Text }
             ($kids | Where-Object { $_ -eq '0110 .... = Version: 6' }).Count | Should -Be 1
             ($kids | Where-Object { $_ -eq '.... 0010 1111 1111 1111 1000 = Flow Label: 0x2fff8' }).Count | Should -Be 1

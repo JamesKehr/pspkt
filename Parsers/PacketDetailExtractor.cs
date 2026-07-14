@@ -350,8 +350,8 @@ public static class PacketDetailExtractor
         string src = PacketParseHelper.FormatIPv4(p, off + 12);
         string dst = PacketParseHelper.FormatIPv4(p, off + 16);
 
-        // Collapsed header matches the Detailed one-liner (spec: Details Collapsed == Detailed).
-        var ip = new BoxyBox.TreeNode("IPv4 - Src: " + src + ", Dst: " + dst, "IPv4", true);
+        // Collapsed by default in Analysis mode; the header carries the Detailed one-liner.
+        var ip = new BoxyBox.TreeNode("IPv4 - Src: " + src + ", Dst: " + dst, "IPv4", false);
         ip.AddLeaf(RenderBits(verIhlByte, 8, "BBBB ....") + " = Version: 4");
         ip.AddLeaf(RenderBits(verIhlByte, 8, ".... BBBB") + " = Header Length: " + ihl + " bytes (" + ihlWords + ")");
         ip.AddLeaf("DSCP: " + DscpName(dscp) + ", ECN: " + (ecn != 0 ? "ECT" : "Not-ECT"));
@@ -394,8 +394,8 @@ public static class PacketDetailExtractor
         string src = PacketParseHelper.FormatIPv6(p, off + 8);
         string dst = PacketParseHelper.FormatIPv6(p, off + 24);
 
-        // Collapsed header matches the Detailed one-liner (spec: Details Collapsed == Detailed).
-        var ip = new BoxyBox.TreeNode("IPv6 - Src: " + src + ", Dst: " + dst, "IPv6", true);
+        // Collapsed by default in Analysis mode; the header carries the Detailed one-liner.
+        var ip = new BoxyBox.TreeNode("IPv6 - Src: " + src + ", Dst: " + dst, "IPv6", false);
         ip.AddLeaf(RenderBits(p[off], 8, "BBBB ....") + " = Version: 6");
 
         var tc = new BoxyBox.TreeNode(
