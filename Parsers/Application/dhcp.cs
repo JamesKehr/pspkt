@@ -181,13 +181,12 @@ public static class DhcpParser
         }
     }
 
-    // Formats a byte range as hyphen-separated lowercase hex (e.g. "00-01-00-01-2a-...").
+    // Formats a byte range as a continuous lowercase hex string (e.g. "000100012abb...").
     private static string FormatHexBytes(byte[] data, int off, int len)
     {
-        var sb = new StringBuilder(len * 3);
+        var sb = new StringBuilder(len * 2);
         for (int i = 0; i < len; i++)
         {
-            if (i > 0) sb.Append('-');
             sb.Append(data[off + i].ToString("x2"));
         }
         return sb.ToString();

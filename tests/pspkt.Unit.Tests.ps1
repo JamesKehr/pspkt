@@ -1450,10 +1450,10 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         It 'Default/Detailed: v6 ADVERTISE with CID and IAA' {
             $ctx = [DhcpContext]::new()
             $null = [DhcpParser]::TryParseDhcp($script:dhcpV6Advertise, 547, 546, [ref]$ctx)
-            $ctx.ClientId | Should -Be '00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff'
+            $ctx.ClientId | Should -Be '000100012abbccddaabbccddeeff'
             $ctx.IaAddress | Should -Be '2001:db8::5'
-            [DhcpParser]::FormatDhcpDefaultFromContext([ref]$ctx) | Should -Be 'DHCPv6 ADVERTISE, XID: 0xabcd01, CID: 00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff'
-            [DhcpParser]::FormatDhcpFromContext([ref]$ctx) | Should -Be 'DHCPv6 ADVERTISE, XID: 0xabcd01, CID: 00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff, IAA: 2001:db8::5'
+            [DhcpParser]::FormatDhcpDefaultFromContext([ref]$ctx) | Should -Be 'DHCPv6 ADVERTISE, XID: 0xabcd01, CID: 000100012abbccddaabbccddeeff'
+            [DhcpParser]::FormatDhcpFromContext([ref]$ctx) | Should -Be 'DHCPv6 ADVERTISE, XID: 0xabcd01, CID: 000100012abbccddaabbccddeeff, IAA: 2001:db8::5'
         }
         It 'Details tree: v4 OFFER COMMON fields + expandable Options' {
             $node = ([DhcpParser]::BuildDhcpDetailTree($script:dhcpOffer, 67, 68))[0]
@@ -1484,7 +1484,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $opts = $node.Children | Where-Object { $_.Key -eq 'DHCP.Options' }
             $opts | Should -Not -BeNullOrEmpty
             $optKids = $opts.Children | ForEach-Object { $_.Text }
-            ($optKids | Where-Object { $_ -eq 'Client Identifier (1): 00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff' }).Count | Should -Be 1
+            ($optKids | Where-Object { $_ -eq 'Client Identifier (1): 000100012abbccddaabbccddeeff' }).Count | Should -Be 1
             ($optKids | Where-Object { $_ -eq 'Identity Association for Non-temporary Address (3): IAADDR 2001:db8::5' }).Count | Should -Be 1
         }
         It 'end-to-end: BuildTree wires a DHCP node and the Default one-liner shows the DHCP line' {

@@ -21,8 +21,8 @@ every parsing level. It reflects what the code actually emits.
   times (suffixed `s`), elapsed time (suffixed `ms`), option codes.
 - **XID** is rendered `0x`-prefixed for **both** families in the one-liners (matching the
   Analysis Details `Transaction ID: 0x[h]`).
-- **CID** (DHCPv6 Client Identifier / DUID) is rendered as hyphen-separated lowercase hex bytes
-  (e.g. `00-01-00-01-2a-bb-...`); `?` is shown when the option is absent.
+- **CID** (DHCPv6 Client Identifier / DUID) is rendered as a continuous lowercase hex string
+  (e.g. `000100012abbccddaabbccddeeff`); `?` is shown when the option is absent.
 - Message-type names use the **uppercase** spelling from the tables below (DISCOVER, OFFER,
   SOLICIT, ADVERTISE, ...).
 
@@ -239,7 +239,7 @@ Each child leaf is formatted `[Option name] ([code]): [value]`, e.g.:
 
 ```
 [+|-]Options
-  Client Identifier (1): 00-01-00-01-2a-bb-cc-dd-aa-bb-cc-dd-ee-ff
+  Client Identifier (1): 000100012abbccddaabbccddeeff
   Identity Association for Non-temporary Address (3): IAADDR 2001:db8::5
 ```
 
