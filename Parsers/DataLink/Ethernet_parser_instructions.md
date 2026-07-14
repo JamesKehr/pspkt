@@ -44,10 +44,11 @@ Eth:
 ## Default
 
 The data-link segment (the trailing `:` shown here is the separator to the next layer, added
-by the caller — it is not part of the Ethernet segment itself):
+by the caller — it is not part of the Ethernet segment itself). The EtherType is **not** shown
+at the Default/Detailed one-liner level (it remains in the Analysis Details node):
 
 ```
-[src MAC addr] > [dst MAC addr], type [EtherType], len [frame length]:
+[src MAC addr] > [dst MAC addr], len [frame length]:
 ```
 
 ## Detailed

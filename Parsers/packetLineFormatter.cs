@@ -967,6 +967,10 @@ public static class PacketLineFormatter
                     string dir = (icmpType == 8) ? "request" : "reply";
                     transportDetail = "ICMP echo " + dir + " - id: " + icmpId.ToString() + ", seq: " + icmpSeq.ToString() + "; TTL: " + ipTtl.ToString();
                 }
+                else if (icmpType == 3)
+                {
+                    transportDetail = "ICMP.Destination Unreachable -  " + PacketDetailExtractor.Icmp4UnreachableCode(icmpCode) + " (" + icmpCode.ToString() + ")";
+                }
                 else
                 {
                     transportDetail = "ICMP type " + icmpType.ToString() + " code " + icmpCode.ToString();
@@ -1030,10 +1034,9 @@ public static class PacketLineFormatter
                 transportLayerIndex = 2;
                 if (icmpv6Type >= 133 && icmpv6Type <= 137)
                 {
-                    // Use the rich NDP parser which extracts per-message fields
-                    // (target / dest addresses, RA timers + flags, NS/NA target,
-                    // common NDP options).
-                    transportDetail = NdpParser.FormatNdpDetailed(rawPacketData, ipv6TransportOffset, ipv6TransportLength);
+                    // Spec-format NDP one-liner (ICMPv6.Router Solicitation from <mac>, etc.)
+                    // with the rich option/field tail appended at the Detailed level.
+                    transportDetail = NdpParser.FormatNdpSpec(rawPacketData, ipv6TransportOffset, ipv6TransportLength, true);
                     if (string.IsNullOrEmpty(transportDetail))
                     {
                         transportDetail = FormatNdpBasic(icmpv6Type);
@@ -1045,6 +1048,10 @@ public static class PacketLineFormatter
                     int echoId = PacketParseHelper.ReadUInt16BE(rawPacketData, ipv6TransportOffset + 4);
                     int echoSeq = PacketParseHelper.ReadUInt16BE(rawPacketData, ipv6TransportOffset + 6);
                     transportDetail = "ICMPv6 echo " + dir + " - id: " + echoId.ToString() + ", seq: " + echoSeq.ToString() + "; TTL: " + hopLimit.ToString();
+                }
+                else if (icmpv6Type == 1)
+                {
+                    transportDetail = "ICMPv6.Destination Unreachable -  " + PacketDetailExtractor.Icmp6UnreachableCode(icmpv6Code) + " (" + icmpv6Code.ToString() + ")";
                 }
                 else
                 {
@@ -1199,25 +1206,9 @@ public static class PacketLineFormatter
 
         string src = srcMac ?? "??-??-??-??-??-??";
         string dst = dstMac ?? "??-??-??-??-??-??";
-        string etName = GetEtherTypeName(etherType);
         StringBuilder sb = new StringBuilder(64);
-        sb.Append(src).Append(" > ").Append(dst).Append(", type ").Append(etName)
-          .Append(", len ").Append(rawLen);
+        sb.Append(src).Append(" > ").Append(dst).Append(", len ").Append(rawLen);
         return sb.ToString();
-    }
-
-    private static readonly Dictionary<int, string> EtherTypeNames = new Dictionary<int, string>
-    {
-        { 0x0800, "IPv4" }, { 0x0806, "ARP" }, { 0x86DD, "IPv6" },
-        { 0x8100, "802.1Q" }, { 0x88CC, "LLDP" }, { 0x8035, "RARP" },
-        { 0x888E, "802.1X" }, { 0x88A8, "802.1ad" }
-    };
-
-    private static string GetEtherTypeName(int etherType)
-    {
-        string name;
-        if (EtherTypeNames.TryGetValue(etherType, out name)) return name;
-        return "0x" + etherType.ToString("X4");
     }
 
     private static string FormatNetworkTransportInternal(
@@ -1228,17 +1219,27 @@ public static class PacketLineFormatter
         int icmpType, int icmpCode, int icmpId, int icmpSeq,
         byte[] udpData)
     {
+        // The network tuple is always prefixed with the network-layer name (IPv4 here),
+        // including ICMP.
+        string netSrc = "IPv4 " + srcAddr;
+
         // ICMP
         if (protoKind == 1)
         {
             StringBuilder sb = new StringBuilder(96);
-            sb.Append(srcAddr).Append(" > ").Append(dstAddr).Append(": ");
+            sb.Append(netSrc).Append(" > ").Append(dstAddr).Append(": ");
             if (icmpType == 0 || icmpType == 8)
             {
                 sb.Append("ICMP echo ").Append(icmpType == 8 ? "request" : "reply")
                   .Append(", id ").Append(icmpId)
                   .Append(", seq ").Append(icmpSeq)
                   .Append(", len ").Append(dataLen);
+            }
+            else if (icmpType == 3)
+            {
+                sb.Append("ICMP.Destination Unreachable -  ")
+                  .Append(PacketDetailExtractor.Icmp4UnreachableCode(icmpCode))
+                  .Append(" (").Append(icmpCode).Append(")");
             }
             else
             {
@@ -1293,7 +1294,7 @@ public static class PacketLineFormatter
                 }
             }
 
-            return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
+            return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
         }
 
         // UDP
@@ -1304,7 +1305,7 @@ public static class PacketLineFormatter
             {
                 string dnsStr = DnsParser.FormatDnsSegment(udpData, srcPort, dstPort);
                 if (dnsStr != null)
-                    return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, dnsStr, 4, lineCounter);
+                    return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, dnsStr, 4, lineCounter);
             }
 
             // DHCP detection
@@ -1313,7 +1314,7 @@ public static class PacketLineFormatter
             {
                 string dhcpStr = FormatDhcpBasic(udpData, srcPort, dstPort);
                 if (dhcpStr != null)
-                    return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
+                    return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
             }
 
             StringBuilder usb = new StringBuilder(32);
@@ -1323,12 +1324,12 @@ public static class PacketLineFormatter
                 usb.Append(udpHint).Append(": ");
             }
             usb.Append("UDP, len ").Append(dataLen);
-            return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
+            return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
         }
 
-        // Fallback
+        // Fallback (non-TCP/UDP/ICMP IP payload) — still prefixed with the network name.
         StringBuilder fsb = new StringBuilder(64);
-        fsb.Append(srcAddr).Append(" > ").Append(dstAddr);
+        fsb.Append(netSrc).Append(" > ").Append(dstAddr);
         return PacketFormatter.FormatNetworkOnly(fsb.ToString(), lineCounter);
     }
 
@@ -1349,6 +1350,10 @@ public static class PacketLineFormatter
         string src, dst;
         if (!PacketFormatter.ParseIPv6Addresses(data, rawOffset + ipv6Off, out src, out dst)) return null;
 
+        // The network tuple is always prefixed with the network-layer name (IPv6). ICMPv6
+        // lines below intentionally use the bare src/dst (no prefix), per the parser spec.
+        string netSrc = "IPv6 " + src;
+
         // Walk extension headers (HBH, Routing, Fragment, AH, Dest Options) to find the
         // upper-layer protocol. Required for MLDv2 reports and some outbound echo/NDP packets
         // that Windows prefixes with a Hop-by-Hop Options header.
@@ -1356,30 +1361,38 @@ public static class PacketLineFormatter
         if (!PacketParseHelper.FindIPv6UpperLayer(data, rawOffset + ipv6Off, rawOffset + rawLength, out nextHeader, out transOff))
         {
             // Undecipherable (ESP, truncated, or chain too deep) — emit addresses only.
-            return PacketFormatter.FormatNetworkOnly(src + " > " + dst, lineCounter);
+            return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst, lineCounter);
         }
         // transOff from FindIPv6UpperLayer is an absolute offset into `data` because we
         // gave it rawOffset+ipv6Off as the starting point and rawOffset+rawLength as the
         // bound. Use it directly below.
 
-        // ICMPv6
+        // ICMPv6 — like all IPv6 lines, prefixed with the network-layer name.
         if (nextHeader == 58)
         {
             if (rawOffset + rawLength > transOff)
             {
                 int icmpv6Type = data[transOff];
+                int icmpv6Len = (rawOffset + rawLength) - transOff;
                 // NDP types
                 if (icmpv6Type >= 133 && icmpv6Type <= 137)
                 {
-                    string ndpStr = FormatNdpBasic(icmpv6Type);
-                    return PacketFormatter.FormatNetworkOnly(src + " > " + dst + ": " + ndpStr, lineCounter);
+                    string ndpStr = NdpParser.FormatNdpSpec(data, transOff, icmpv6Len, false);
+                    if (string.IsNullOrEmpty(ndpStr)) ndpStr = FormatNdpBasic(icmpv6Type);
+                    return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst + ": " + ndpStr, lineCounter);
                 }
                 if (icmpv6Type == 128 || icmpv6Type == 129)
                 {
                     string dir = (icmpv6Type == 128) ? "request" : "reply";
-                    return PacketFormatter.FormatNetworkOnly(src + " > " + dst + ": ICMPv6 echo " + dir, lineCounter);
+                    return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst + ": ICMPv6 echo " + dir, lineCounter);
                 }
-                return PacketFormatter.FormatNetworkOnly(src + " > " + dst + ": ICMPv6 type " + icmpv6Type, lineCounter);
+                if (icmpv6Type == 1)
+                {
+                    int icmpv6Code = (rawOffset + rawLength) > transOff + 1 ? data[transOff + 1] : 0;
+                    return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst + ": ICMPv6.Destination Unreachable -  "
+                        + PacketDetailExtractor.Icmp6UnreachableCode(icmpv6Code) + " (" + icmpv6Code + ")", lineCounter);
+                }
+                return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst + ": ICMPv6 type " + icmpv6Type, lineCounter);
             }
         }
         // TCP/UDP over IPv6
@@ -1403,7 +1416,7 @@ public static class PacketLineFormatter
                             Buffer.BlockCopy(data, transOff + 8, udpPayload, 0, udpDataLen);
                             string dnsStr = DnsParser.FormatDnsSegment(udpPayload, sp, dp);
                             if (dnsStr != null)
-                                return PacketFormatter.FormatTransportLine(src, sp, dst, dp, dnsStr, 4, lineCounter);
+                                return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, dnsStr, 4, lineCounter);
                         }
                     }
                 }
@@ -1412,13 +1425,13 @@ public static class PacketLineFormatter
                 // parser handled (e.g. SSH, SMTP, LDAP).
                 string v6Hint = GetAppProtocolHint(nextHeader, sp, dp);
                 if (v6Hint != null)
-                    return PacketFormatter.FormatTransportLine(src, sp, dst, dp, v6Hint + ": " + protoName, 4, lineCounter);
+                    return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, v6Hint + ": " + protoName, 4, lineCounter);
 
-                return PacketFormatter.FormatTransportLine(src, sp, dst, dp, protoName, 3, lineCounter);
+                return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, protoName, 3, lineCounter);
             }
         }
 
-        return PacketFormatter.FormatNetworkOnly(src + " > " + dst, lineCounter);
+        return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst, lineCounter);
     }
 
     private static string FormatArpInternal(byte[] raw, int linkKind)
