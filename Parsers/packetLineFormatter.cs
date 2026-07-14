@@ -1421,6 +1421,21 @@ public static class PacketLineFormatter
                     }
                 }
 
+                // For UDP, try DHCPv6 detection (ports 546/547).
+                if (nextHeader == 17 && DhcpParser.IsDhcpV6Port(sp, dp)
+                    && rawOffset + rawLength >= transOff + 8)
+                {
+                    int dhcpLen = (rawOffset + rawLength) - transOff - 8;
+                    if (dhcpLen > 0)
+                    {
+                        byte[] dhcpPayload = new byte[dhcpLen];
+                        Buffer.BlockCopy(data, transOff + 8, dhcpPayload, 0, dhcpLen);
+                        string dhcpStr = FormatDhcpBasic(dhcpPayload, sp, dp);
+                        if (dhcpStr != null)
+                            return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, dhcpStr, 4, lineCounter);
+                    }
+                }
+
                 // App protocol hint for traffic on well-known ports that no active
                 // parser handled (e.g. SSH, SMTP, LDAP).
                 string v6Hint = GetAppProtocolHint(nextHeader, sp, dp);

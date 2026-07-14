@@ -251,7 +251,8 @@ public static class PacketDetailExtractor
             case "ICMP":
             case "ICMPv6":    return 3; // LAYER_TRANSPORT
             case "DNS":
-            case "mDNS":      return 4; // LAYER_APPLICATION
+            case "mDNS":
+            case "DHCP":      return 4; // LAYER_APPLICATION
             default:          return -1;
         }
     }
@@ -597,21 +598,27 @@ public static class PacketDetailExtractor
             }
         }
 
-        // Append any parsed NDP options (Prefix/MTU/RDNSS/etc.) as a single summary leaf. Only
-        // real option segments are kept; message fields already broken out above are dropped.
-        string opts = NdpOptionSummary(p, off, len);
-        if (opts.Length > 0) node.AddLeaf("Options : " + opts);
+        // NDP options (Prefix/MTU/RDNSS/etc.): rendered as an expandable "Options" node whose
+        // header carries the one-liner summary and whose children break out each option.
+        List<string> optSegs = NdpOptionSegments(p, off, len);
+        if (optSegs.Count > 0)
+        {
+            var opts = new BoxyBox.TreeNode("Options : " + string.Join(", ", optSegs.ToArray()), "ICMPv6.Options", true);
+            for (int i = 0; i < optSegs.Count; i++) opts.AddLeaf(optSegs[i]);
+            node.Add(opts);
+        }
         return node;
     }
 
-    // Extracts only the option segments (Prefix/MTU/RDNSS/DNSSL/Route/etc.) from the NdpParser
-    // one-liner, dropping the message-specific fields that are broken out structurally.
-    private static string NdpOptionSummary(byte[] p, int off, int len)
+    // Extracts the parsed NDP option segments (Prefix/MTU/RDNSS/DNSSL/Route/etc.) from the
+    // NdpParser one-liner, dropping the message-specific fields that are broken out
+    // structurally (and the Source/Target Link-layer addresses folded into the header).
+    private static List<string> NdpOptionSegments(byte[] p, int off, int len)
     {
-        string detail = NdpParser.FormatNdpDetailed(p, off, len);
-        if (string.IsNullOrEmpty(detail)) return "";
-        string[] segs = detail.Split(';');
         var kept = new List<string>();
+        string detail = NdpParser.FormatNdpDetailed(p, off, len);
+        if (string.IsNullOrEmpty(detail)) return kept;
+        string[] segs = detail.Split(';');
         for (int i = 1; i < segs.Length; i++)
         {
             string seg = segs[i].Trim();
@@ -622,7 +629,7 @@ public static class PacketDetailExtractor
                 kept.Add(seg);
             }
         }
-        return string.Join(", ", kept.ToArray());
+        return kept;
     }
 
 
@@ -654,6 +661,11 @@ public static class PacketDetailExtractor
             }
             List<BoxyBox.TreeNode> dnsRoots = DnsParser.BuildDnsDetailTree(dnsMsg, dnsLen, sp, dp);
             for (int i = 0; i < dnsRoots.Count; i++) roots.Add(dnsRoots[i]);
+        }
+        else if (udp && DhcpParser.IsDhcpPort(sp, dp))
+        {
+            List<BoxyBox.TreeNode> dhcpRoots = DhcpParser.BuildDhcpDetailTree(payload, sp, dp);
+            for (int i = 0; i < dhcpRoots.Count; i++) roots.Add(dhcpRoots[i]);
         }
     }
 

@@ -131,9 +131,10 @@ https://gitlab.com/wireshark/wireshark/-/blob/master/epan/dissectors/packet-icmp
 
 The collapsed header is the Default one-liner (e.g. `ICMPv6.Router Advertisement from [mac]`).
 The expanded node shows Type/Code/Checksum, the message-specific fields (RA timers + M/O
-flags; NS/NA Target Address; NA Router/Solicited/Override flags), and a single `Options :`
-leaf summarizing any parsed options (Prefix / MTU / RDNSS / DNSSL / Route). Source/Target
-Link-layer addresses are folded into the `from` / `is at` header.
+flags; NS/NA Target Address; NA Router/Solicited/Override flags), and an expandable `Options`
+node (Prefix / MTU / RDNSS / DNSSL / Route). The `Options` node's header is the one-liner
+summary; expanding it breaks out one child per option. Source/Target Link-layer addresses are
+folded into the `from` / `is at` header.
 
 ```
 ICMPv6.Neighbor Advertisement [Target addr] ([NA Flags]) is at [Target MAC]
@@ -144,7 +145,24 @@ ICMPv6.Neighbor Advertisement [Target addr] ([NA Flags]) is at [Target MAC]
   Router    : [Set|Not set]
   Solicited : [Set|Not set]
   Override  : [Set|Not set]
-  Options : [parsed option summary]
+```
+
+Router Advertisement options are broken out under the expandable `Options` node:
+
+```
+ICMPv6.Router Advertisement from [mac]
+  Type            : Router Advertisement (134)
+  Code            : [n]
+  Checksum        : 0x[Checksum]
+  Cur Hop Limit   : [n]
+  Flags           : M=[0|1] O=[0|1]
+  Router Lifetime : [n]s
+  Reachable Time  : [n]ms
+  Retrans Timer   : [n]ms
+  [+|-]Options : [one-liner summary]
+    [Prefix ...]
+    [MTU ...]
+    [RDNSS ...]
 ```
 
 Deeper option/protocol dissection follows the Wireshark ICMPv6 dissector:
