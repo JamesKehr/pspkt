@@ -35,15 +35,14 @@ flag). Child leaves are indented two spaces under their parent.
 
 ## Default
 
-Parsed in conjunction with the transport parsers. The network 4-tuple is always prefixed with
-the network-layer name, whether or not a transport (TCP/UDP) is present:
+Parsed in conjunction with the transport parsers. The network 4-tuple is **always** prefixed
+with the network-layer name — for every IPv6 payload including ICMPv6, and whether or not a
+transport (TCP/UDP) is present:
 
 ```
 IPv6 [Src addr].[Src port] > [Dst addr].[Dst port]: ...     (TCP/UDP)
-IPv6 [Src addr] > [Dst addr]                                (no transport / other IP proto)
+IPv6 [Src addr] > [Dst addr]: ...                           (ICMPv6 / other IP proto / no transport)
 ```
-
-**Exception:** ICMPv6 does **not** carry the `IPv6` prefix — its line is `[Src addr] > [Dst addr]: ICMPv6 ...`.
 
 ## Detailed
 

@@ -3304,7 +3304,7 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $line | Should -Match '22-22-22-22-22-22 > 11-11-11-11-11-11, len \d+:'
             $line | Should -Not -Match 'type IPv4'
         }
-        It 'prefixes IPv4 to the tuple for UDP and for bare (non-TCP/UDP/ICMP) IP, but not ICMP' {
+        It 'prefixes IPv4 to the tuple for UDP, bare IP, and ICMP' {
             $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
             # UDP: prefixed
             $ipu = [byte[]]::new(20); $ipu[0]=0x45; $ipu[8]=64; $ipu[9]=17; $ipu[3]=42
@@ -3315,23 +3315,20 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $ipo = [byte[]]::new(20); $ipo[0]=0x45; $ipo[8]=64; $ipo[9]=89; $ipo[3]=24
             $ipo[12]=10;$ipo[13]=0;$ipo[14]=0;$ipo[15]=1; $ipo[16]=224;$ipo[17]=0;$ipo[18]=0;$ipo[19]=5
             (EmitLine ($eth + $ipo + [byte[]]::new(4)) 0) | Should -Match 'IPv4 10\.0\.0\.1 > 224\.0\.0\.5'
-            # ICMP: NOT prefixed
+            # ICMP: also prefixed
             $ipc = [byte[]]::new(20); $ipc[0]=0x45; $ipc[8]=64; $ipc[9]=1; $ipc[3]=44
             $ipc[12]=10;$ipc[13]=0;$ipc[14]=0;$ipc[15]=5; $ipc[16]=8;$ipc[17]=8;$ipc[18]=8;$ipc[19]=8
             $line = EmitLine ($eth + $ipc + ([byte[]](8,0,0,0,0,1,0,1) + [byte[]]::new(8))) 0
-            $line | Should -Match '10\.0\.0\.5 > 8\.8\.8\.8: ICMP echo'
-            $line | Should -Not -Match 'IPv4 10\.0\.0\.5 > 8\.8\.8\.8'
+            $line | Should -Match 'IPv4 10\.0\.0\.5 > 8\.8\.8\.8: ICMP echo'
         }
-        It 'prefixes IPv6 to the tuple for TCP but not for ICMPv6' {
+        It 'prefixes IPv6 to the tuple for TCP and ICMPv6' {
             $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
             $tcp = [byte[]](0x1f,0x90, 0,80, 0,0,0,1, 0,0,0,2, 0x50,0x02, 0,0, 0,0, 0,0)
             $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,20,6,64) + ([byte[]](0x20,0x01)+[byte[]]::new(14)) + ([byte[]](0x20,0x01)+[byte[]]::new(13)+[byte[]](2))
             (EmitLine ($eth + $ip6 + $tcp) 0) | Should -Match 'IPv6 2001::\.8080 > 2001::2\.80'
             $ic6 = [byte[]](128,0,0,0,0x43,0x21,0,5) + [byte[]]::new(8)
             $ip6b = [byte[]](0x60,0,0,0) + [byte[]](0,16,58,64) + ([byte[]](0x20,0x01)+[byte[]]::new(14)) + ([byte[]](0x20,0x01)+[byte[]]::new(13)+[byte[]](2))
-            $line6 = EmitLine ($eth + $ip6b + $ic6) 0
-            $line6 | Should -Match '2001:: > 2001::2: ICMPv6 echo request'
-            $line6 | Should -Not -Match 'IPv6 2001:: > 2001::2'
+            (EmitLine ($eth + $ip6b + $ic6) 0) | Should -Match 'IPv6 2001:: > 2001::2: ICMPv6 echo request'
         }
     }
 

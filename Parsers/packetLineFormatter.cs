@@ -1219,11 +1219,15 @@ public static class PacketLineFormatter
         int icmpType, int icmpCode, int icmpId, int icmpSeq,
         byte[] udpData)
     {
-        // ICMP — network-layer name is intentionally NOT prefixed (per parser spec).
+        // The network tuple is always prefixed with the network-layer name (IPv4 here),
+        // including ICMP.
+        string netSrc = "IPv4 " + srcAddr;
+
+        // ICMP
         if (protoKind == 1)
         {
             StringBuilder sb = new StringBuilder(96);
-            sb.Append(srcAddr).Append(" > ").Append(dstAddr).Append(": ");
+            sb.Append(netSrc).Append(" > ").Append(dstAddr).Append(": ");
             if (icmpType == 0 || icmpType == 8)
             {
                 sb.Append("ICMP echo ").Append(icmpType == 8 ? "request" : "reply")
@@ -1243,9 +1247,6 @@ public static class PacketLineFormatter
             }
             return PacketFormatter.FormatNetworkOnly(sb.ToString(), lineCounter);
         }
-
-        // The network 4-tuple is always prefixed with the network-layer name (IPv4 here).
-        string netSrc = "IPv4 " + srcAddr;
 
         // TCP
         if (protoKind == 2)
@@ -1366,7 +1367,7 @@ public static class PacketLineFormatter
         // gave it rawOffset+ipv6Off as the starting point and rawOffset+rawLength as the
         // bound. Use it directly below.
 
-        // ICMPv6
+        // ICMPv6 — like all IPv6 lines, prefixed with the network-layer name.
         if (nextHeader == 58)
         {
             if (rawOffset + rawLength > transOff)
@@ -1378,20 +1379,20 @@ public static class PacketLineFormatter
                 {
                     string ndpStr = NdpParser.FormatNdpSpec(data, transOff, icmpv6Len, false);
                     if (string.IsNullOrEmpty(ndpStr)) ndpStr = FormatNdpBasic(icmpv6Type);
-                    return PacketFormatter.FormatNetworkOnly(src + " > " + dst + ": " + ndpStr, lineCounter);
+                    return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst + ": " + ndpStr, lineCounter);
                 }
                 if (icmpv6Type == 128 || icmpv6Type == 129)
                 {
                     string dir = (icmpv6Type == 128) ? "request" : "reply";
-                    return PacketFormatter.FormatNetworkOnly(src + " > " + dst + ": ICMPv6 echo " + dir, lineCounter);
+                    return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst + ": ICMPv6 echo " + dir, lineCounter);
                 }
                 if (icmpv6Type == 1)
                 {
                     int icmpv6Code = (rawOffset + rawLength) > transOff + 1 ? data[transOff + 1] : 0;
-                    return PacketFormatter.FormatNetworkOnly(src + " > " + dst + ": ICMPv6.Destination Unreachable -  "
+                    return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst + ": ICMPv6.Destination Unreachable -  "
                         + PacketDetailExtractor.Icmp6UnreachableCode(icmpv6Code) + " (" + icmpv6Code + ")", lineCounter);
                 }
-                return PacketFormatter.FormatNetworkOnly(src + " > " + dst + ": ICMPv6 type " + icmpv6Type, lineCounter);
+                return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst + ": ICMPv6 type " + icmpv6Type, lineCounter);
             }
         }
         // TCP/UDP over IPv6
