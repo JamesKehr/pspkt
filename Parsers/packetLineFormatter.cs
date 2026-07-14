@@ -1436,6 +1436,23 @@ public static class PacketLineFormatter
                     }
                 }
 
+                // For TCP on an HTTP port, try HTTP request/response detection.
+                if (nextHeader == 6 && (HttpParser.IsHttpPort(sp) || HttpParser.IsHttpPort(dp))
+                    && rawOffset + rawLength >= transOff + 20)
+                {
+                    int tcpDataOff = (data[transOff + 12] >> 4) * 4;
+                    int payloadStart = transOff + tcpDataOff;
+                    int httpLen = (rawOffset + rawLength) - payloadStart;
+                    if (tcpDataOff >= 20 && httpLen > 0)
+                    {
+                        byte[] httpPayload = new byte[httpLen];
+                        Buffer.BlockCopy(data, payloadStart, httpPayload, 0, httpLen);
+                        string httpStr = DetectHttpContent(httpPayload, httpLen, sp, dp);
+                        if (httpStr != null)
+                            return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, httpStr, 4, lineCounter);
+                    }
+                }
+
                 // App protocol hint for traffic on well-known ports that no active
                 // parser handled (e.g. SSH, SMTP, LDAP).
                 string v6Hint = GetAppProtocolHint(nextHeader, sp, dp);

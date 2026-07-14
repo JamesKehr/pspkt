@@ -1057,19 +1057,96 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $ctx.Valid | Should -BeFalse
         }
 
-        It 'HttpParser.FormatHttpFromContext renders Detailed line' {
+        It 'HttpParser.TryParseHttp extracts the User-Agent header' {
             $ctx = [HttpContext]::new()
             $null = [HttpParser]::TryParseHttp($script:httpReqGet, [ref]$ctx)
-            $line = [HttpParser]::FormatHttpFromContext([ref]$ctx)
-            $line | Should -Match '^HTTP - GET /api/users\?id=1 HTTP/1\.1'
-            $line | Should -Match 'Host: api\.example\.com'
-            $line | Should -Match 'Content-Type: application/json'
-            $line | Should -Match 'Content-Length: 0'
+            $ctx.UserAgent | Should -Be 'pspkt-test'
         }
 
-        It 'HttpParser.FormatHttpSegment short form' {
+        It 'HttpParser Default/Detailed request line (Method + Host + URI)' {
+            $ctx = [HttpContext]::new()
+            $null = [HttpParser]::TryParseHttp($script:httpReqGet, [ref]$ctx)
+            $expected = 'HTTP: GET, URI: api.example.com/api/users?id=1'
+            [HttpParser]::FormatHttpDefaultFromContext([ref]$ctx) | Should -Be $expected
+            [HttpParser]::FormatHttpFromContext([ref]$ctx)        | Should -Be $expected   # Detailed == Default
+        }
+
+        It 'HttpParser Default response line (Status Code + Phrase, no URI)' {
+            $ctx = [HttpContext]::new()
+            $null = [HttpParser]::TryParseHttp($script:httpResp404, [ref]$ctx)
+            [HttpParser]::FormatHttpDefaultFromContext([ref]$ctx) | Should -Be 'HTTP: 404 Not Found'
+        }
+
+        It 'HttpParser.FormatHttpSegment renders the Default one-liner' {
             $line = [HttpParser]::FormatHttpSegment($script:httpReqGet, $script:httpReqGet.Length)
-            $line | Should -Be 'GET /api/users?id=1 HTTP/1.1'
+            $line | Should -Be 'HTTP: GET, URI: api.example.com/api/users?id=1'
+        }
+
+        It 'HttpParser.BuildHttpDetailTree renders a request tree' {
+            $node = ([HttpParser]::BuildHttpDetailTree($script:httpReqGet))[0]
+            $node.Key  | Should -Be 'HTTP'
+            $node.Text | Should -Be 'HTTP: GET, URI: api.example.com/api/users?id=1'
+            $line = $node.Children | Where-Object { $_.Key -eq 'HTTP.RequestLine' }
+            $line | Should -Not -BeNullOrEmpty
+            $line.Text | Should -Be 'GET /api/users?id=1 HTTP/1.1'
+            $lk = $line.Children | ForEach-Object { $_.Text }
+            ($lk | Where-Object { $_ -eq 'Request Method: GET' }).Count           | Should -Be 1
+            ($lk | Where-Object { $_ -eq 'Request URI: /api/users?id=1' }).Count   | Should -Be 1
+            ($lk | Where-Object { $_ -eq 'Request Version: HTTP/1.1' }).Count      | Should -Be 1
+            $kids = $node.Children | ForEach-Object { $_.Text }
+            ($kids | Where-Object { $_ -eq 'Host: api.example.com' }).Count | Should -Be 1
+            ($kids | Where-Object { $_ -eq 'User-Agent: pspkt-test' }).Count | Should -Be 1
+        }
+
+        It 'HttpParser.BuildHttpDetailTree renders a response tree with the \r\n status line' {
+            $node = ([HttpParser]::BuildHttpDetailTree($script:httpResp404))[0]
+            $node.Text | Should -Be 'HTTP: 404 Not Found'
+            $line = $node.Children | Where-Object { $_.Key -eq 'HTTP.StatusLine' }
+            $line | Should -Not -BeNullOrEmpty
+            $line.Text | Should -Be 'HTTP/1.1 404 Not Found\r\n'
+            $lk = $line.Children | ForEach-Object { $_.Text }
+            ($lk | Where-Object { $_ -eq 'Response Version: HTTP/1.1' }).Count | Should -Be 1
+            ($lk | Where-Object { $_ -eq 'Status Code: 404' }).Count          | Should -Be 1
+            ($lk | Where-Object { $_ -eq 'Response Phrase: Not Found' }).Count | Should -Be 1
+            ($node.Children | Where-Object { $_.Text -eq 'Content-Length: 153' }).Count | Should -Be 1
+        }
+
+        It 'end-to-end: BuildTree wires an HTTP node and the Default one-liner shows the HTTP line' {
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]](0xc0,0x00, 0,80, 0,0,0,1, 0,0,0,2, 0x50,0x18, 0xff,0xff, 0,0, 0,0)   # PSH+ACK, dst 80
+            $ipLen = 20 + $tcp.Length + $script:httpReqGet.Length
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=5; $ip[16]=93;$ip[17]=184;$ip[18]=216;$ip[19]=34
+            $pkt = $eth + $ip + $tcp + $script:httpReqGet
+            $http = ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) | Where-Object { $_.Key -eq 'HTTP' }
+            $http | Should -Not -BeNullOrEmpty
+            $http.Text | Should -Be 'HTTP: GET, URI: api.example.com/api/users?id=1'
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'HTTP: GET, URI: api\.example\.com/api/users\?id=1'
+        }
+
+        It 'end-to-end: HTTP over IPv6 shows the HTTP line at Default' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            $tcp = [byte[]](0xc0,0x00, 0,80, 0,0,0,1, 0,0,0,2, 0x50,0x18, 0xff,0xff, 0,0, 0,0)
+            $payLen = $tcp.Length + $script:httpReqGet.Length
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]]( [byte](($payLen -shr 8) -band 0xff), [byte]($payLen -band 0xff), 6, 64 )
+            $ip6 += ([byte[]](0x20,0x01) + [byte[]]::new(14)) + ([byte[]](0x20,0x01) + [byte[]]::new(13) + [byte[]](2))
+            $pkt = $eth + $ip6 + $tcp + $script:httpReqGet
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'IPv6 .+: HTTP: GET, URI: api\.example\.com/api/users\?id=1'
         }
 
         It 'HttpAppPredicate Methods filters request methods' {

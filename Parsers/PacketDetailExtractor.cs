@@ -252,7 +252,8 @@ public static class PacketDetailExtractor
             case "ICMPv6":    return 3; // LAYER_TRANSPORT
             case "DNS":
             case "mDNS":
-            case "DHCP":      return 4; // LAYER_APPLICATION
+            case "DHCP":
+            case "HTTP":      return 4; // LAYER_APPLICATION
             default:          return -1;
         }
     }
@@ -666,6 +667,11 @@ public static class PacketDetailExtractor
         {
             List<BoxyBox.TreeNode> dhcpRoots = DhcpParser.BuildDhcpDetailTree(payload, sp, dp);
             for (int i = 0; i < dhcpRoots.Count; i++) roots.Add(dhcpRoots[i]);
+        }
+        else if (!udp && (HttpParser.IsHttpPort(sp) || HttpParser.IsHttpPort(dp)))
+        {
+            List<BoxyBox.TreeNode> httpRoots = HttpParser.BuildHttpDetailTree(payload);
+            for (int i = 0; i < httpRoots.Count; i++) roots.Add(httpRoots[i]);
         }
     }
 

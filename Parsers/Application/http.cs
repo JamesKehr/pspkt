@@ -6,6 +6,7 @@
 // Architecture mirrors dns.cs / tls.cs: TryParseHttp/FormatHttpFromContext split.
 
 using System;
+using System.Collections.Generic;
 using System.Text;
 
 /// <summary>
@@ -42,6 +43,8 @@ public struct HttpContext
     public string FirstLine;
     /// <summary>Value of the Host: header on requests. Null when absent / on responses.</summary>
     public string Host;
+    /// <summary>Value of the User-Agent: header on requests. Null when absent / on responses.</summary>
+    public string UserAgent;
     /// <summary>Value of the Content-Type: header on either side. Null when absent.</summary>
     public string ContentType;
     /// <summary>Value of the Content-Length: header on either side. -1 when absent or unparseable.</summary>
@@ -193,6 +196,10 @@ public static class HttpParser
                 {
                     ctx.Host = TrimmedHeaderValue(data, colon + 1, lineEnd);
                 }
+                else if (MatchesHeader(data, pos, colon, "User-Agent"))
+                {
+                    ctx.UserAgent = TrimmedHeaderValue(data, colon + 1, lineEnd);
+                }
                 else if (MatchesHeader(data, pos, colon, "Content-Type"))
                 {
                     ctx.ContentType = TrimmedHeaderValue(data, colon + 1, lineEnd);
@@ -218,40 +225,101 @@ public static class HttpParser
     }
 
     /// <summary>
-    /// Formats a previously parsed <see cref="HttpContext"/> using the detailed
-    /// "HTTP - &lt;first line&gt;; Host: ...; Content-Type: ...; Content-Length: ..."
-    /// format equivalent to the legacy <c>FormatHttpDetailed</c>.
+    /// Detailed one-liner formatter. Per HTTP_parser_instructions.md the Detailed form is the
+    /// same as the Default form, so this delegates to <see cref="FormatHttpDefaultFromContext"/>.
     /// </summary>
     public static string FormatHttpFromContext(ref HttpContext ctx)
     {
-        if (!ctx.Valid || string.IsNullOrEmpty(ctx.FirstLine)) return null;
-
-        StringBuilder sb = new StringBuilder(160);
-        sb.Append("HTTP - ").Append(ctx.FirstLine);
-        if (!string.IsNullOrEmpty(ctx.Host))
-        {
-            sb.Append("; Host: ").Append(ctx.Host);
-        }
-        if (!string.IsNullOrEmpty(ctx.ContentType))
-        {
-            sb.Append("; Content-Type: ").Append(ctx.ContentType);
-        }
-        if (ctx.ContentLength >= 0)
-        {
-            sb.Append("; Content-Length: ").Append(ctx.ContentLength);
-        }
-        return sb.ToString();
+        return FormatHttpDefaultFromContext(ref ctx);
     }
 
     /// <summary>
-    /// Default-tier formatter for an HTTP payload (short form, first line only).
-    /// Equivalent to the legacy <c>DetectHttpContent</c>.
+    /// Default one-liner formatter from a parsed context (per HTTP_parser_instructions.md):
+    ///   request:  "HTTP: [Method], URI: [Host][Request-URI]"
+    ///   response: "HTTP: [Status Code] [Response Phrase]"
+    /// The response URI is not shown — pspkt parses single packets and does not correlate a
+    /// response with its earlier request, so the Host + Request-URI aren't available here.
+    /// </summary>
+    public static string FormatHttpDefaultFromContext(ref HttpContext ctx)
+    {
+        if (!ctx.Valid) return null;
+
+        if (ctx.IsRequest)
+        {
+            string uri = BuildRequestUri(ref ctx);
+            string line = "HTTP: " + (ctx.Method ?? "?");
+            if (!string.IsNullOrEmpty(uri)) line += ", URI: " + uri;
+            return line;
+        }
+
+        // Response.
+        string phrase = string.IsNullOrEmpty(ctx.StatusText) ? "" : " " + ctx.StatusText;
+        return "HTTP: " + ctx.StatusCode + phrase;
+    }
+
+    /// <summary>Host + Request-URI concatenation (e.g. "example.com/index.html"). Empty when neither is present.</summary>
+    private static string BuildRequestUri(ref HttpContext ctx)
+    {
+        string host = ctx.Host ?? "";
+        string path = ctx.Path ?? "";
+        return host + path;
+    }
+
+    /// <summary>
+    /// Default-tier formatter for a raw HTTP payload. Parses the payload and renders the Default
+    /// one-liner. Returns null on a non-HTTP payload.
     /// </summary>
     public static string FormatHttpSegment(byte[] data, int dataLen)
     {
         HttpContext ctx;
         if (!TryParseHttp(data, out ctx)) return null;
-        return ctx.FirstLine;
+        return FormatHttpDefaultFromContext(ref ctx);
+    }
+
+    // ==================== Analysis Details tree ====================
+
+    /// <summary>
+    /// Builds the Analysis Details tree for an HTTP payload (per HTTP_parser_instructions.md).
+    /// The header node carries the Default one-liner; a request expands to a request-line
+    /// sub-node (Method/URI/Version) plus Host / User-Agent, and a response expands to a
+    /// status-line sub-node (Version/Status/Phrase) plus Content-Length. Returns an empty list
+    /// for non-HTTP payloads.
+    /// </summary>
+    public static List<BoxyBox.TreeNode> BuildHttpDetailTree(byte[] data)
+    {
+        var roots = new List<BoxyBox.TreeNode>();
+        HttpContext ctx;
+        if (!TryParseHttp(data, out ctx)) return roots;
+
+        var node = new BoxyBox.TreeNode(FormatHttpDefaultFromContext(ref ctx), "HTTP", true);
+
+        if (ctx.IsRequest)
+        {
+            // Request-line sub-node: header is the raw request line, children break it out.
+            var line = new BoxyBox.TreeNode(ctx.FirstLine ?? "", "HTTP.RequestLine", false);
+            line.AddLeaf("Request Method: " + (ctx.Method ?? ""));
+            line.AddLeaf("Request URI: " + (ctx.Path ?? ""));
+            line.AddLeaf("Request Version: " + (ctx.ProtocolVersion ?? ""));
+            node.Add(line);
+            if (!string.IsNullOrEmpty(ctx.Host)) node.AddLeaf("Host: " + ctx.Host);
+            if (!string.IsNullOrEmpty(ctx.UserAgent)) node.AddLeaf("User-Agent: " + ctx.UserAgent);
+            if (!string.IsNullOrEmpty(ctx.ContentType)) node.AddLeaf("Content-Type: " + ctx.ContentType);
+            if (ctx.ContentLength >= 0) node.AddLeaf("Content-Length: " + ctx.ContentLength);
+        }
+        else
+        {
+            // Status-line sub-node: header is the raw status line with the Wireshark-style \r\n.
+            var line = new BoxyBox.TreeNode((ctx.FirstLine ?? "") + "\\r\\n", "HTTP.StatusLine", false);
+            line.AddLeaf("Response Version: " + (ctx.ProtocolVersion ?? ""));
+            line.AddLeaf("Status Code: " + ctx.StatusCode);
+            if (!string.IsNullOrEmpty(ctx.StatusText)) line.AddLeaf("Response Phrase: " + ctx.StatusText);
+            node.Add(line);
+            if (!string.IsNullOrEmpty(ctx.ContentType)) node.AddLeaf("Content-Type: " + ctx.ContentType);
+            if (ctx.ContentLength >= 0) node.AddLeaf("Content-Length: " + ctx.ContentLength);
+        }
+
+        roots.Add(node);
+        return roots;
     }
 
     // ---- Helpers ----
