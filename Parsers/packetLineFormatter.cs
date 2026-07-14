@@ -1206,25 +1206,9 @@ public static class PacketLineFormatter
 
         string src = srcMac ?? "??-??-??-??-??-??";
         string dst = dstMac ?? "??-??-??-??-??-??";
-        string etName = GetEtherTypeName(etherType);
         StringBuilder sb = new StringBuilder(64);
-        sb.Append(src).Append(" > ").Append(dst).Append(", type ").Append(etName)
-          .Append(", len ").Append(rawLen);
+        sb.Append(src).Append(" > ").Append(dst).Append(", len ").Append(rawLen);
         return sb.ToString();
-    }
-
-    private static readonly Dictionary<int, string> EtherTypeNames = new Dictionary<int, string>
-    {
-        { 0x0800, "IPv4" }, { 0x0806, "ARP" }, { 0x86DD, "IPv6" },
-        { 0x8100, "802.1Q" }, { 0x88CC, "LLDP" }, { 0x8035, "RARP" },
-        { 0x888E, "802.1X" }, { 0x88A8, "802.1ad" }
-    };
-
-    private static string GetEtherTypeName(int etherType)
-    {
-        string name;
-        if (EtherTypeNames.TryGetValue(etherType, out name)) return name;
-        return "0x" + etherType.ToString("X4");
     }
 
     private static string FormatNetworkTransportInternal(
@@ -1235,7 +1219,7 @@ public static class PacketLineFormatter
         int icmpType, int icmpCode, int icmpId, int icmpSeq,
         byte[] udpData)
     {
-        // ICMP
+        // ICMP — network-layer name is intentionally NOT prefixed (per parser spec).
         if (protoKind == 1)
         {
             StringBuilder sb = new StringBuilder(96);
@@ -1259,6 +1243,9 @@ public static class PacketLineFormatter
             }
             return PacketFormatter.FormatNetworkOnly(sb.ToString(), lineCounter);
         }
+
+        // The network 4-tuple is always prefixed with the network-layer name (IPv4 here).
+        string netSrc = "IPv4 " + srcAddr;
 
         // TCP
         if (protoKind == 2)
@@ -1306,7 +1293,7 @@ public static class PacketLineFormatter
                 }
             }
 
-            return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
+            return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
         }
 
         // UDP
@@ -1317,7 +1304,7 @@ public static class PacketLineFormatter
             {
                 string dnsStr = DnsParser.FormatDnsSegment(udpData, srcPort, dstPort);
                 if (dnsStr != null)
-                    return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, dnsStr, 4, lineCounter);
+                    return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, dnsStr, 4, lineCounter);
             }
 
             // DHCP detection
@@ -1326,7 +1313,7 @@ public static class PacketLineFormatter
             {
                 string dhcpStr = FormatDhcpBasic(udpData, srcPort, dstPort);
                 if (dhcpStr != null)
-                    return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
+                    return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
             }
 
             StringBuilder usb = new StringBuilder(32);
@@ -1336,12 +1323,12 @@ public static class PacketLineFormatter
                 usb.Append(udpHint).Append(": ");
             }
             usb.Append("UDP, len ").Append(dataLen);
-            return PacketFormatter.FormatTransportLine(srcAddr, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
+            return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
         }
 
-        // Fallback
+        // Fallback (non-TCP/UDP/ICMP IP payload) — still prefixed with the network name.
         StringBuilder fsb = new StringBuilder(64);
-        fsb.Append(srcAddr).Append(" > ").Append(dstAddr);
+        fsb.Append(netSrc).Append(" > ").Append(dstAddr);
         return PacketFormatter.FormatNetworkOnly(fsb.ToString(), lineCounter);
     }
 
@@ -1362,6 +1349,10 @@ public static class PacketLineFormatter
         string src, dst;
         if (!PacketFormatter.ParseIPv6Addresses(data, rawOffset + ipv6Off, out src, out dst)) return null;
 
+        // The network tuple is always prefixed with the network-layer name (IPv6). ICMPv6
+        // lines below intentionally use the bare src/dst (no prefix), per the parser spec.
+        string netSrc = "IPv6 " + src;
+
         // Walk extension headers (HBH, Routing, Fragment, AH, Dest Options) to find the
         // upper-layer protocol. Required for MLDv2 reports and some outbound echo/NDP packets
         // that Windows prefixes with a Hop-by-Hop Options header.
@@ -1369,7 +1360,7 @@ public static class PacketLineFormatter
         if (!PacketParseHelper.FindIPv6UpperLayer(data, rawOffset + ipv6Off, rawOffset + rawLength, out nextHeader, out transOff))
         {
             // Undecipherable (ESP, truncated, or chain too deep) — emit addresses only.
-            return PacketFormatter.FormatNetworkOnly(src + " > " + dst, lineCounter);
+            return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst, lineCounter);
         }
         // transOff from FindIPv6UpperLayer is an absolute offset into `data` because we
         // gave it rawOffset+ipv6Off as the starting point and rawOffset+rawLength as the
@@ -1424,7 +1415,7 @@ public static class PacketLineFormatter
                             Buffer.BlockCopy(data, transOff + 8, udpPayload, 0, udpDataLen);
                             string dnsStr = DnsParser.FormatDnsSegment(udpPayload, sp, dp);
                             if (dnsStr != null)
-                                return PacketFormatter.FormatTransportLine(src, sp, dst, dp, dnsStr, 4, lineCounter);
+                                return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, dnsStr, 4, lineCounter);
                         }
                     }
                 }
@@ -1433,13 +1424,13 @@ public static class PacketLineFormatter
                 // parser handled (e.g. SSH, SMTP, LDAP).
                 string v6Hint = GetAppProtocolHint(nextHeader, sp, dp);
                 if (v6Hint != null)
-                    return PacketFormatter.FormatTransportLine(src, sp, dst, dp, v6Hint + ": " + protoName, 4, lineCounter);
+                    return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, v6Hint + ": " + protoName, 4, lineCounter);
 
-                return PacketFormatter.FormatTransportLine(src, sp, dst, dp, protoName, 3, lineCounter);
+                return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, protoName, 3, lineCounter);
             }
         }
 
-        return PacketFormatter.FormatNetworkOnly(src + " > " + dst, lineCounter);
+        return PacketFormatter.FormatNetworkOnly(netSrc + " > " + dst, lineCounter);
     }
 
     private static string FormatArpInternal(byte[] raw, int linkKind)
