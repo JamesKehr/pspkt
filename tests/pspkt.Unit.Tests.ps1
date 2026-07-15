@@ -3671,11 +3671,13 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         BeforeAll {
             $script:mod = Get-Module PspktSession
         }
-        It 'loads the shipped Details menu with 5 items' {
+        It 'loads the shipped Details menu with 6 items' {
             $def = & $script:mod { Get-PspktTuiMenu -Box 'Details' }
             $def.Box | Should -Be 'Details'
-            $def.Menu.Count | Should -Be 5
+            $def.Menu.Count | Should -Be 6
             $def.Menu[0].Name | Should -Be 'Expand'
+            # The Ctrl+PgUp/PgDn "page the Text Box" hotkey is present in Details focus.
+            ($def.Menu | Where-Object { $_.Name -eq 'PageText' -and $_.Hotkey -eq 'Ctrl+PgUp|PgDn' }).Count | Should -Be 1
         }
         It 'loads TextLive and TextFocus menus' {
             $live  = & $script:mod { Get-PspktTuiMenu -Box 'TextLive' }
