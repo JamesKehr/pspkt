@@ -1842,13 +1842,22 @@ function Invoke-PspktAnalysisLoop {
                     }
                     elseif ($activeBox -eq 'details') {
                         # Ctrl+Up/Down = prev/next packet (moves the Text Box selection + reloads).
-                        # Ctrl+Left/Right = Collapse All / Expand All. Plain arrows navigate or
-                        # collapse/expand only the selected node.
+                        # Ctrl+PageUp/PageDown = page the Text Box up/down a page (selection + reload)
+                        # without leaving the Details Box. Ctrl+Left/Right = Collapse All / Expand All.
+                        # Plain arrows navigate or collapse/expand only the selected node.
                         if ($ctrl -and $key.Key -eq [ConsoleKey]::UpArrow) {
                             $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); & $loadDetails $selectedSeq; $dirty = $true
                         }
                         elseif ($ctrl -and $key.Key -eq [ConsoleKey]::DownArrow) {
                             $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); & $loadDetails $selectedSeq; $dirty = $true
+                        }
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::PageUp) {
+                            # Page the Text Box up a page (moves selection + reloads details)
+                            # while keeping focus in the Details Box.
+                            $selectedSeq = $textBox.ClampSeq($selectedSeq - $textContentRows); $topSeq -= $textContentRows; & $loadDetails $selectedSeq; $dirty = $true
+                        }
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::PageDown) {
+                            $selectedSeq = $textBox.ClampSeq($selectedSeq + $textContentRows); $topSeq += $textContentRows; & $loadDetails $selectedSeq; $dirty = $true
                         }
                         elseif ($ctrl -and $key.Key -eq [ConsoleKey]::LeftArrow) {
                             $detailsBox.CollapseAll(); $dirty = $true

@@ -5,6 +5,7 @@
     { "Name": "Collapse", "DisplayName": "Collapse", "Hotkey": "\u2190" },
     { "Name": "ExpandAll", "DisplayName": "Expand all", "Hotkey": "Ctrl+\u2192" },
     { "Name": "CollapseAll", "DisplayName": "Collapse all", "Hotkey": "Ctrl+\u2190" },
-    { "Name": "PrevNext", "DisplayName": "Prev|Next pkt", "Hotkey": "Ctrl+\u2191\u2193" }
+    { "Name": "PrevNext", "DisplayName": "Prev|Next pkt", "Hotkey": "Ctrl+\u2191\u2193" },
+    { "Name": "PageText", "DisplayName": "Page text", "Hotkey": "Ctrl+PgUp|PgDn" }
   ]
 }

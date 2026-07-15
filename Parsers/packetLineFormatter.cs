@@ -987,7 +987,8 @@ public static class PacketLineFormatter
                     optLen = tcpDataOffset - 20;
                 }
                 transportDetail = TcpParser.FormatTcpDetailed(tcpFlags, (ushort)srcPort, (ushort)dstPort, tcpSeq, tcpAck, tcpWin, dataLen, rawPacketData, optOffset >= 0 ? optOffset : 0, optLen);
-                appDetail = DetectTcpAppDetailed(srcPort, dstPort, transportPayload);
+                appDetail = DetectTcpAppDetailed(srcPort, dstPort, transportPayload,
+                    HttpParser.BuildConnKey(srcAddr, srcPort, dstAddr, dstPort));
             }
             else if (protoKind == 3)
             {
@@ -1083,7 +1084,8 @@ public static class PacketLineFormatter
                     ipv6Payload = RentPayloadBuffer(payloadLen);
                     Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + ipv6DataOffset, ipv6Payload, 0, payloadLen);
                 }
-                appDetail = DetectTcpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload);
+                appDetail = DetectTcpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload,
+                    HttpParser.BuildConnKey(ipv6Src, ipv6SrcPort, ipv6Dst, ipv6DstPort));
             }
             else if (haveUpper && upperProto == 17 && ipv6TransportLength >= 8)
             {
@@ -1251,6 +1253,10 @@ public static class PacketLineFormatter
         // TCP
         if (protoKind == 2)
         {
+            // The IPv4 network label carries the transport-protocol suffix at Default level
+            // (per IPv4_parser_instructions.md): "IPv4.TCP <src>.<sport> > <dst>.<dport>".
+            netSrc = "IPv4.TCP " + srcAddr;
+
             // Detect application layer protocol by port
             string suffix = null;
             int appLayer = 3; // Transport layer by default
@@ -1267,7 +1273,8 @@ public static class PacketLineFormatter
 
             if (suffix == null && (IsHttpPort(srcPort) || IsHttpPort(dstPort)))
             {
-                suffix = DetectHttpContent(udpData, dataLen, srcPort, dstPort);
+                suffix = DetectHttpContent(udpData, dataLen, srcPort, dstPort,
+                    HttpParser.BuildConnKey(srcAddr, srcPort, dstAddr, dstPort));
                 if (suffix != null) appLayer = 4;
             }
             if (suffix == null && (IsTlsPort(srcPort) || IsTlsPort(dstPort)))
@@ -1300,6 +1307,9 @@ public static class PacketLineFormatter
         // UDP
         if (protoKind == 3)
         {
+            // The IPv4 network label carries the transport-protocol suffix at Default level.
+            netSrc = "IPv4.UDP " + srcAddr;
+
             // DNS detection
             if (srcPort == 53 || dstPort == 53 || srcPort == 5353 || dstPort == 5353)
             {
@@ -1433,6 +1443,24 @@ public static class PacketLineFormatter
                         string dhcpStr = FormatDhcpBasic(dhcpPayload, sp, dp);
                         if (dhcpStr != null)
                             return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, dhcpStr, 4, lineCounter);
+                    }
+                }
+
+                // For TCP on an HTTP port, try HTTP request/response detection.
+                if (nextHeader == 6 && (HttpParser.IsHttpPort(sp) || HttpParser.IsHttpPort(dp))
+                    && rawOffset + rawLength >= transOff + 20)
+                {
+                    int tcpDataOff = (data[transOff + 12] >> 4) * 4;
+                    int payloadStart = transOff + tcpDataOff;
+                    int httpLen = (rawOffset + rawLength) - payloadStart;
+                    if (tcpDataOff >= 20 && httpLen > 0)
+                    {
+                        byte[] httpPayload = new byte[httpLen];
+                        Buffer.BlockCopy(data, payloadStart, httpPayload, 0, httpLen);
+                        string httpStr = DetectHttpContent(httpPayload, httpLen, sp, dp,
+                            HttpParser.BuildConnKey(src, sp, dst, dp));
+                        if (httpStr != null)
+                            return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, httpStr, 4, lineCounter);
                     }
                 }
 
@@ -1621,12 +1649,11 @@ public static class PacketLineFormatter
         }
         else if (transportProto == 6) // TCP
         {
-            // Note: TCP port 53 (DNS over TCP) is intentionally NOT hinted here. DNS over TCP
-            // is a fully parsed app protocol (see DetectTcpDns); a TCP:53 packet only reaches
-            // this hint fallback when it carries no DNS message (handshake / ACK / FIN
-            // segments), which is a pure transport-layer event and must render as a plain
-            // "TCP [flags] ..." segment rather than "DNS: TCP [flags] ...".
-            if (srcPort == 80    || dstPort == 80)    return "HTTP";
+            // Note: parsed TCP app protocols (DNS over TCP on 53, HTTP on 80/8080/8000/8888)
+            // are intentionally NOT hinted here. A packet on one of those ports only reaches
+            // this hint fallback when it carries no app-layer message (handshake / ACK / FIN
+            // segments), which is a pure transport event and must render as a plain
+            // "TCP [flags] ..." segment rather than "HTTP: TCP [flags] ..." / "DNS: TCP ...".
             if (srcPort == 443   || dstPort == 443)   return "HTTPS";
             if (srcPort == 445   || dstPort == 445)   return "SMB";
             if (srcPort == 22    || dstPort == 22)    return "SSH";
@@ -1647,7 +1674,6 @@ public static class PacketLineFormatter
             if (srcPort == 5432  || dstPort == 5432)  return "PostgreSQL";
             if (srcPort == 5985  || dstPort == 5985)  return "WinRM";
             if (srcPort == 5986  || dstPort == 5986)  return "WinRM-S";
-            if (srcPort == 8080  || dstPort == 8080)  return "HTTP-ALT";
             if (srcPort == 8443  || dstPort == 8443)  return "HTTPS-ALT";
             if (srcPort == 3343  || dstPort == 3343)  return "CSVFS-RCP";
             if (srcPort == 465   || dstPort == 465)   return "SMTPS";
@@ -1658,9 +1684,14 @@ public static class PacketLineFormatter
 
     private static string DetectHttpContent(byte[] data, int dataLen, int srcPort, int dstPort)
     {
+        return DetectHttpContent(data, dataLen, srcPort, dstPort, null);
+    }
+
+    private static string DetectHttpContent(byte[] data, int dataLen, int srcPort, int dstPort, string connKey)
+    {
         // Delegates to HttpParser for the short-form Default-tier line (request/status
-        // line only, no headers).
-        return HttpParser.FormatHttpSegment(data, dataLen);
+        // line only, no headers). connKey enables response->request URI correlation.
+        return HttpParser.FormatHttpSegment(data, dataLen, connKey);
     }
 
     private static string DetectHttpMethod(byte[] data)
@@ -1773,6 +1804,11 @@ public static class PacketLineFormatter
 
     private static string DetectTcpAppDetailed(int srcPort, int dstPort, byte[] data)
     {
+        return DetectTcpAppDetailed(srcPort, dstPort, data, null);
+    }
+
+    private static string DetectTcpAppDetailed(int srcPort, int dstPort, byte[] data, string connKey)
+    {
         if (data == null || data.Length == 0)
             return null;
 
@@ -1814,7 +1850,7 @@ public static class PacketLineFormatter
             if (_httpCtxCacheValid)
             {
                 _httpCtxCacheValid = false;
-                return HttpParser.FormatHttpFromContext(ref _httpCtxCache);
+                return HttpParser.FormatHttpFromContext(ref _httpCtxCache, connKey);
             }
 
             // IPv6 path (or any case where the early gate didn't run): evaluate inline.
@@ -1826,7 +1862,7 @@ public static class PacketLineFormatter
                 if (HttpParser.TryParseHttp(data, out hctx))
                 {
                     if (!_httpPredicate.Evaluate(ref hctx)) return FilteredByPredicate;
-                    return HttpParser.FormatHttpFromContext(ref hctx);
+                    return HttpParser.FormatHttpFromContext(ref hctx, connKey);
                 }
                 // Unparseable HTTP payload — fall through to the legacy detailed formatter.
             }

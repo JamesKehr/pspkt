@@ -252,7 +252,8 @@ public static class PacketDetailExtractor
             case "ICMPv6":    return 3; // LAYER_TRANSPORT
             case "DNS":
             case "mDNS":
-            case "DHCP":      return 4; // LAYER_APPLICATION
+            case "DHCP":
+            case "HTTP":      return 4; // LAYER_APPLICATION
             default:          return -1;
         }
     }
@@ -476,7 +477,7 @@ public static class PacketDetailExtractor
             tcp.AddLeaf("TCP payload (" + payloadLen + " bytes)");
             roots.Add(tcp);
 
-            BuildAppNode(p, off + dataOff, payloadLen, sp, dp, false, roots);
+            BuildAppNode(p, off + dataOff, payloadLen, sp, dp, false, src, dst, roots);
         }
         else if (proto == 17 && len >= 8) // UDP
         {
@@ -494,7 +495,7 @@ public static class PacketDetailExtractor
             udp.AddLeaf("UDP payload (" + payloadLen + ")");
             roots.Add(udp);
 
-            BuildAppNode(p, off + 8, Math.Min(payloadLen, len - 8), sp, dp, true, roots);
+            BuildAppNode(p, off + 8, Math.Min(payloadLen, len - 8), sp, dp, true, src, dst, roots);
         }
         else if ((proto == 1 || proto == 58) && len >= 2) // ICMP / ICMPv6
         {
@@ -633,7 +634,7 @@ public static class PacketDetailExtractor
     }
 
 
-    private static void BuildAppNode(byte[] p, int off, int len, int sp, int dp, bool udp, List<BoxyBox.TreeNode> roots)
+    private static void BuildAppNode(byte[] p, int off, int len, int sp, int dp, bool udp, string src, string dst, List<BoxyBox.TreeNode> roots)
     {
         if (len <= 0 || off < 0 || off + len > p.Length) return;
 
@@ -666,6 +667,11 @@ public static class PacketDetailExtractor
         {
             List<BoxyBox.TreeNode> dhcpRoots = DhcpParser.BuildDhcpDetailTree(payload, sp, dp);
             for (int i = 0; i < dhcpRoots.Count; i++) roots.Add(dhcpRoots[i]);
+        }
+        else if (!udp && (HttpParser.IsHttpPort(sp) || HttpParser.IsHttpPort(dp)))
+        {
+            List<BoxyBox.TreeNode> httpRoots = HttpParser.BuildHttpDetailTree(payload, HttpParser.BuildConnKey(src, sp, dst, dp));
+            for (int i = 0; i < httpRoots.Count; i++) roots.Add(httpRoots[i]);
         }
     }
 

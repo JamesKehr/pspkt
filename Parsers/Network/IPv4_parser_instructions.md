@@ -32,7 +32,7 @@ flag). Child leaves are indented two spaces under their parent.
 
 ## Minimal
 
-`IPv4`
+`IPv4.[Transport Protocol]`
 
 ## Default
 
@@ -41,7 +41,7 @@ with the network-layer name — for every IPv4 payload including ICMP, and wheth
 transport (TCP/UDP) is present:
 
 ```
-IPv4 [Src addr].[Src port] > [Dst addr].[Dst port]: ...     (TCP/UDP)
+IPv4.[Transport Protocol] [Src addr].[Src port] > [Dst addr].[Dst port]: ...     (TCP/UDP)
 IPv4 [Src addr] > [Dst addr]: ...                           (ICMP / other IP proto / no transport)
 ```
 
@@ -53,7 +53,7 @@ IPv4 [Src addr] > [Dst addr]: ...                           (ICMP / other IP pro
 
 ### Text Box
 
-Same as `Detailed`.
+Same as `Default`.
 
 ### Details: Collapsed
 

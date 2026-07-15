@@ -80,6 +80,7 @@ between packets.
 | `→` / `←` | **Details:** expand / collapse the selected node · **Text:** left/right justify |
 | `Ctrl+→` / `Ctrl+←` | **Details:** expand all / collapse all |
 | `Ctrl+↑` / `Ctrl+↓` | **Details:** previous / next packet (moves the Text selection and reparses) |
+| `Ctrl+PgUp` / `Ctrl+PgDn` | **Details:** page the Text Box up / down a page (moves the Text selection and reparses) without leaving the Details Box |
 | `r` | **Resume** — leave Focus, clear any pause, resume live scrolling |
 | `p` | **Pause** collection (stays in Focus) |
 | `w` | **Save pcapng** |
