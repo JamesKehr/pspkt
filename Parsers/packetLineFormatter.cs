@@ -1253,6 +1253,10 @@ public static class PacketLineFormatter
         // TCP
         if (protoKind == 2)
         {
+            // The IPv4 network label carries the transport-protocol suffix at Default level
+            // (per IPv4_parser_instructions.md): "IPv4.TCP <src>.<sport> > <dst>.<dport>".
+            netSrc = "IPv4.TCP " + srcAddr;
+
             // Detect application layer protocol by port
             string suffix = null;
             int appLayer = 3; // Transport layer by default
@@ -1303,6 +1307,9 @@ public static class PacketLineFormatter
         // UDP
         if (protoKind == 3)
         {
+            // The IPv4 network label carries the transport-protocol suffix at Default level.
+            netSrc = "IPv4.UDP " + srcAddr;
+
             // DNS detection
             if (srcPort == 53 || dstPort == 53 || srcPort == 5353 || dstPort == 5353)
             {

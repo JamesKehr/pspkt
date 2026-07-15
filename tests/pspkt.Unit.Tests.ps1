@@ -2936,8 +2936,8 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             # The Ethernet segment no longer includes the ", type <ethtype>" portion.
             $full.Contains('22-22-22-22-22-22 > 11-11-11-11-11-11, len 34') | Should -BeTrue
             $full.Contains('type IPv4') | Should -BeFalse
-            # The network 4-tuple is prefixed with the network-layer name.
-            $full.Contains('IPv4 10.24.0.72.50651 > 1.1.1.1.53') | Should -BeTrue
+            # The network 4-tuple is prefixed with the network-layer name + transport protocol.
+            $full.Contains('IPv4.UDP 10.24.0.72.50651 > 1.1.1.1.53') | Should -BeTrue
         }
     }
 
@@ -3603,22 +3603,23 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $line | Should -Match '22-22-22-22-22-22 > 11-11-11-11-11-11, len \d+:'
             $line | Should -Not -Match 'type IPv4'
         }
-        It 'prefixes IPv4 to the tuple for UDP, bare IP, and ICMP' {
+        It 'prefixes IPv4[.transport] to the tuple for UDP, bare IP, and ICMP' {
             $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
-            # UDP: prefixed
+            # UDP: prefixed with the transport protocol (IPv4.UDP)
             $ipu = [byte[]]::new(20); $ipu[0]=0x45; $ipu[8]=64; $ipu[9]=17; $ipu[3]=42
             $ipu[12]=10;$ipu[13]=0;$ipu[14]=0;$ipu[15]=5; $ipu[16]=1;$ipu[17]=1;$ipu[18]=1;$ipu[19]=1
             $udp = [byte[]](0x30,0x39, 0x01,0xbb, 0,14, 0,0) + [byte[]]::new(6)
-            (EmitLine ($eth + $ipu + $udp) 0) | Should -Match 'IPv4 10\.0\.0\.5\.12345 > 1\.1\.1\.1\.443'
-            # Bare IP (OSPF, proto 89): prefixed even with no transport ports
+            (EmitLine ($eth + $ipu + $udp) 0) | Should -Match 'IPv4\.UDP 10\.0\.0\.5\.12345 > 1\.1\.1\.1\.443'
+            # Bare IP (OSPF, proto 89): plain IPv4 prefix, no transport suffix, no ports
             $ipo = [byte[]]::new(20); $ipo[0]=0x45; $ipo[8]=64; $ipo[9]=89; $ipo[3]=24
             $ipo[12]=10;$ipo[13]=0;$ipo[14]=0;$ipo[15]=1; $ipo[16]=224;$ipo[17]=0;$ipo[18]=0;$ipo[19]=5
             (EmitLine ($eth + $ipo + [byte[]]::new(4)) 0) | Should -Match 'IPv4 10\.0\.0\.1 > 224\.0\.0\.5'
-            # ICMP: also prefixed
+            # ICMP: plain IPv4 prefix (no transport suffix)
             $ipc = [byte[]]::new(20); $ipc[0]=0x45; $ipc[8]=64; $ipc[9]=1; $ipc[3]=44
             $ipc[12]=10;$ipc[13]=0;$ipc[14]=0;$ipc[15]=5; $ipc[16]=8;$ipc[17]=8;$ipc[18]=8;$ipc[19]=8
             $line = EmitLine ($eth + $ipc + ([byte[]](8,0,0,0,0,1,0,1) + [byte[]]::new(8))) 0
             $line | Should -Match 'IPv4 10\.0\.0\.5 > 8\.8\.8\.8: ICMP echo'
+            $line | Should -Not -Match 'IPv4\.'
         }
         It 'prefixes IPv6 to the tuple for TCP and ICMPv6' {
             $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
