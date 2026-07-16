@@ -866,10 +866,13 @@ public static class PacketLineFormatter
             }
         }
 
-        string line = PacketFormatter.FormatMinimalColors(dlName, netProto, transProto,
-            srcAddr ?? "", spStr, dstAddr ?? "", dpStr, appStr, lineCounter);
-        if (line == null) return false;
-        sb.Append(line);
+        int minMark = sb.Length;
+        if (!PacketFormatter.FormatMinimalColorsInto(sb, dlName, netProto, transProto,
+            srcAddr ?? "", spStr, dstAddr ?? "", dpStr, appStr, lineCounter))
+        {
+            sb.Length = minMark;
+            return false;
+        }
         return true;
     }
 

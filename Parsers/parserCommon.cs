@@ -654,65 +654,83 @@ public static class PacketFormatter
     public static string FormatMinimalColors(string dlName, string netProto, string transProto,
         string src, string srcPort, string dst, string dstPort, string appStr, int lineCounter)
     {
+        StringBuilder sb = new StringBuilder(256);
+        if (!FormatMinimalColorsInto(sb, dlName, netProto, transProto, src, srcPort, dst, dstPort, appStr, lineCounter))
+            return null;
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append-only variant of <see cref="FormatMinimalColors"/>: writes the colored minimal
+    /// line directly into <paramref name="sb"/> with no intermediate per-segment strings and no
+    /// inner StringBuilder/ToString. Returns false (appending nothing) when there is no content.
+    /// Output is byte-for-byte identical to FormatMinimalColors.
+    /// </summary>
+    public static bool FormatMinimalColorsInto(StringBuilder sb, string dlName, string netProto, string transProto,
+        string src, string srcPort, string dst, string dstPort, string appStr, int lineCounter)
+    {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
         string dlPfx = _prefixes[LAYER_DATALINK, variant];
         string netPfx = _prefixes[LAYER_NETWORK, variant];
         string trPfx = _prefixes[LAYER_TRANSPORT, variant];
         string appPfx = _prefixes[LAYER_APPLICATION, variant];
 
-        string coloredDL = null;
-        if (dlName != null && dlName.Length > 0 && dlPfx != null)
-            coloredDL = string.Concat(dlPfx, dlName, _reset);
-        else if (dlName != null && dlName.Length > 0)
-            coloredDL = dlName;
+        bool hasDL = dlName != null && dlName.Length > 0;
+        bool hasProto = netProto != null && netProto.Length > 0;
+        bool hasAddr = src != null && src.Length > 0 && dst != null && dst.Length > 0;
+        bool hasApp = appStr != null && appStr.Length > 0;
+        if (!hasDL && !hasProto && !hasAddr && !hasApp) return false;
 
-        string protoLabel = null;
-        if (netProto != null && netProto.Length > 0)
+        bool first = true;
+
+        if (hasDL)
         {
+            // DL is the first segment and is never preceded by ": ".
+            if (dlPfx != null) sb.Append(dlPfx).Append(dlName).Append(_reset);
+            else sb.Append(dlName);
+            first = false;
+        }
+
+        if (hasProto)
+        {
+            if (!first) sb.Append(": ");
+            if (netPfx != null) sb.Append(netPfx).Append(netProto).Append(_reset);
+            else sb.Append(netProto);
             if (transProto != null && transProto.Length > 0)
             {
-                string cNet = (netPfx != null) ? string.Concat(netPfx, netProto, _reset) : netProto;
-                string cTr = (trPfx != null) ? string.Concat(trPfx, ".", transProto, _reset) : "." + transProto;
-                protoLabel = string.Concat(cNet, cTr);
+                if (trPfx != null) sb.Append(trPfx).Append('.').Append(transProto).Append(_reset);
+                else sb.Append('.').Append(transProto);
             }
-            else
-            {
-                protoLabel = (netPfx != null) ? string.Concat(netPfx, netProto, _reset) : netProto;
-            }
+            first = false;
         }
 
-        string addrStr = null;
-        if (src != null && src.Length > 0 && dst != null && dst.Length > 0)
+        if (hasAddr)
         {
-            string cSrc = (netPfx != null) ? string.Concat(netPfx, src, _reset) : src;
-            string cSrcPort = "";
+            if (!first) sb.Append(": ");
+            if (netPfx != null) sb.Append(netPfx).Append(src).Append(_reset);
+            else sb.Append(src);
             if (srcPort != null && srcPort.Length > 0)
-                cSrcPort = (trPfx != null) ? string.Concat(trPfx, srcPort, _reset) : srcPort;
-            string cDst = (netPfx != null) ? string.Concat(netPfx, " > ", dst, _reset) : " > " + dst;
-            string cDstPort = "";
+            {
+                if (trPfx != null) sb.Append(trPfx).Append(srcPort).Append(_reset);
+                else sb.Append(srcPort);
+            }
+            if (netPfx != null) sb.Append(netPfx).Append(" > ").Append(dst).Append(_reset);
+            else sb.Append(" > ").Append(dst);
             if (dstPort != null && dstPort.Length > 0)
-                cDstPort = (trPfx != null) ? string.Concat(trPfx, dstPort, _reset) : dstPort;
-            addrStr = string.Concat(cSrc, cSrcPort, cDst, cDstPort);
+            {
+                if (trPfx != null) sb.Append(trPfx).Append(dstPort).Append(_reset);
+                else sb.Append(dstPort);
+            }
+            first = false;
         }
 
-        string coloredApp = null;
-        if (appStr != null && appStr.Length > 0)
-            coloredApp = (appPfx != null) ? string.Concat(appPfx, appStr, _reset) : appStr;
+        if (hasApp)
+        {
+            if (!first) sb.Append(": ");
+            if (appPfx != null) sb.Append(appPfx).Append(appStr).Append(_reset);
+            else sb.Append(appStr);
+        }
 
-        // Join non-null parts with ": "
-        int partCount = 0;
-        if (coloredDL != null) partCount++;
-        if (protoLabel != null) partCount++;
-        if (addrStr != null) partCount++;
-        if (coloredApp != null) partCount++;
-        if (partCount == 0) return null;
-
-        StringBuilder sb = new StringBuilder(256);
-        bool first = true;
-        if (coloredDL != null) { sb.Append(coloredDL); first = false; }
-        if (protoLabel != null) { if (!first) sb.Append(": "); sb.Append(protoLabel); first = false; }
-        if (addrStr != null) { if (!first) sb.Append(": "); sb.Append(addrStr); first = false; }
-        if (coloredApp != null) { if (!first) sb.Append(": "); sb.Append(coloredApp); }
-        return sb.ToString();
+        return true;
     }
 }
