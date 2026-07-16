@@ -117,6 +117,13 @@ public struct PSPacketData
     public UInt32 MissedPacketReadCount;
     public long QpcTimestamp;  // High-resolution QPC ticks captured at callback time.
     public bool IsPooledBuffer; // True when Data was rented from PacketBytePool and must be returned.
+    // Shared reference-count box for a pooled buffer referenced by more than one consumer
+    // ring (the console ring AND the async pcapng writer ring during a -WriteFile capture).
+    // A 1-element int[] so the count is shared across the by-value struct copies sitting in
+    // each ring. null when the buffer has a single owner (return it directly on drain).
+    // Released via PacketBytePool.ReleaseBuffer; the buffer returns to the pool when the
+    // last reference is dropped.
+    public int[] Lease;
 
 
     public PSPacketData(byte[] data, uint dataSize, uint metadataOffset, uint packetOffset, uint packetLength, uint missedPacketWriteCount, uint missedPacketReadCount)
@@ -130,16 +137,80 @@ public struct PSPacketData
         MissedPacketReadCount = missedPacketReadCount;
         QpcTimestamp = 0;
         IsPooledBuffer = false;
+        Lease = null;
     }
 }
 
 /// <summary>
 /// Simple power-of-2 bucket pool for packet byte[] buffers.
 /// Reduces allocation pressure on the pktmon callback thread.
-/// Thread-safe Rent/Return via lock-free stack per bucket.
+/// Thread-safe Rent/Return via an array-backed spinlock stack per bucket (no per-operation
+/// node allocation, unlike ConcurrentStack whose Push allocates a linked-list node each call).
 /// </summary>
 public static class PacketBytePool
 {
+    /// <summary>
+    /// Fixed-capacity, allocation-free, thread-safe recycle stack. Stores references in a
+    /// pre-allocated array guarded by a SpinLock; the critical section is a single index
+    /// bump plus one slot store/load, so contention across the producer + console consumer +
+    /// writer threads is negligible. Push returns false when full (soft cap); Pop returns
+    /// null when empty. Replaces ConcurrentStack, which allocated a node on every Push and
+    /// walked the whole list on Count.
+    /// </summary>
+    private sealed class ArrayStack<T> where T : class
+    {
+        private readonly T[] _slots;
+        private int _top;
+        private SpinLock _lock; // mutable struct — entered in place on the field, never copied
+
+        public ArrayStack(int capacity)
+        {
+            _slots = new T[capacity];
+            _top = 0;
+            _lock = new SpinLock(false); // no owner tracking — lowest overhead
+        }
+
+        public T TryPop()
+        {
+            T result = null;
+            bool taken = false;
+            try
+            {
+                _lock.Enter(ref taken);
+                if (_top > 0)
+                {
+                    result = _slots[--_top];
+                    _slots[_top] = null; // release the reference so a discarded buffer can be GC'd
+                }
+            }
+            finally
+            {
+                if (taken) _lock.Exit(false);
+            }
+            return result;
+        }
+
+        public bool TryPush(T item)
+        {
+            bool pushed = false;
+            bool taken = false;
+            try
+            {
+                _lock.Enter(ref taken);
+                if (_top < _slots.Length)
+                {
+                    _slots[_top++] = item;
+                    pushed = true;
+                }
+            }
+            finally
+            {
+                if (taken) _lock.Exit(false);
+            }
+            return pushed;
+        }
+    }
+
     // Bucket sizes (power of 2). Packets larger than the max bucket are not pooled.
     private static readonly int[] BucketSizes = new int[]
     {
@@ -149,23 +220,18 @@ public static class PacketBytePool
     // Cap on number of arrays retained per bucket. Prevents unbounded growth under bursty load.
     private const int MaxArraysPerBucket = 1024;
 
-    private static readonly System.Collections.Concurrent.ConcurrentStack<byte[]>[] _buckets;
-    // Per-bucket array counts. Updated with Interlocked around Push/Pop to avoid the
-    // O(N) walk that ConcurrentStack<T>.Count performs on every Return call.
-    // The counters are advisory: small over/under-shoots vs the underlying stack are
-    // tolerated (MaxArraysPerBucket is a soft cap, off-by-one is harmless).
-    private static long[] _bucketCounts;
+    private static readonly ArrayStack<byte[]>[] _buckets;
     private static long _rentCount;
     private static long _returnCount;
     private static long _missCount; // requested size > max bucket; allocated directly
+    private static long _bucketAllocCount; // in-bucket rents that had to allocate (pool empty)
 
     static PacketBytePool()
     {
-        _buckets = new System.Collections.Concurrent.ConcurrentStack<byte[]>[BucketSizes.Length];
-        _bucketCounts = new long[BucketSizes.Length];
+        _buckets = new ArrayStack<byte[]>[BucketSizes.Length];
         for (int i = 0; i < _buckets.Length; i++)
         {
-            _buckets[i] = new System.Collections.Concurrent.ConcurrentStack<byte[]>();
+            _buckets[i] = new ArrayStack<byte[]>(MaxArraysPerBucket);
         }
     }
 
@@ -194,12 +260,15 @@ public static class PacketBytePool
             Interlocked.Increment(ref _missCount);
             return new byte[minSize];
         }
-        byte[] result;
-        if (_buckets[idx].TryPop(out result))
+        byte[] result = _buckets[idx].TryPop();
+        if (result != null)
         {
-            Interlocked.Decrement(ref _bucketCounts[idx]);
             return result;
         }
+        // Pool was empty for this bucket — allocate a fresh array. Under steady state with
+        // pooling working this stays close to the working-set size (ring capacity + in-flight)
+        // rather than growing per packet; the concurrency harness asserts on it.
+        Interlocked.Increment(ref _bucketAllocCount);
         return new byte[BucketSizes[idx]];
     }
 
@@ -217,16 +286,96 @@ public static class PacketBytePool
             // Off-bucket size — let GC reclaim it.
             return;
         }
-        // Soft-cap check: use the dedicated counter instead of ConcurrentStack.Count, which
-        // walks the entire internal linked list (O(N)) and was the bulk of Return's cost.
-        if (Interlocked.Read(ref _bucketCounts[idx]) >= MaxArraysPerBucket) return;
-        _buckets[idx].Push(array);
-        Interlocked.Increment(ref _bucketCounts[idx]);
+        // TryPush returns false at the soft cap (array full); the buffer is then GC'd.
+        _buckets[idx].TryPush(array);
     }
 
     public static long RentCount { get { return Interlocked.Read(ref _rentCount); } }
     public static long ReturnCount { get { return Interlocked.Read(ref _returnCount); } }
     public static long MissCount { get { return Interlocked.Read(ref _missCount); } }
+
+    // ---- Shared buffer lease (refcount) support -------------------------------------------
+    // When a pooled packet buffer is handed to more than one consumer ring (the console ring
+    // AND the async pcapng writer ring during a -WriteFile capture), it must not return to the
+    // pool until BOTH consumers are done with it. A 1-element int[] "lease box" carries the
+    // shared refcount; because it is a reference type it survives the by-value PSPacketData
+    // copies sitting in each ring. The boxes are themselves pooled so we don't trade a
+    // per-packet byte[] allocation for a per-packet int[] allocation.
+    private const int MaxLeaseBoxes = 8192;
+    private static readonly ArrayStack<int[]> _leaseBoxes = new ArrayStack<int[]>(MaxLeaseBoxes);
+    // Incremented if a lease refcount is decremented below zero, which can only happen on a
+    // double-release bug. Zero in a correct build; the concurrency harness asserts on it.
+    private static long _leaseUnderflow;
+
+    /// <summary>
+    /// Rent a shared refcount box initialised to <paramref name="initialCount"/> references.
+    /// Pair each reference with exactly one <see cref="ReleaseBuffer"/> call.
+    /// </summary>
+    public static int[] RentLease(int initialCount)
+    {
+        int[] box = _leaseBoxes.TryPop();
+        if (box == null)
+        {
+            box = new int[1];
+        }
+        Volatile.Write(ref box[0], initialCount);
+        return box;
+    }
+
+    private static void ReturnLease(int[] box)
+    {
+        if (box == null) return;
+        // TryPush returns false at the soft cap; the box is then GC'd.
+        _leaseBoxes.TryPush(box);
+    }
+
+    /// <summary>
+    /// Release one reference to a packet buffer. For a shared (leased) buffer the byte[] and
+    /// its lease box return to their pools only when the last reference is dropped; for an
+    /// unshared pooled buffer (<paramref name="lease"/> == null) the byte[] returns immediately.
+    /// Safe to call from any consumer thread.
+    /// </summary>
+    public static void ReleaseBuffer(byte[] buffer, int[] lease)
+    {
+        if (lease == null)
+        {
+            if (buffer != null) Return(buffer);
+            return;
+        }
+        int remaining = Interlocked.Decrement(ref lease[0]);
+        if (remaining == 0)
+        {
+            if (buffer != null) Return(buffer);
+            ReturnLease(lease);
+        }
+        else if (remaining < 0)
+        {
+            Interlocked.Increment(ref _leaseUnderflow);
+        }
+    }
+
+    /// <summary>Count of lease refcount underflows — non-zero indicates a double-release bug.</summary>
+    public static long LeaseUnderflowCount { get { return Interlocked.Read(ref _leaseUnderflow); } }
+
+    /// <summary>
+    /// Number of in-bucket rents that had to allocate a fresh array because the pool was empty.
+    /// With pooling working this tracks the working-set size, not the packet count.
+    /// </summary>
+    public static long BucketAllocCount { get { return Interlocked.Read(ref _bucketAllocCount); } }
+
+    /// <summary>
+    /// Resets the diagnostic counters (rent/return/miss/bucket-alloc/lease-underflow) to zero.
+    /// Does not touch the pooled arrays or lease boxes. Intended for benchmarking / test harnesses
+    /// that assert on before/after deltas; not called on the capture hot path.
+    /// </summary>
+    public static void ResetCounters()
+    {
+        Interlocked.Exchange(ref _rentCount, 0);
+        Interlocked.Exchange(ref _returnCount, 0);
+        Interlocked.Exchange(ref _missCount, 0);
+        Interlocked.Exchange(ref _bucketAllocCount, 0);
+        Interlocked.Exchange(ref _leaseUnderflow, 0);
+    }
 }
 
 [StructLayout(LayoutKind.Explicit, Size = PacketMonitorConstants.PACKETMONITOR_IPV6_ADDRESS_SIZE)]
@@ -536,64 +685,85 @@ public static class PktMonApi
         long qpc = System.Diagnostics.Stopwatch.GetTimestamp();
         int size = (int)descriptor.DataSize;
 
-        // Snapshot FileWriter ONCE — this same snapshot drives both allocation strategy and write path.
-        // Without this, FileWriter changing mid-packet could lead to a pooled byte[] being shared
-        // with the writer thread and recycled before the writer is done with it.
+        // Copy the packet out of unmanaged memory into a pooled buffer, then run the shared
+        // enqueue/lease orchestration. The buffer is ALWAYS pooled now; when a file writer is
+        // active the buffer is shared by the console ring AND the async writer ring and its
+        // lifetime is governed by a refcount lease (see DispatchCapturedPacket) rather than an
+        // extra per-packet allocation.
+        byte[] byteArray = PacketBytePool.Rent(size);
+        Marshal.Copy(descriptor.Data, byteArray, 0, size);
+
+        DispatchCapturedPacket
+        (
+            byteArray, size,
+            descriptor.MetadataOffset,
+            descriptor.PacketOffset, descriptor.PacketLength,
+            descriptor.MissedPacketWriteCount, descriptor.MissedPacketReadCount,
+            qpc
+        );
+    }
+
+    /// <summary>
+    /// Runs the console + file enqueue/lease/release orchestration for one captured packet whose
+    /// bytes already sit in <paramref name="byteArray"/>[0..<paramref name="size"/>) (rented from
+    /// <see cref="PacketBytePool"/>). Split out of the native callback so the concurrency harness
+    /// can exercise the exact production ownership logic without a live pktmon session.
+    /// </summary>
+    public static void DispatchCapturedPacket(byte[] byteArray, int size, uint metadataOffset, uint packetOffset, uint packetLength, uint missedWrite, uint missedRead, long qpc)
+    {
+        // Snapshot FileWriter ONCE — this same snapshot drives both the lease refcount and the
+        // write path. Without it, FileWriter changing mid-packet could leave a buffer shared with
+        // the writer thread but leased for the wrong number of consumers.
         PcapngWriter fw = Volatile.Read(ref _fileWriter);
         bool writeToFile = fw != null && fw.IsActive;
-
-        // Pool the byte[] only when no file writer is active. When writing to file, the byte[]
-        // is also referenced by the (async) writer ring and must outlive the consumer ring.
-        byte[] byteArray;
-        bool pooled;
-        if (writeToFile)
-        {
-            byteArray = new byte[size];
-            pooled = false;
-        }
-        else
-        {
-            byteArray = PacketBytePool.Rent(size);
-            pooled = true;
-        }
-        Marshal.Copy(descriptor.Data, byteArray, 0, size);
 
         // ICMP display filter (set by -Ping/-NDP/-AAv6 quick filters). Applied at the
         // producer level so filtered packets are excluded from BOTH console output AND
         // pcapng file output. WiFi packets bypass this and rely on the display-side
-        // fallback in FormatSinglePacket.
+        // fallback in FormatSinglePacket. No lease exists yet, so return the buffer directly.
         if (PacketLineFormatter.IsIcmpFilterActive &&
-            PacketLineFormatter.ShouldDropForIcmpFilter(byteArray, (int)descriptor.PacketOffset, size))
+            PacketLineFormatter.ShouldDropForIcmpFilter(byteArray, (int)packetOffset, size))
         {
-            if (pooled) PacketBytePool.Return(byteArray);
+            PacketBytePool.Return(byteArray);
             return;
         }
 
+        // One reference for the console ring, plus one for the writer ring when writing to file.
+        int[] lease = writeToFile ? PacketBytePool.RentLease(2) : null;
+
         PSPacketData tmp = new PSPacketData
         (
-            byteArray, 
-            descriptor.DataSize, descriptor.MetadataOffset, 
-            descriptor.PacketOffset, descriptor.PacketLength, 
-            descriptor.MissedPacketWriteCount, descriptor.MissedPacketReadCount
+            byteArray,
+            (uint)size, metadataOffset,
+            packetOffset, packetLength,
+            missedWrite, missedRead
         );
         tmp.QpcTimestamp = qpc;
-        tmp.IsPooledBuffer = pooled;
+        tmp.IsPooledBuffer = true;
+        tmp.Lease = lease;
 
         // Note: tracking of seen component IDs has moved to the consumer side
         // (PacketLineFormatter.FormatBatch). Adding here would require a Monitor.Enter
         // on every callback, which is the largest avoidable cost on the producer thread.
 
         bool enqueued = _ringBuffer.Enqueue(tmp);
-        if (!enqueued && pooled)
+        if (!enqueued)
         {
-            // Return the rented buffer to avoid pool leak on overflow.
-            PacketBytePool.Return(byteArray);
+            // Console consumer will never see it — drop the console reference (returns the
+            // buffer immediately when unshared, or decrements the lease when shared).
+            PacketBytePool.ReleaseBuffer(byteArray, lease);
         }
 
         // Also write to file if active (use the same snapshot taken above).
         if (writeToFile)
         {
-            fw.WritePacket(tmp);
+            bool fileEnqueued = fw.WritePacket(tmp);
+            if (!fileEnqueued)
+            {
+                // Writer ring rejected it (full) or writer is inactive — drop the writer
+                // reference so the buffer isn't leaked.
+                PacketBytePool.ReleaseBuffer(byteArray, lease);
+            }
         }
     }
     
@@ -620,7 +790,9 @@ public static class PktMonApi
         {
             if (buffer[i].IsPooledBuffer && buffer[i].Data != null)
             {
-                PacketBytePool.Return(buffer[i].Data);
+                // Release the console reference; a shared (file-capture) buffer only returns
+                // to the pool once the writer thread has also released it.
+                PacketBytePool.ReleaseBuffer(buffer[i].Data, buffer[i].Lease);
             }
             buffer[i] = default(PSPacketData);
         }
@@ -678,7 +850,7 @@ public static class PktMonApi
                 {
                     if (drain[i].IsPooledBuffer && drain[i].Data != null)
                     {
-                        PacketBytePool.Return(drain[i].Data);
+                        PacketBytePool.ReleaseBuffer(drain[i].Data, drain[i].Lease);
                     }
                 }
             }
@@ -836,7 +1008,7 @@ public class SpscPacketRingBuffer
         {
             if (_buffer[tail].IsPooledBuffer && _buffer[tail].Data != null)
             {
-                PacketBytePool.Return(_buffer[tail].Data);
+                PacketBytePool.ReleaseBuffer(_buffer[tail].Data, _buffer[tail].Lease);
             }
             _buffer[tail] = default(PSPacketData);
             tail = (tail + 1) & _mask;
@@ -1089,18 +1261,36 @@ public class PcapngWriter
     /// <summary>
     /// Enqueues a packet for writing (async mode) or writes directly (sync mode).
     /// Called from the pktmon callback thread — must be fast.
+    /// Returns true when the writer has taken ownership of the packet's writer reference
+    /// (enqueued in async mode, or written+released in sync mode); false when the packet was
+    /// not accepted (writer inactive, or async ring full) and the caller must release the
+    /// writer reference itself.
     /// </summary>
-    public void WritePacket(PSPacketData packet)
+    public bool WritePacket(PSPacketData packet)
     {
-        if (!_isActive) return;
+        if (!_isActive) return false;
 
         if (_useAsyncWriter)
         {
-            _fileRing.Enqueue(packet);
+            // On success the writer thread owns the reference and releases it after writing.
+            return _fileRing.Enqueue(packet);
         }
         else
         {
-            WritePacketDirect(packet);
+            try
+            {
+                WritePacketDirect(packet);
+            }
+            finally
+            {
+                // Sync mode completes the write inline, so release the writer reference now —
+                // in a finally so a write exception can't strand the pooled buffer.
+                // Guard on IsPooledBuffer: the Analysis save path (PacketDetailStore.WritePcapng)
+                // drives this writer with private, non-pooled retained buffers that must NOT be
+                // handed to the pool.
+                if (packet.IsPooledBuffer) PacketBytePool.ReleaseBuffer(packet.Data, packet.Lease);
+            }
+            return true;
         }
     }
 
@@ -1134,15 +1324,33 @@ public class PcapngWriter
                 {
                     while ((remaining = _fileRing.DrainTo(_drainBuf)) > 0)
                     {
-                        for (int i = 0; i < remaining; i++)
+                        int i = 0;
+                        try
                         {
-                            WritePacketDirect(_drainBuf[i]);
+                            for (; i < remaining; i++)
+                            {
+                                WritePacketDirect(_drainBuf[i]);
+                                // Release the writer reference now that the packet is written.
+                                if (_drainBuf[i].IsPooledBuffer)
+                                    PacketBytePool.ReleaseBuffer(_drainBuf[i].Data, _drainBuf[i].Lease);
+                            }
+                        }
+                        finally
+                        {
+                            // Release any of this batch not yet released (write threw part-way).
+                            for (int j = i; j < remaining; j++)
+                            {
+                                if (_drainBuf[j].IsPooledBuffer)
+                                    PacketBytePool.ReleaseBuffer(_drainBuf[j].Data, _drainBuf[j].Lease);
+                            }
                         }
                     }
                 }
                 catch (Exception ex)
                 {
                     _lastError = "Final drain failed: " + ex.Message;
+                    // Release anything still queued so a close-time write error can't strand buffers.
+                    DrainAndReleaseFileRing();
                 }
             }
             else if (!writerJoined)
@@ -1189,9 +1397,29 @@ public class PcapngWriter
                     count = _fileRing.DrainTo(_drainBuf);
                     if (count > 0)
                     {
-                        for (int i = 0; i < count; i++)
+                        int i = 0;
+                        try
                         {
-                            WritePacketDirect(_drainBuf[i]);
+                            for (; i < count; i++)
+                            {
+                                WritePacketDirect(_drainBuf[i]);
+                                // Release the writer reference now that the packet is written; a
+                                // shared buffer returns to the pool once the console side also
+                                // releases it. Guard on IsPooledBuffer for non-pooled callers.
+                                if (_drainBuf[i].IsPooledBuffer)
+                                    PacketBytePool.ReleaseBuffer(_drainBuf[i].Data, _drainBuf[i].Lease);
+                            }
+                        }
+                        finally
+                        {
+                            // If WritePacketDirect threw, the failing packet (index i) and the rest
+                            // of the drained batch were never released. Return their pooled buffers
+                            // so a write error (disk full, ACL, AV lock) can't strand a whole batch.
+                            for (int j = i; j < count; j++)
+                            {
+                                if (_drainBuf[j].IsPooledBuffer)
+                                    PacketBytePool.ReleaseBuffer(_drainBuf[j].Data, _drainBuf[j].Lease);
+                            }
                         }
                         if (_flushPerBatch)
                         {
@@ -1217,6 +1445,12 @@ public class PcapngWriter
                     // from the post-join drain, escaping Start-Pspkt's finally block.
                     _lastError = ex.GetType().Name + ": " + ex.Message;
                     _isActive = false;
+                    // Drain and release any packets still queued in the file ring so their pooled
+                    // buffers don't leak. We can't write them (the writer is failing) but they must
+                    // return to the pool. Once _isActive is false, WritePacket rejects new packets
+                    // and the producer releases their writer reference itself, so this is the last
+                    // consumer of the ring.
+                    DrainAndReleaseFileRing();
                     return;
                 }
             }
@@ -1226,6 +1460,33 @@ public class PcapngWriter
             // Last-resort safety net so the thread method never throws.
             _lastError = ex.GetType().Name + ": " + ex.Message;
             _isActive = false;
+            DrainAndReleaseFileRing();
+        }
+    }
+
+    /// <summary>
+    /// Drains any packets still queued in the file ring and releases their pooled buffers without
+    /// writing. Called from the writer thread's error paths after _isActive is cleared (so the
+    /// producer's WritePacket now rejects new packets and this is the ring's last consumer).
+    /// </summary>
+    private void DrainAndReleaseFileRing()
+    {
+        if (_fileRing == null || _drainBuf == null) return;
+        try
+        {
+            int rem;
+            while ((rem = _fileRing.DrainTo(_drainBuf)) > 0)
+            {
+                for (int i = 0; i < rem; i++)
+                {
+                    if (_drainBuf[i].IsPooledBuffer)
+                        PacketBytePool.ReleaseBuffer(_drainBuf[i].Data, _drainBuf[i].Lease);
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup; never throw from a dying writer thread.
         }
     }
 

@@ -3,7 +3,7 @@ param(
     [string]$Path = $PSScriptRoot,
     [ValidateSet('None','Normal','Detailed','Diagnostic')]
     [string]$Verbosity = 'Detailed',
-    [ValidateSet('Auto','Unit','Precheck')]
+    [ValidateSet('Auto','Unit','Precheck','Concurrency')]
     [string]$Mode = 'Auto'
 )
 
@@ -45,6 +45,9 @@ switch ($Mode) {
     }
     'Precheck' {
         $config.Filter.Tag = @('Precheck')
+    }
+    'Concurrency' {
+        $config.Filter.Tag = @('Concurrency')
     }
     default {
         if (Test-IsAdministrator) {

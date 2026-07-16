@@ -4116,12 +4116,12 @@ function Start-Pspkt {
                         $drainCount = $Session.DrainAllRawPackets()
                         if ($drainCount -gt 0) {
                             try {
-                                $result = [PacketLineFormatter]::FormatBatch($stream.PacketBuffer, $drainCount, $bulkLineCounter)
+                                $result = [PacketLineFormatter]::WriteBatch($stream.PacketBuffer, $drainCount, $bulkLineCounter)
                                 if ($null -ne $result) {
                                     $bulkLineCounter = $result.LineCounter
                                     $packetCount += $result.PacketCount
                                     $droppedCount += $result.DroppedCount
-                                    if ($null -ne $result.Output) { [Console]::Write($result.Output) }
+                                    # Output was written straight to the console by WriteBatch.
                                 }
                             } finally {
                                 [PktMonApi]::ReturnPacketBuffers($stream.PacketBuffer, $drainCount)
@@ -4161,14 +4161,12 @@ function Start-Pspkt {
                 $pktCount = $Session.DrainAllRawPackets()
                 if ($pktCount -gt 0) {
                     try {
-                        $result = [PacketLineFormatter]::FormatBatch($stream.PacketBuffer, $pktCount, $bulkLineCounter)
+                        $result = [PacketLineFormatter]::WriteBatch($stream.PacketBuffer, $pktCount, $bulkLineCounter)
                         if ($null -ne $result) {
                             $bulkLineCounter = $result.LineCounter
                             $packetCount += $result.PacketCount
                             $droppedCount += $result.DroppedCount
-                            if ($null -ne $result.Output) {
-                                [Console]::Write($result.Output)
-                            }
+                            # Output was written straight to the console by WriteBatch (no LOH string).
 
                             # Handle drop trigger actions from C#.
                             if ($result.TriggerAction -eq 2) {
@@ -4199,12 +4197,12 @@ function Start-Pspkt {
                                 $drainCount = $Session.DrainAllRawPackets()
                                 if ($drainCount -gt 0) {
                                     try {
-                                        $drainResult = [PacketLineFormatter]::FormatBatch($stream.PacketBuffer, $drainCount, $bulkLineCounter)
+                                        $drainResult = [PacketLineFormatter]::WriteBatch($stream.PacketBuffer, $drainCount, $bulkLineCounter)
                                         if ($null -ne $drainResult) {
                                             $bulkLineCounter = $drainResult.LineCounter
                                             $packetCount += $drainResult.PacketCount
                                             $droppedCount += $drainResult.DroppedCount
-                                            if ($null -ne $drainResult.Output) { [Console]::Write($drainResult.Output) }
+                                            # Output was written straight to the console by WriteBatch.
                                         }
                                     } finally {
                                         [PktMonApi]::ReturnPacketBuffers($stream.PacketBuffer, $drainCount)
@@ -4303,6 +4301,14 @@ function Start-Pspkt {
                     Write-Warning "Pcapng writer reported an error: $lastErr"
                 }
             }
+
+            # Drain the console ring so any pooled buffers still parked in it (packets produced
+            # but not yet consumed when the loop exited) are released back to the pool instead of
+            # being stranded until the next capture reconfigures the ring. Safe here: the consumer
+            # loop has exited, so this runs on the (sole) consumer thread. Any packets the still-live
+            # native producer delivers after this point are console-only (FileWriter was cleared
+            # above) and are released by the next capture's ring reconfigure.
+            [PktMonApi]::ClearPacketBuffer()
 
             if ($useRealTime) {
                 $missedWrite = [PacketData]::MissedPacketWriteCount
