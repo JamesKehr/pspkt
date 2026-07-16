@@ -65,10 +65,14 @@ public static class PacketParseHelper
                DecBytes[data[offset+2]], ".", DecBytes[data[offset+3]]);
     }
 
-    // Pre-computed hex word lookup for IPv6 formatting (0000-ffff).
-    // Lazy-initialized on first FormatIPv6 call to save ~2.5 MB when captures
-    // never encounter IPv6 traffic.
-    private static string[] HexWords;
+    // Lowercase hex nibbles for direct IPv6 word formatting (no per-word string lookup).
+    private static readonly char[] HexNibble = new char[]
+        { '0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f' };
+
+    // Reusable per-thread scratch (single consumer thread) so FormatIPv6 allocates only its
+    // returned string — no per-call int[8] groups array and no per-call StringBuilder.
+    [ThreadStatic] private static int[] _v6Groups;
+    [ThreadStatic] private static StringBuilder _v6Sb;
 
     /// <summary>
     /// Formats an IPv6 address from 16 bytes at the given offset using RFC 5952 compressed
@@ -78,30 +82,14 @@ public static class PacketParseHelper
     {
         if (data == null || data.Length < offset + 16) return "";
 
-        // Lazy-init the lookup table. Single-threaded consumer means no lock needed;
-        // worst case on a race is double-init (harmless, same data).
-        if (HexWords == null)
-        {
-            var table = new string[65536];
-            for (int i = 0; i < 65536; i++)
-                table[i] = i.ToString("x");
-            HexWords = table;
-        }
-
-        // Read 8 groups as 16-bit words.
-        int g0 = (data[offset]     << 8) | data[offset + 1];
-        int g1 = (data[offset + 2] << 8) | data[offset + 3];
-        int g2 = (data[offset + 4] << 8) | data[offset + 5];
-        int g3 = (data[offset + 6] << 8) | data[offset + 7];
-        int g4 = (data[offset + 8] << 8) | data[offset + 9];
-        int g5 = (data[offset + 10] << 8) | data[offset + 11];
-        int g6 = (data[offset + 12] << 8) | data[offset + 13];
-        int g7 = (data[offset + 14] << 8) | data[offset + 15];
+        int[] groups = _v6Groups;
+        if (groups == null) { groups = new int[8]; _v6Groups = groups; }
+        for (int i = 0; i < 8; i++)
+            groups[i] = (data[offset + i * 2] << 8) | data[offset + i * 2 + 1];
 
         // Find the longest run of consecutive zero groups for :: compression.
         int bestStart = -1, bestLen = 0;
         int curStart = -1, curLen = 0;
-        int[] groups = { g0, g1, g2, g3, g4, g5, g6, g7 };
         for (int i = 0; i < 8; i++)
         {
             if (groups[i] == 0)
@@ -119,8 +107,9 @@ public static class PacketParseHelper
         // RFC 5952: only compress runs of length >= 2.
         if (bestLen < 2) { bestStart = -1; bestLen = 0; }
 
-        // Build the string. Worst case is "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" = 39 chars.
-        var sb = new StringBuilder(39);
+        StringBuilder sb = _v6Sb;
+        if (sb == null) { sb = new StringBuilder(39); _v6Sb = sb; }
+        else sb.Length = 0;
         for (int i = 0; i < 8; i++)
         {
             if (i == bestStart)
@@ -130,9 +119,25 @@ public static class PacketParseHelper
                 continue;
             }
             if (i > 0 && !(i == bestStart + bestLen && bestStart >= 0)) sb.Append(':');
-            sb.Append(HexWords[groups[i]]);
+            AppendHexWord(sb, groups[i]);
         }
         return sb.ToString();
+    }
+
+    // Appends a 16-bit word as lowercase hex with no leading zeros (RFC 5952), matching
+    // word.ToString("x") but without the intermediate string.
+    private static void AppendHexWord(StringBuilder sb, int word)
+    {
+        if (word == 0) { sb.Append('0'); return; }
+        int n0 = (word >> 12) & 0xF;
+        int n1 = (word >> 8) & 0xF;
+        int n2 = (word >> 4) & 0xF;
+        int n3 = word & 0xF;
+        bool started = false;
+        if (n0 != 0) { sb.Append(HexNibble[n0]); started = true; }
+        if (started || n1 != 0) { sb.Append(HexNibble[n1]); started = true; }
+        if (started || n2 != 0) { sb.Append(HexNibble[n2]); }
+        sb.Append(HexNibble[n3]);
     }
 
     /// <summary>
@@ -317,9 +322,36 @@ public static class PacketParseHelper
     /// </summary>
     public static string FormatTcpSegment(byte flags, uint seq, uint ack, ushort win, int dataLen)
     {
-        string f = FormatTcpFlags(flags);
-        return string.Concat("TCP [", f, "], seq ", seq.ToString(),
-            ", ack ", ack.ToString(), ", win ", win.ToString(), ", len ", dataLen.ToString());
+        StringBuilder sb = new StringBuilder(48);
+        AppendTcpSegmentInto(sb, flags, seq, ack, win, dataLen);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append-only variant of <see cref="FormatTcpSegment"/>: writes the segment summary
+    /// directly into sb with no char[] flag buffer, no int/uint.ToString() strings and no
+    /// concat (StringBuilder's numeric overloads write digits directly). Byte-for-byte
+    /// identical to FormatTcpSegment.
+    /// </summary>
+    public static void AppendTcpSegmentInto(StringBuilder sb, byte flags, uint seq, uint ack, ushort win, int dataLen)
+    {
+        sb.Append("TCP [");
+        AppendTcpFlagsInto(sb, flags);
+        sb.Append("], seq ").Append(seq).Append(", ack ").Append(ack)
+          .Append(", win ").Append(win).Append(", len ").Append(dataLen);
+    }
+
+    /// <summary>Append-only variant of <see cref="FormatTcpFlags"/> (appends set flag chars, or "none").</summary>
+    public static void AppendTcpFlagsInto(StringBuilder sb, byte flags)
+    {
+        if (flags == 0) { sb.Append("none"); return; }
+        for (int i = 0; i < 8; i++)
+        {
+            if ((flags & (0x80 >> i)) != 0)
+            {
+                sb.Append(TcpFlagChars[i]);
+            }
+        }
     }
 }
 
@@ -444,6 +476,42 @@ public static class PacketFormatter
     }
 
     /// <summary>
+    /// Component prefix cache-key bit layout (fields must not overlap — direction/edgeId come
+    /// straight from raw pktmon metadata and can carry values beyond the documented 1/2, so
+    /// each gets a full 4-bit field). Overlapping bits previously caused different
+    /// (direction, edgeId, compId) combinations to collide and return the wrong cached prefix.
+    ///   bit 0    : variant (0-1)
+    ///   bit 1    : includeName
+    ///   bits 2-5 : direction (0-15)
+    ///   bits 6-9 : edgeId    (0-15)
+    ///   bits 10+ : compId
+    /// </summary>
+    private static int ComponentCacheKey(int compId, int variant, int edgeId, int direction, bool includeName)
+    {
+        return variant | ((includeName ? 1 : 0) << 1) | ((direction & 0xF) << 2) | ((edgeId & 0xF) << 6) | (compId << 10);
+    }
+
+    /// <summary>
+    /// Fast path for the steady state: returns the cached component prefix without needing the
+    /// component name / parent id (which are only required to BUILD the string on a miss). Lets
+    /// the caller skip the per-packet component-map lookup on cache hits. Returns false on a
+    /// miss — the caller then resolves name/parent and calls <see cref="FormatComponentPrefix"/>.
+    /// </summary>
+    public static bool TryGetCachedComponentPrefix(int compId, int lineCounter, int edgeId, int direction, bool includeName, out string result)
+    {
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        int cacheKey = ComponentCacheKey(compId, variant, edgeId, direction, includeName);
+        string[] cached;
+        if (_compCache.TryGetValue(cacheKey, out cached))
+        {
+            result = cached[0];
+            return true;
+        }
+        result = null;
+        return false;
+    }
+
+    /// <summary>
     /// Formats the component prefix with Unicode arrow indicators for direction and edge.
     /// Full form:  "GGG:CCC[↑←](CompName        )" — CompName padded/truncated to a fixed
     /// width so the prefix length is identical for every packet (column alignment).
@@ -455,18 +523,7 @@ public static class PacketFormatter
     public static string FormatComponentPrefix(int parentId, int compId, string compName, int lineCounter, int edgeId, int direction, bool includeName)
     {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
-
-        // Cache key bit layout (must not overlap — direction/edgeId are read directly from
-        // raw pktmon metadata and can carry values beyond the 1/2 documented here, so each
-        // gets a full 4-bit field regardless). Overlapping bits previously caused different
-        // (direction, edgeId, compId) combinations to collide on the same cache key, which
-        // silently returned another component's cached — and therefore wrong — prefix string.
-        //   bit 0      : variant   (1 bit,  0-1)
-        //   bit 1      : includeName (1 bit)
-        //   bits 2-5   : direction (4 bits, 0-15)
-        //   bits 6-9   : edgeId    (4 bits, 0-15)
-        //   bits 10+   : compId
-        int cacheKey = variant | ((includeName ? 1 : 0) << 1) | ((direction & 0xF) << 2) | ((edgeId & 0xF) << 6) | (compId << 10);
+        int cacheKey = ComponentCacheKey(compId, variant, edgeId, direction, includeName);
         string[] cached;
         if (_compCache.TryGetValue(cacheKey, out cached))
         {
@@ -576,19 +633,55 @@ public static class PacketFormatter
     /// </summary>
     public static string FormatTransportLine(string src, int srcPort, string dst, int dstPort, string suffix, int suffixLayer, int lineCounter)
     {
+        StringBuilder sb = new StringBuilder(96);
+        AppendTransportLineInto(sb, src, srcPort, dst, dstPort, suffix, suffixLayer, lineCounter);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append-only variant of <see cref="FormatTransportLine"/>: writes the colored
+    /// "src.srcPort > dst.dstPort: suffix" line directly into <paramref name="sb"/> with no
+    /// intermediate concat string and no port int.ToString() allocations (StringBuilder's int
+    /// overload writes digits directly). Byte-for-byte identical to FormatTransportLine.
+    /// </summary>
+    public static void AppendTransportLineInto(StringBuilder sb, string src, int srcPort, string dst, int dstPort, string suffix, int suffixLayer, int lineCounter)
+    {
+        AppendTransportAddrPrefixInto(sb, src, srcPort, dst, dstPort, lineCounter);
+        // Suffix, colored by its layer (append(null) is a no-op, matching string.Concat).
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        sb.Append(_prefixes[suffixLayer, variant]).Append(suffix).Append(_reset);
+    }
+
+    /// <summary>
+    /// Appends the colored "src.srcPort > dst.dstPort: " address prefix (no suffix) into sb.
+    /// Callers then append the suffix themselves — either a string (via a colored append) or
+    /// directly (e.g. the alloc-free TCP segment), avoiding a throwaway suffix string.
+    /// </summary>
+    public static void AppendTransportAddrPrefixInto(StringBuilder sb, string src, int srcPort, string dst, int dstPort, int lineCounter)
+    {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
         string netPfx = _prefixes[LAYER_NETWORK, variant];
         string trPfx = _prefixes[LAYER_TRANSPORT, variant];
-        string suffPfx = _prefixes[suffixLayer, variant];
 
-        return string.Concat(
-            netPfx, src, _reset,
-            trPfx, ".", srcPort.ToString(), _reset,
-            netPfx, " > ", dst, _reset,
-            trPfx, ".", dstPort.ToString(), _reset,
-            ": ",
-            suffPfx, suffix, _reset
-        );
+        sb.Append(netPfx).Append(src).Append(_reset)
+          .Append(trPfx).Append('.').Append(srcPort).Append(_reset)
+          .Append(netPfx).Append(" > ").Append(dst).Append(_reset)
+          .Append(trPfx).Append('.').Append(dstPort).Append(_reset)
+          .Append(": ");
+    }
+
+    /// <summary>Appends the ANSI color prefix for a layer (or nothing when uncolored).</summary>
+    public static void AppendColorStart(StringBuilder sb, int layerIndex, int lineCounter)
+    {
+        if (layerIndex < 0 || layerIndex >= LAYER_COUNT) return;
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        sb.Append(_prefixes[layerIndex, variant]);
+    }
+
+    /// <summary>Appends the ANSI reset sequence.</summary>
+    public static void AppendColorReset(StringBuilder sb)
+    {
+        sb.Append(_reset);
     }
 
     /// <summary>
@@ -603,6 +696,15 @@ public static class PacketFormatter
         return string.Concat(pfx, text, _reset);
     }
 
+    /// <summary>Append-only variant of <see cref="FormatNetworkOnly"/>.</summary>
+    public static void AppendNetworkOnlyInto(StringBuilder sb, string text, int lineCounter)
+    {
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        string pfx = _prefixes[LAYER_NETWORK, variant];
+        if (pfx == null) { sb.Append(text); return; }
+        sb.Append(pfx).Append(text).Append(_reset);
+    }
+
     /// <summary>
     /// Parses IPv6 source and destination addresses from raw packet data.
     /// Returns true if successful, with src and dst set.
@@ -612,13 +714,13 @@ public static class PacketFormatter
         src = null;
         dst = null;
         if (raw == null || raw.Length < ipv6Offset + 40) return false;
-        
-        byte[] srcBytes = new byte[16];
-        byte[] dstBytes = new byte[16];
-        Buffer.BlockCopy(raw, ipv6Offset + 8, srcBytes, 0, 16);
-        Buffer.BlockCopy(raw, ipv6Offset + 24, dstBytes, 0, 16);
-        src = new System.Net.IPAddress(srcBytes).ToString();
-        dst = new System.Net.IPAddress(dstBytes).ToString();
+
+        // Use the allocation-light FormatIPv6 (RFC 5952) directly on the source range instead
+        // of copying two byte[16] buffers into IPAddress objects. This also makes the Default
+        // one-liner's IPv6 rendering consistent with the Analysis Details tree, which already
+        // uses FormatIPv6.
+        src = PacketParseHelper.FormatIPv6(raw, ipv6Offset + 8);
+        dst = PacketParseHelper.FormatIPv6(raw, ipv6Offset + 24);
         return true;
     }
 
@@ -629,65 +731,83 @@ public static class PacketFormatter
     public static string FormatMinimalColors(string dlName, string netProto, string transProto,
         string src, string srcPort, string dst, string dstPort, string appStr, int lineCounter)
     {
+        StringBuilder sb = new StringBuilder(256);
+        if (!FormatMinimalColorsInto(sb, dlName, netProto, transProto, src, srcPort, dst, dstPort, appStr, lineCounter))
+            return null;
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append-only variant of <see cref="FormatMinimalColors"/>: writes the colored minimal
+    /// line directly into <paramref name="sb"/> with no intermediate per-segment strings and no
+    /// inner StringBuilder/ToString. Returns false (appending nothing) when there is no content.
+    /// Output is byte-for-byte identical to FormatMinimalColors.
+    /// </summary>
+    public static bool FormatMinimalColorsInto(StringBuilder sb, string dlName, string netProto, string transProto,
+        string src, string srcPort, string dst, string dstPort, string appStr, int lineCounter)
+    {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
         string dlPfx = _prefixes[LAYER_DATALINK, variant];
         string netPfx = _prefixes[LAYER_NETWORK, variant];
         string trPfx = _prefixes[LAYER_TRANSPORT, variant];
         string appPfx = _prefixes[LAYER_APPLICATION, variant];
 
-        string coloredDL = null;
-        if (dlName != null && dlName.Length > 0 && dlPfx != null)
-            coloredDL = string.Concat(dlPfx, dlName, _reset);
-        else if (dlName != null && dlName.Length > 0)
-            coloredDL = dlName;
+        bool hasDL = dlName != null && dlName.Length > 0;
+        bool hasProto = netProto != null && netProto.Length > 0;
+        bool hasAddr = src != null && src.Length > 0 && dst != null && dst.Length > 0;
+        bool hasApp = appStr != null && appStr.Length > 0;
+        if (!hasDL && !hasProto && !hasAddr && !hasApp) return false;
 
-        string protoLabel = null;
-        if (netProto != null && netProto.Length > 0)
+        bool first = true;
+
+        if (hasDL)
         {
+            // DL is the first segment and is never preceded by ": ".
+            if (dlPfx != null) sb.Append(dlPfx).Append(dlName).Append(_reset);
+            else sb.Append(dlName);
+            first = false;
+        }
+
+        if (hasProto)
+        {
+            if (!first) sb.Append(": ");
+            if (netPfx != null) sb.Append(netPfx).Append(netProto).Append(_reset);
+            else sb.Append(netProto);
             if (transProto != null && transProto.Length > 0)
             {
-                string cNet = (netPfx != null) ? string.Concat(netPfx, netProto, _reset) : netProto;
-                string cTr = (trPfx != null) ? string.Concat(trPfx, ".", transProto, _reset) : "." + transProto;
-                protoLabel = string.Concat(cNet, cTr);
+                if (trPfx != null) sb.Append(trPfx).Append('.').Append(transProto).Append(_reset);
+                else sb.Append('.').Append(transProto);
             }
-            else
-            {
-                protoLabel = (netPfx != null) ? string.Concat(netPfx, netProto, _reset) : netProto;
-            }
+            first = false;
         }
 
-        string addrStr = null;
-        if (src != null && src.Length > 0 && dst != null && dst.Length > 0)
+        if (hasAddr)
         {
-            string cSrc = (netPfx != null) ? string.Concat(netPfx, src, _reset) : src;
-            string cSrcPort = "";
+            if (!first) sb.Append(": ");
+            if (netPfx != null) sb.Append(netPfx).Append(src).Append(_reset);
+            else sb.Append(src);
             if (srcPort != null && srcPort.Length > 0)
-                cSrcPort = (trPfx != null) ? string.Concat(trPfx, srcPort, _reset) : srcPort;
-            string cDst = (netPfx != null) ? string.Concat(netPfx, " > ", dst, _reset) : " > " + dst;
-            string cDstPort = "";
+            {
+                if (trPfx != null) sb.Append(trPfx).Append(srcPort).Append(_reset);
+                else sb.Append(srcPort);
+            }
+            if (netPfx != null) sb.Append(netPfx).Append(" > ").Append(dst).Append(_reset);
+            else sb.Append(" > ").Append(dst);
             if (dstPort != null && dstPort.Length > 0)
-                cDstPort = (trPfx != null) ? string.Concat(trPfx, dstPort, _reset) : dstPort;
-            addrStr = string.Concat(cSrc, cSrcPort, cDst, cDstPort);
+            {
+                if (trPfx != null) sb.Append(trPfx).Append(dstPort).Append(_reset);
+                else sb.Append(dstPort);
+            }
+            first = false;
         }
 
-        string coloredApp = null;
-        if (appStr != null && appStr.Length > 0)
-            coloredApp = (appPfx != null) ? string.Concat(appPfx, appStr, _reset) : appStr;
+        if (hasApp)
+        {
+            if (!first) sb.Append(": ");
+            if (appPfx != null) sb.Append(appPfx).Append(appStr).Append(_reset);
+            else sb.Append(appStr);
+        }
 
-        // Join non-null parts with ": "
-        int partCount = 0;
-        if (coloredDL != null) partCount++;
-        if (protoLabel != null) partCount++;
-        if (addrStr != null) partCount++;
-        if (coloredApp != null) partCount++;
-        if (partCount == 0) return null;
-
-        StringBuilder sb = new StringBuilder(256);
-        bool first = true;
-        if (coloredDL != null) { sb.Append(coloredDL); first = false; }
-        if (protoLabel != null) { if (!first) sb.Append(": "); sb.Append(protoLabel); first = false; }
-        if (addrStr != null) { if (!first) sb.Append(": "); sb.Append(addrStr); first = false; }
-        if (coloredApp != null) { if (!first) sb.Append(": "); sb.Append(coloredApp); }
-        return sb.ToString();
+        return true;
     }
 }

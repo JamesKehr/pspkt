@@ -637,27 +637,27 @@ public static class PacketLineFormatter
         }
 
         // --- Network + Transport segment ---
-        string ntSegment = null;
+        // Append-only: the data-link prefix + ": " are written first, then the network/transport
+        // segment is appended directly into sb (no intermediate per-line string).
         if (srcAddr != null && dstAddr != null)
         {
-            ntSegment = FormatNetworkTransportInternal(
-                lineCounter, protoKind, srcAddr, dstAddr, srcPort, dstPort,
+            if (dlSegment != null)
+            {
+                PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
+                sb.Append(": ");
+            }
+            AppendNetworkTransportInto(
+                sb, lineCounter, protoKind, srcAddr, dstAddr, srcPort, dstPort,
                 tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen,
                 icmpType, icmpCode, icmpId, icmpSeq, udpData);
-        }
-
-        if (dlSegment != null && ntSegment != null)
-        {
-            PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
-            sb.Append(": ").Append(ntSegment);
             return true;
         }
+
         if (dlSegment != null)
         {
             PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
             return true;
         }
-        if (ntSegment != null) { sb.Append(ntSegment); return true; }
         return false;
     }
 
@@ -866,10 +866,13 @@ public static class PacketLineFormatter
             }
         }
 
-        string line = PacketFormatter.FormatMinimalColors(dlName, netProto, transProto,
-            srcAddr ?? "", spStr, dstAddr ?? "", dpStr, appStr, lineCounter);
-        if (line == null) return false;
-        sb.Append(line);
+        int minMark = sb.Length;
+        if (!PacketFormatter.FormatMinimalColorsInto(sb, dlName, netProto, transProto,
+            srcAddr ?? "", spStr, dstAddr ?? "", dpStr, appStr, lineCounter))
+        {
+            sb.Length = minMark;
+            return false;
+        }
         return true;
     }
 
@@ -987,13 +990,12 @@ public static class PacketLineFormatter
                     optLen = tcpDataOffset - 20;
                 }
                 transportDetail = TcpParser.FormatTcpDetailed(tcpFlags, (ushort)srcPort, (ushort)dstPort, tcpSeq, tcpAck, tcpWin, dataLen, rawPacketData, optOffset >= 0 ? optOffset : 0, optLen);
-                appDetail = DetectTcpAppDetailed(srcPort, dstPort, transportPayload,
-                    HttpParser.BuildConnKey(srcAddr, srcPort, dstAddr, dstPort));
+                appDetail = DetectTcpAppDetailed(srcPort, dstPort, transportPayload, dataLen, srcAddr, dstAddr);
             }
             else if (protoKind == 3)
             {
                 transportDetail = "UDP - Src: " + srcPort.ToString() + ", Dst: " + dstPort.ToString() + "; len: " + dataLen.ToString();
-                appDetail = DetectUdpAppDetailed(srcPort, dstPort, transportPayload);
+                appDetail = DetectUdpAppDetailed(srcPort, dstPort, transportPayload, dataLen);
             }
             else if (protoKind == 4)
             {
@@ -1077,15 +1079,16 @@ public static class PacketLineFormatter
                 }
                 transportDetail = TcpParser.FormatTcpDetailed(ipv6Flags, (ushort)ipv6SrcPort, (ushort)ipv6DstPort, ipv6Seq, ipv6Ack, ipv6Win, ipv6DataLen, rawPacketData, ipv6OptOffset >= 0 ? ipv6OptOffset : 0, ipv6OptLen);
                 byte[] ipv6Payload = null;
+                int ipv6PayLen = 0;
                 if (ipv6DataLen > 0 && ipv6TransportOffset + ipv6DataOffset < rawEnd
                     && NeedsTcpPayload(ipv6SrcPort, ipv6DstPort))
                 {
                     int payloadLen = Math.Min(ipv6DataLen, rawEnd - ipv6TransportOffset - ipv6DataOffset);
                     ipv6Payload = RentPayloadBuffer(payloadLen);
                     Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + ipv6DataOffset, ipv6Payload, 0, payloadLen);
+                    ipv6PayLen = payloadLen;
                 }
-                appDetail = DetectTcpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload,
-                    HttpParser.BuildConnKey(ipv6Src, ipv6SrcPort, ipv6Dst, ipv6DstPort));
+                appDetail = DetectTcpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload, ipv6PayLen, ipv6Src, ipv6Dst);
             }
             else if (haveUpper && upperProto == 17 && ipv6TransportLength >= 8)
             {
@@ -1095,14 +1098,16 @@ public static class PacketLineFormatter
                 int ipv6DataLen = Math.Max(0, udpLength - 8);
                 transportDetail = "UDP - Src: " + ipv6SrcPort.ToString() + ", Dst: " + ipv6DstPort.ToString() + "; len: " + ipv6DataLen.ToString();
                 byte[] ipv6Payload = null;
+                int ipv6PayLen = 0;
                 if (ipv6DataLen > 0 && ipv6TransportOffset + 8 < rawEnd
                     && NeedsUdpPayload(ipv6SrcPort, ipv6DstPort))
                 {
                     int payloadLen = Math.Min(ipv6DataLen, rawEnd - ipv6TransportOffset - 8);
                     ipv6Payload = RentPayloadBuffer(payloadLen);
                     Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + 8, ipv6Payload, 0, payloadLen);
+                    ipv6PayLen = payloadLen;
                 }
-                appDetail = DetectUdpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload);
+                appDetail = DetectUdpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload, ipv6PayLen);
             }
         }
 
@@ -1176,9 +1181,20 @@ public static class PacketLineFormatter
 
     private static string FormatComponentPrefixInternal(int compId, int edgeId, int lineCounter)
     {
+        // Steady-state fast path: on a cache hit the fully-built prefix is returned without
+        // touching the component map (compName/parentId are only needed to build on a miss).
+        // In text-box (Analysis) mode the component name is omitted from the scrolling line —
+        // it's shown in the Details box instead — so the prefix is the compact
+        // "GGG:CCC[dir edge]" form. See BoxyBox TUI spec.
+        bool includeName = !_textBoxMode;
+        string cachedPrefix;
+        if (PacketFormatter.TryGetCachedComponentPrefix(compId, lineCounter, edgeId, _currentDirection, includeName, out cachedPrefix))
+        {
+            return cachedPrefix;
+        }
+
         string compName = "";
         int parentId = 0;
-
         ComponentInfo info;
         if (_componentMap.TryGetValue(compId, out info))
         {
@@ -1186,10 +1202,7 @@ public static class PacketLineFormatter
             parentId = info.ParentId;
         }
 
-        // In text-box (Analysis) mode the component name is omitted from the scrolling
-        // line — it's shown in the Details box instead — so the prefix is the compact
-        // "GGG:CCC[dir edge]" form. See BoxyBox TUI spec.
-        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection, !_textBoxMode);
+        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection, includeName);
     }
 
     private static string FormatDataLinkInternal(int linkKind, string srcMac, string dstMac, int etherType, int rawLen)
@@ -1213,7 +1226,11 @@ public static class PacketLineFormatter
         return sb.ToString();
     }
 
-    private static string FormatNetworkTransportInternal(
+    // Appends the colored network+transport segment directly into outSb (append-only variant of
+    // the former FormatNetworkTransportInternal). Always produces content for a valid IPv4
+    // src/dst, so the caller can append the data-link prefix + ": " beforehand unconditionally.
+    private static void AppendNetworkTransportInto(
+        StringBuilder outSb,
         int lineCounter, int protoKind, string srcAddr, string dstAddr,
         int srcPort, int dstPort,
         byte tcpFlags, uint tcpSeq, uint tcpAck, ushort tcpWin,
@@ -1223,13 +1240,17 @@ public static class PacketLineFormatter
     {
         // The network tuple is always prefixed with the network-layer name (IPv4 here),
         // including ICMP.
-        string netSrc = "IPv4 " + srcAddr;
+        // Network-layer label for the tuple. Built lazily per-branch: TCP/UDP use the
+        // "IPv4.TCP"/"IPv4.UDP" form (assigned below), while ICMP and the fallback append the
+        // plain "IPv4 " form inline — so the common TCP/UDP path never allocates the unused
+        // "IPv4 " concat.
+        string netSrc = null;
 
         // ICMP
         if (protoKind == 1)
         {
             StringBuilder sb = new StringBuilder(96);
-            sb.Append(netSrc).Append(" > ").Append(dstAddr).Append(": ");
+            sb.Append("IPv4 ").Append(srcAddr).Append(" > ").Append(dstAddr).Append(": ");
             if (icmpType == 0 || icmpType == 8)
             {
                 sb.Append("ICMP echo ").Append(icmpType == 8 ? "request" : "reply")
@@ -1247,7 +1268,8 @@ public static class PacketLineFormatter
             {
                 sb.Append("ICMP type ").Append(icmpType).Append(" code ").Append(icmpCode);
             }
-            return PacketFormatter.FormatNetworkOnly(sb.ToString(), lineCounter);
+            PacketFormatter.AppendNetworkOnlyInto(outSb, sb.ToString(), lineCounter);
+            return;
         }
 
         // TCP
@@ -1290,18 +1312,29 @@ public static class PacketLineFormatter
 
             if (suffix == null)
             {
-                suffix = PacketParseHelper.FormatTcpSegment(tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen);
-                // No active parser produced app content — add a protocol hint if the port
-                // maps to a well-known service so the user can identify traffic at a glance.
+                // No active parser produced app content. If the port maps to a well-known
+                // service, prepend a protocol hint (colored at the app layer); otherwise append
+                // the TCP segment directly (alloc-free) at the transport layer.
                 string hint = GetAppProtocolHint(6, srcPort, dstPort);
                 if (hint != null)
                 {
-                    suffix = hint + ": " + suffix;
-                    appLayer = 4;
+                    PacketFormatter.AppendTransportAddrPrefixInto(outSb, netSrc, srcPort, dstAddr, dstPort, lineCounter);
+                    PacketFormatter.AppendColorStart(outSb, 4, lineCounter);
+                    outSb.Append(hint).Append(": ");
+                    PacketParseHelper.AppendTcpSegmentInto(outSb, tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen);
+                    PacketFormatter.AppendColorReset(outSb);
+                    return;
                 }
+
+                PacketFormatter.AppendTransportAddrPrefixInto(outSb, netSrc, srcPort, dstAddr, dstPort, lineCounter);
+                PacketFormatter.AppendColorStart(outSb, 3, lineCounter);
+                PacketParseHelper.AppendTcpSegmentInto(outSb, tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen);
+                PacketFormatter.AppendColorReset(outSb);
+                return;
             }
 
-            return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
+            PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
+            return;
         }
 
         // UDP
@@ -1313,18 +1346,24 @@ public static class PacketLineFormatter
             // DNS detection
             if (srcPort == 53 || dstPort == 53 || srcPort == 5353 || dstPort == 5353)
             {
-                string dnsStr = DnsParser.FormatDnsSegment(udpData, srcPort, dstPort);
+                string dnsStr = DnsParser.FormatDnsSegment(udpData, dataLen, srcPort, dstPort);
                 if (dnsStr != null)
-                    return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, dnsStr, 4, lineCounter);
+                {
+                    PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, dnsStr, 4, lineCounter);
+                    return;
+                }
             }
 
             // DHCP detection
             if ((srcPort == 67 || srcPort == 68 || dstPort == 67 || dstPort == 68) ||
                 (srcPort == 546 || srcPort == 547 || dstPort == 546 || dstPort == 547))
             {
-                string dhcpStr = FormatDhcpBasic(udpData, srcPort, dstPort);
+                string dhcpStr = FormatDhcpBasic(udpData, dataLen, srcPort, dstPort);
                 if (dhcpStr != null)
-                    return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
+                {
+                    PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
+                    return;
+                }
             }
 
             StringBuilder usb = new StringBuilder(32);
@@ -1334,13 +1373,14 @@ public static class PacketLineFormatter
                 usb.Append(udpHint).Append(": ");
             }
             usb.Append("UDP, len ").Append(dataLen);
-            return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
+            PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
+            return;
         }
 
         // Fallback (non-TCP/UDP/ICMP IP payload) — still prefixed with the network name.
         StringBuilder fsb = new StringBuilder(64);
-        fsb.Append(netSrc).Append(" > ").Append(dstAddr);
-        return PacketFormatter.FormatNetworkOnly(fsb.ToString(), lineCounter);
+        fsb.Append("IPv4 ").Append(srcAddr).Append(" > ").Append(dstAddr);
+        PacketFormatter.AppendNetworkOnlyInto(outSb, fsb.ToString(), lineCounter);
     }
 
     private static string FormatIPv6Segment(byte[] raw, int linkKind, int lineCounter)
@@ -1422,9 +1462,9 @@ public static class PacketLineFormatter
                         int udpDataLen = (rawOffset + rawLength) - transOff - 8;
                         if (udpDataLen > 0)
                         {
-                            byte[] udpPayload = new byte[udpDataLen];
+                            byte[] udpPayload = RentPayloadBuffer(udpDataLen);
                             Buffer.BlockCopy(data, transOff + 8, udpPayload, 0, udpDataLen);
-                            string dnsStr = DnsParser.FormatDnsSegment(udpPayload, sp, dp);
+                            string dnsStr = DnsParser.FormatDnsSegment(udpPayload, udpDataLen, sp, dp);
                             if (dnsStr != null)
                                 return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, dnsStr, 4, lineCounter);
                         }
@@ -1438,9 +1478,9 @@ public static class PacketLineFormatter
                     int dhcpLen = (rawOffset + rawLength) - transOff - 8;
                     if (dhcpLen > 0)
                     {
-                        byte[] dhcpPayload = new byte[dhcpLen];
+                        byte[] dhcpPayload = RentPayloadBuffer(dhcpLen);
                         Buffer.BlockCopy(data, transOff + 8, dhcpPayload, 0, dhcpLen);
-                        string dhcpStr = FormatDhcpBasic(dhcpPayload, sp, dp);
+                        string dhcpStr = FormatDhcpBasic(dhcpPayload, dhcpLen, sp, dp);
                         if (dhcpStr != null)
                             return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, dhcpStr, 4, lineCounter);
                     }
@@ -1455,7 +1495,7 @@ public static class PacketLineFormatter
                     int httpLen = (rawOffset + rawLength) - payloadStart;
                     if (tcpDataOff >= 20 && httpLen > 0)
                     {
-                        byte[] httpPayload = new byte[httpLen];
+                        byte[] httpPayload = RentPayloadBuffer(httpLen);
                         Buffer.BlockCopy(data, payloadStart, httpPayload, 0, httpLen);
                         string httpStr = DetectHttpContent(httpPayload, httpLen, sp, dp,
                             HttpParser.BuildConnKey(src, sp, dst, dp));
@@ -1774,8 +1814,13 @@ public static class PacketLineFormatter
 
     private static string FormatDhcpBasic(byte[] data, int srcPort, int dstPort)
     {
+        return FormatDhcpBasic(data, data == null ? 0 : data.Length, srcPort, dstPort);
+    }
+
+    private static string FormatDhcpBasic(byte[] data, int dataLen, int srcPort, int dstPort)
+    {
         // Delegates to DhcpParser for the short-form Default-tier line.
-        return DhcpParser.FormatDhcpSegment(data, srcPort, dstPort);
+        return DhcpParser.FormatDhcpSegment(data, dataLen, srcPort, dstPort);
     }
 
     private static int GetWifiPayloadOffset(byte[] raw)
@@ -1804,23 +1849,28 @@ public static class PacketLineFormatter
 
     private static string DetectTcpAppDetailed(int srcPort, int dstPort, byte[] data)
     {
-        return DetectTcpAppDetailed(srcPort, dstPort, data, null);
+        return DetectTcpAppDetailed(srcPort, dstPort, data, data == null ? 0 : data.Length, null, null);
     }
 
-    private static string DetectTcpAppDetailed(int srcPort, int dstPort, byte[] data, string connKey)
+    // srcAddr/dstAddr are carried (instead of a pre-built connection key) so the HTTP
+    // request/response correlation key is only constructed when the payload is actually HTTP —
+    // avoiding 3 throwaway strings on every non-HTTP Detailed TCP segment (handshakes, TLS,
+    // SMB2, DNS-over-TCP, ACKs).
+    private static string DetectTcpAppDetailed(int srcPort, int dstPort, byte[] data, int dataLen, string srcAddr, string dstAddr)
     {
-        if (data == null || data.Length == 0)
+        if (data == null || dataLen <= 0)
             return null;
+        if (dataLen > data.Length) dataLen = data.Length;
 
         // DNS over TCP (port 53): 2-byte length prefix + DNS message. Detected by port before
         // the content-based HTTP/TLS probes so it isn't misclassified.
         if (srcPort == 53 || dstPort == 53)
         {
-            string dns = DetectTcpDns(data, data.Length, srcPort, dstPort, true);
+            string dns = DetectTcpDns(data, dataLen, srcPort, dstPort, true);
             if (dns != null) return dns;
         }
 
-        if ((srcPort == 445 || dstPort == 445) && Smb2Parser.IsSmb2Packet(data, srcPort, dstPort))
+        if ((srcPort == 445 || dstPort == 445) && Smb2Parser.IsSmb2Packet(data, dataLen, srcPort, dstPort))
         {
             // IPv6 path (or any case where the IPv4 early gate didn't run):
             // evaluate the predicate inline so the same drop semantics apply
@@ -1831,7 +1881,7 @@ public static class PacketLineFormatter
             if (_smb2Predicate != null)
             {
                 Smb2Context sctx;
-                if (Smb2Parser.TryParseSmb2Header(data, srcPort, dstPort, out sctx))
+                if (Smb2Parser.TryParseSmb2Header(data, dataLen, srcPort, dstPort, out sctx))
                 {
                     if (!_smb2Predicate.Evaluate(ref sctx)) return FilteredByPredicate;
                 }
@@ -1840,11 +1890,16 @@ public static class PacketLineFormatter
                     return FilteredByPredicate;
                 }
             }
-            return Smb2Parser.FormatSmb2Detailed(data, srcPort, dstPort);
+            return Smb2Parser.FormatSmb2Detailed(data, dataLen, srcPort, dstPort);
         }
 
-        if (LooksLikeHttp(data))
+        if (HttpParser.LooksLikeHttp(data, dataLen))
         {
+            // Build the correlation key now that we know the payload is HTTP (order-independent
+            // so a request and its response map to the same key).
+            string connKey = (srcAddr != null && dstAddr != null)
+                ? HttpParser.BuildConnKey(srcAddr, srcPort, dstAddr, dstPort) : null;
+
             // IPv4 fast path: predicate already ran in FormatSinglePacketInto and
             // stashed the parsed context here. Format from cache to avoid a re-parse.
             if (_httpCtxCacheValid)
@@ -1859,7 +1914,7 @@ public static class PacketLineFormatter
             if (_httpPredicate != null)
             {
                 HttpContext hctx;
-                if (HttpParser.TryParseHttp(data, out hctx))
+                if (HttpParser.TryParseHttp(data, dataLen, out hctx))
                 {
                     if (!_httpPredicate.Evaluate(ref hctx)) return FilteredByPredicate;
                     return HttpParser.FormatHttpFromContext(ref hctx, connKey);
@@ -1867,17 +1922,17 @@ public static class PacketLineFormatter
                 // Unparseable HTTP payload — fall through to the legacy detailed formatter.
             }
 
-            return FormatHttpDetailed(data);
+            return FormatHttpDetailed(data, dataLen, connKey);
         }
 
-        if (LooksLikeTls(data))
+        if (TlsParser.LooksLikeTls(data, dataLen))
         {
             // IPv4 fast path: predicate already ran in FormatSinglePacketInto and
             // stashed the parsed context here. Format from cache to avoid a re-parse.
             if (_tlsCtxCacheValid)
             {
                 _tlsCtxCacheValid = false;
-                return TlsParser.FormatTlsFromContext(ref _tlsCtxCache, data.Length);
+                return TlsParser.FormatTlsFromContext(ref _tlsCtxCache, dataLen);
             }
 
             // IPv6 path (or any case where the early gate didn't run): evaluate inline.
@@ -1886,16 +1941,16 @@ public static class PacketLineFormatter
             if (_tlsPredicate != null)
             {
                 TlsContext tctx;
-                if (TlsParser.TryParseTls(data, out tctx))
+                if (TlsParser.TryParseTls(data, dataLen, out tctx))
                 {
                     if (!_tlsPredicate.Evaluate(ref tctx)) return FilteredByPredicate;
-                    return TlsParser.FormatTlsFromContext(ref tctx, data.Length);
+                    return TlsParser.FormatTlsFromContext(ref tctx, dataLen);
                 }
                 // Unparseable TLS payload — fall through to whatever the legacy
                 // FormatTlsDetailed returns (will also be null in practice).
             }
 
-            return FormatTlsDetailed(data);
+            return FormatTlsDetailed(data, dataLen);
         }
 
         return null;
@@ -1903,8 +1958,14 @@ public static class PacketLineFormatter
 
     private static string DetectUdpAppDetailed(int srcPort, int dstPort, byte[] data)
     {
-        if (data == null || data.Length == 0)
+        return DetectUdpAppDetailed(srcPort, dstPort, data, data == null ? 0 : data.Length);
+    }
+
+    private static string DetectUdpAppDetailed(int srcPort, int dstPort, byte[] data, int dataLen)
+    {
+        if (data == null || dataLen <= 0)
             return null;
+        if (dataLen > data.Length) dataLen = data.Length;
 
         if (srcPort == 53 || dstPort == 53 || srcPort == 5353 || dstPort == 5353)
         {
@@ -1923,7 +1984,7 @@ public static class PacketLineFormatter
             if (_dnsPredicate != null)
             {
                 DnsContext dctx;
-                if (DnsParser.TryParseDns(data, srcPort, dstPort, out dctx))
+                if (DnsParser.TryParseDns(data, dataLen, srcPort, dstPort, out dctx))
                 {
                     if (!_dnsPredicate.Evaluate(ref dctx)) return FilteredByPredicate;
                     return DnsParser.FormatDnsFromContext(ref dctx, true);
@@ -1933,7 +1994,7 @@ public static class PacketLineFormatter
                 // best-effort formatter below; it will likely return null too.
             }
 
-            return DnsParser.FormatDnsSegment(data, srcPort, dstPort, true);
+            return DnsParser.FormatDnsSegment(data, dataLen, srcPort, dstPort, true);
         }
 
         if (srcPort == 67 || srcPort == 68 || dstPort == 67 || dstPort == 68 ||
@@ -1954,7 +2015,7 @@ public static class PacketLineFormatter
             if (_dhcpPredicate != null)
             {
                 DhcpContext dhctx;
-                if (DhcpParser.TryParseDhcp(data, srcPort, dstPort, out dhctx))
+                if (DhcpParser.TryParseDhcp(data, dataLen, srcPort, dstPort, out dhctx))
                 {
                     if (!_dhcpPredicate.Evaluate(ref dhctx)) return FilteredByPredicate;
                     return DhcpParser.FormatDhcpFromContext(ref dhctx);
@@ -1962,7 +2023,7 @@ public static class PacketLineFormatter
                 if (!_dhcpPredicate.MatchTruncated) return FilteredByPredicate;
             }
 
-            return FormatDhcpDetailed(data, srcPort, dstPort);
+            return FormatDhcpDetailed(data, dataLen, srcPort, dstPort);
         }
 
         return null;
@@ -1973,14 +2034,14 @@ public static class PacketLineFormatter
         return HttpParser.LooksLikeHttp(data);
     }
 
-    private static string FormatHttpDetailed(byte[] data)
+    private static string FormatHttpDetailed(byte[] data, int dataLen, string connKey)
     {
         // Delegates to HttpParser. The single-call entry-point is preserved so the
         // FormatDetailedLineInto TCP branch (which doesn't have access to the
         // cached HttpContext from the IPv4 fast-path gate) keeps working unchanged.
         HttpContext ctx;
-        if (!HttpParser.TryParseHttp(data, out ctx)) return null;
-        return HttpParser.FormatHttpFromContext(ref ctx);
+        if (!HttpParser.TryParseHttp(data, dataLen, out ctx)) return null;
+        return HttpParser.FormatHttpFromContext(ref ctx, connKey);
     }
 
     private static bool LooksLikeTls(byte[] data)
@@ -1988,14 +2049,14 @@ public static class PacketLineFormatter
         return TlsParser.LooksLikeTls(data);
     }
 
-    private static string FormatTlsDetailed(byte[] data)
+    private static string FormatTlsDetailed(byte[] data, int dataLen)
     {
         // Delegates to TlsParser. The single-call entry-point is preserved so the
         // FormatDetailedLineInto TCP branch (which doesn't have access to the
         // cached TlsContext from the IPv4 fast-path gate) keeps working unchanged.
         TlsContext ctx;
-        if (!TlsParser.TryParseTls(data, out ctx)) return null;
-        return TlsParser.FormatTlsFromContext(ref ctx, data == null ? 0 : data.Length);
+        if (!TlsParser.TryParseTls(data, dataLen, out ctx)) return null;
+        return TlsParser.FormatTlsFromContext(ref ctx, dataLen);
     }
 
     private static string ExtractTlsSni(byte[] data)
@@ -2008,11 +2069,16 @@ public static class PacketLineFormatter
 
     private static string FormatDhcpDetailed(byte[] data, int srcPort, int dstPort)
     {
+        return FormatDhcpDetailed(data, data == null ? 0 : data.Length, srcPort, dstPort);
+    }
+
+    private static string FormatDhcpDetailed(byte[] data, int dataLen, int srcPort, int dstPort)
+    {
         // Delegates to DhcpParser. Kept as a single-call entry-point so the
         // FormatDetailedLineInto UDP branch (which doesn't have access to the
         // cached DhcpContext from the IPv4 fast-path gate) keeps working unchanged.
         DhcpContext ctx;
-        if (!DhcpParser.TryParseDhcp(data, srcPort, dstPort, out ctx)) return null;
+        if (!DhcpParser.TryParseDhcp(data, dataLen, srcPort, dstPort, out ctx)) return null;
         return DhcpParser.FormatDhcpFromContext(ref ctx);
     }
 
@@ -2450,8 +2516,11 @@ public static class PacketLineFormatter
         else // Ethernet (default)
         {
             linkKind = 1;
-            // Only format MAC addresses for Default mode (Minimal doesn't display them)
-            if (_detailLevel >= 0)
+            // Only format MAC addresses when they'll actually be displayed: Default/Detailed
+            // non-text-box output. Minimal (level -1) omits them, and Analysis text-box mode
+            // shows only "Eth" on the scrolling line (the Details tree re-parses MACs from the
+            // retained bytes), so formatting them here would be pure throwaway work.
+            if (_detailLevel >= 0 && !_textBoxMode)
             {
                 srcMac = PacketParseHelper.FormatMac(raw, rawOffset + 6);
                 dstMac = PacketParseHelper.FormatMac(raw, rawOffset + 0);
@@ -2644,7 +2713,7 @@ public static class PacketLineFormatter
             && DhcpParser.IsDhcpPort(srcPort, dstPort))
         {
             DhcpContext dhctx;
-            if (DhcpParser.TryParseDhcp(transportPayload, srcPort, dstPort, out dhctx))
+            if (DhcpParser.TryParseDhcp(transportPayload, dataLen, srcPort, dstPort, out dhctx))
             {
                 if (!_dhcpPredicate.Evaluate(ref dhctx)) return false;
                 _dhcpCtxCache = dhctx;
@@ -2670,7 +2739,7 @@ public static class PacketLineFormatter
             && (TlsParser.IsTlsPort(srcPort) || TlsParser.IsTlsPort(dstPort)))
         {
             TlsContext tctx;
-            if (TlsParser.TryParseTls(transportPayload, out tctx))
+            if (TlsParser.TryParseTls(transportPayload, dataLen, out tctx))
             {
                 if (!_tlsPredicate.Evaluate(ref tctx)) return false;
                 _tlsCtxCache = tctx;
@@ -2695,7 +2764,7 @@ public static class PacketLineFormatter
             && (HttpParser.IsHttpPort(srcPort) || HttpParser.IsHttpPort(dstPort)))
         {
             HttpContext hctx;
-            if (HttpParser.TryParseHttp(transportPayload, out hctx))
+            if (HttpParser.TryParseHttp(transportPayload, dataLen, out hctx))
             {
                 if (!_httpPredicate.Evaluate(ref hctx)) return false;
                 _httpCtxCache = hctx;
@@ -2718,7 +2787,7 @@ public static class PacketLineFormatter
             && (srcPort == 445 || dstPort == 445))
         {
             Smb2Context sctx;
-            if (Smb2Parser.TryParseSmb2Header(transportPayload, srcPort, dstPort, out sctx))
+            if (Smb2Parser.TryParseSmb2Header(transportPayload, dataLen, srcPort, dstPort, out sctx))
             {
                 if (!_smb2Predicate.Evaluate(ref sctx)) return false;
             }

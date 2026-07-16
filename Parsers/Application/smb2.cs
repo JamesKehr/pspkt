@@ -20,7 +20,7 @@ public struct Smb2Context
 {
     /// <summary>True when the SMB2 header (or Transform header) was parsed successfully.</summary>
     public bool   Valid;
-    /// <summary>True when the per-command body extraction (filename / tree path) was started but couldn't be completed within data.Length.</summary>
+    /// <summary>True when the per-command body extraction (filename / tree path) was started but couldn't be completed within the valid payload length.</summary>
     public bool   Truncated;
     /// <summary>True for SMB2 Transform-header (encrypted) packets. Other fields are largely unavailable when set.</summary>
     public bool   IsEncrypted;
@@ -200,7 +200,16 @@ public static class Smb2Parser
     /// </summary>
     public static bool IsSmb2Packet(byte[] data, int srcPort, int dstPort)
     {
-        if (data == null || data.Length < 4) return false;
+        return IsSmb2Packet(data, data != null ? data.Length : 0, srcPort, dstPort);
+    }
+
+    public static bool IsSmb2Packet(byte[] data, int dataLen, int srcPort, int dstPort)
+    {
+        int len = dataLen;
+        if (data == null) len = 0;
+        else if (len > data.Length) len = data.Length;
+
+        if (data == null || len < 4) return false;
         if (srcPort != 445 && dstPort != 445) return false;
 
         // Check for direct SMB2 magic at offset 0 (unlikely but possible in reassembled segments)
@@ -208,7 +217,7 @@ public static class Smb2Parser
         if (magic == SMB2_MAGIC || magic == SMB2_TRANSFORM_MAGIC) return true;
 
         // Direct TCP framing: first byte 0x00, next 3 bytes = big-endian length, then SMB2 magic
-        if (data.Length >= 8 && data[0] == 0x00)
+        if (len >= 8 && data[0] == 0x00)
         {
             magic = (uint)(data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24));
             if (magic == SMB2_MAGIC || magic == SMB2_TRANSFORM_MAGIC) return true;
@@ -223,12 +232,21 @@ public static class Smb2Parser
     /// </summary>
     public static string FormatSmb2Segment(byte[] data, int srcPort, int dstPort)
     {
-        if (data == null || data.Length < 4) return null;
+        return FormatSmb2Segment(data, data != null ? data.Length : 0, srcPort, dstPort);
+    }
+
+    public static string FormatSmb2Segment(byte[] data, int dataLen, int srcPort, int dstPort)
+    {
+        int len = dataLen;
+        if (data == null) len = 0;
+        else if (len > data.Length) len = data.Length;
+
+        if (data == null || len < 4) return null;
 
         int offset = 0;
 
         // Skip Direct TCP framing header (4 bytes: 0x00 + 3-byte BE length) if present
-        if (data[0] == 0x00 && data.Length >= 8)
+        if (data[0] == 0x00 && len >= 8)
         {
             uint probe = (uint)(data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24));
             if (probe == SMB2_MAGIC || probe == SMB2_TRANSFORM_MAGIC)
@@ -238,20 +256,20 @@ public static class Smb2Parser
         }
 
         // Check magic at current offset
-        if (data.Length < offset + 4) return null;
+        if (len < offset + 4) return null;
         uint headerMagic = (uint)(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24));
 
         // Encrypted (transform header)
         if (headerMagic == SMB2_TRANSFORM_MAGIC)
         {
-            if (data.Length < offset + 52) return "SMB2 Encrypted";
+            if (len < offset + 52) return "SMB2 Encrypted";
             uint msgSize = ReadUInt32LE(data, offset + 4);
             ulong sessId = ReadUInt64LE(data, offset + 44);
             return "SMB2 Encrypted, SessId 0x" + sessId.ToString("x") + ", len " + msgSize.ToString();
         }
 
         if (headerMagic != SMB2_MAGIC) return null;
-        if (data.Length < offset + 64) return null;
+        if (len < offset + 64) return null;
 
         // Parse header
         ushort structSize = ReadUInt16LE(data, offset + 4);
@@ -297,11 +315,11 @@ public static class Smb2Parser
 
         // Command-specific details
         int bodyOffset = offset + 64;
-        int bodyLen = data.Length - bodyOffset;
+        int bodyLen = len - bodyOffset;
 
         if (bodyLen >= 2)
         {
-            AppendCommandDetails(sb, data, bodyOffset, bodyLen, command, isResponse, offset);
+            AppendCommandDetails(sb, data, len, bodyOffset, bodyLen, command, isResponse, offset);
         }
 
         // Compounded indicator
@@ -309,7 +327,7 @@ public static class Smb2Parser
         {
             sb.Append(" [+]");
             // Count compounded messages
-            int compCount = CountCompounded(data, offset, nextCommand);
+            int compCount = CountCompounded(data, len, offset, nextCommand);
             if (compCount > 0)
                 sb.Append(compCount.ToString());
         }
@@ -325,30 +343,39 @@ public static class Smb2Parser
     /// </summary>
     public static string FormatSmb2Detailed(byte[] data, int srcPort, int dstPort)
     {
-        if (data == null || data.Length < 4) return null;
+        return FormatSmb2Detailed(data, data != null ? data.Length : 0, srcPort, dstPort);
+    }
+
+    public static string FormatSmb2Detailed(byte[] data, int dataLen, int srcPort, int dstPort)
+    {
+        int len = dataLen;
+        if (data == null) len = 0;
+        else if (len > data.Length) len = data.Length;
+
+        if (data == null || len < 4) return null;
 
         int offset = 0;
-        if (data[0] == 0x00 && data.Length >= 8)
+        if (data[0] == 0x00 && len >= 8)
         {
             uint probe = (uint)(data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24));
             if (probe == SMB2_MAGIC || probe == SMB2_TRANSFORM_MAGIC)
                 offset = 4;
         }
 
-        if (data.Length < offset + 4) return null;
+        if (len < offset + 4) return null;
         uint headerMagic = (uint)(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24));
 
         if (headerMagic == SMB2_TRANSFORM_MAGIC)
         {
-            if (data.Length < offset + 52) return "SMB2 Transform (Encrypted)";
+            if (len < offset + 52) return "SMB2 Transform (Encrypted)";
             uint msgSize = ReadUInt32LE(data, offset + 4);
             ulong sessId = ReadUInt64LE(data, offset + 44);
             return "SMB2 Encrypted - SessionId: 0x" + sessId.ToString("x16") +
                    ", OrigMsgSize: " + msgSize.ToString() + ", Nonce: " +
-                   FormatHexBytes(data, offset + 20, 16);
+                   FormatHexBytes(data, len, offset + 20, 16);
         }
 
-        if (headerMagic != SMB2_MAGIC || data.Length < offset + 64) return null;
+        if (headerMagic != SMB2_MAGIC || len < offset + 64) return null;
 
         ushort command = ReadUInt16LE(data, offset + 12);
         uint flags = ReadUInt32LE(data, offset + 16);
@@ -394,10 +421,10 @@ public static class Smb2Parser
 
         // Command body details
         int bodyOffset = offset + 64;
-        int bodyLen = data.Length - bodyOffset;
+        int bodyLen = len - bodyOffset;
         if (bodyLen >= 2)
         {
-            string details = GetDetailedCommandInfo(data, bodyOffset, bodyLen, command, isResponse, offset);
+            string details = GetDetailedCommandInfo(data, len, bodyOffset, bodyLen, command, isResponse, offset);
             if (details != null)
             {
                 sb.Append("; ").Append(details);
@@ -411,7 +438,7 @@ public static class Smb2Parser
     // Command-specific detail appenders (segment/summary line)
     // -----------------------------------------------------------------------
 
-    private static void AppendCommandDetails(StringBuilder sb, byte[] data, int bodyOff, int bodyLen,
+    private static void AppendCommandDetails(StringBuilder sb, byte[] data, int dataLen, int bodyOff, int bodyLen,
         ushort command, bool isResponse, int headerStart)
     {
         switch (command)
@@ -423,10 +450,10 @@ public static class Smb2Parser
                 AppendSessionSetupDetails(sb, data, bodyOff, bodyLen, isResponse);
                 break;
             case 0x0003: // TREE_CONNECT
-                AppendTreeConnectDetails(sb, data, bodyOff, bodyLen, isResponse, headerStart);
+                AppendTreeConnectDetails(sb, data, dataLen, bodyOff, bodyLen, isResponse, headerStart);
                 break;
             case 0x0005: // CREATE
-                AppendCreateDetails(sb, data, bodyOff, bodyLen, isResponse, headerStart);
+                AppendCreateDetails(sb, data, dataLen, bodyOff, bodyLen, isResponse, headerStart);
                 break;
             case 0x0008: // READ
                 AppendReadDetails(sb, data, bodyOff, bodyLen, isResponse);
@@ -438,7 +465,7 @@ public static class Smb2Parser
                 AppendIoctlDetails(sb, data, bodyOff, bodyLen, isResponse);
                 break;
             case 0x000E: // QUERY_DIRECTORY
-                AppendQueryDirectoryDetails(sb, data, bodyOff, bodyLen, isResponse, headerStart);
+                AppendQueryDirectoryDetails(sb, data, dataLen, bodyOff, bodyLen, isResponse, headerStart);
                 break;
             case 0x0010: // QUERY_INFO
                 AppendQueryInfoDetails(sb, data, bodyOff, bodyLen, isResponse);
@@ -500,14 +527,14 @@ public static class Smb2Parser
         }
     }
 
-    private static void AppendTreeConnectDetails(StringBuilder sb, byte[] data, int off, int len, bool isResponse, int headerStart)
+    private static void AppendTreeConnectDetails(StringBuilder sb, byte[] data, int dataLen, int off, int len, bool isResponse, int headerStart)
     {
         if (!isResponse && len >= 8)
         {
             // Request: PathOffset at off+4, PathLength at off+6
             ushort pathOffset = ReadUInt16LE(data, off + 4);
             ushort pathLength = ReadUInt16LE(data, off + 6);
-            string path = ExtractUnicodeString(data, headerStart + pathOffset, pathLength);
+            string path = ExtractUnicodeString(data, dataLen, headerStart + pathOffset, pathLength);
             if (path != null)
             {
                 if (path.Length > 60) path = path.Substring(0, 57) + "...";
@@ -527,14 +554,14 @@ public static class Smb2Parser
         }
     }
 
-    private static void AppendCreateDetails(StringBuilder sb, byte[] data, int off, int len, bool isResponse, int headerStart)
+    private static void AppendCreateDetails(StringBuilder sb, byte[] data, int dataLen, int off, int len, bool isResponse, int headerStart)
     {
         if (!isResponse && len >= 56)
         {
             // Request: NameOffset at off+44, NameLength at off+46
             ushort nameOffset = ReadUInt16LE(data, off + 44);
             ushort nameLength = ReadUInt16LE(data, off + 46);
-            string filename = ExtractUnicodeString(data, headerStart + nameOffset, nameLength);
+            string filename = ExtractUnicodeString(data, dataLen, headerStart + nameOffset, nameLength);
             if (filename != null)
             {
                 if (filename.Length > 60) filename = filename.Substring(0, 57) + "...";
@@ -616,7 +643,7 @@ public static class Smb2Parser
         }
     }
 
-    private static void AppendQueryDirectoryDetails(StringBuilder sb, byte[] data, int off, int len, bool isResponse, int headerStart)
+    private static void AppendQueryDirectoryDetails(StringBuilder sb, byte[] data, int dataLen, int off, int len, bool isResponse, int headerStart)
     {
         if (!isResponse && len >= 32)
         {
@@ -624,7 +651,7 @@ public static class Smb2Parser
             byte infoClass = data[off + 2];
             ushort nameOffset = ReadUInt16LE(data, off + 24);
             ushort nameLength = ReadUInt16LE(data, off + 26);
-            string pattern = ExtractUnicodeString(data, headerStart + nameOffset, nameLength);
+            string pattern = ExtractUnicodeString(data, dataLen, headerStart + nameOffset, nameLength);
             if (pattern != null)
             {
                 if (pattern.Length > 40) pattern = pattern.Substring(0, 37) + "...";
@@ -686,13 +713,13 @@ public static class Smb2Parser
     // Detailed mode command info
     // -----------------------------------------------------------------------
 
-    private static string GetDetailedCommandInfo(byte[] data, int off, int len, ushort command, bool isResponse, int headerStart)
+    private static string GetDetailedCommandInfo(byte[] data, int dataLen, int off, int len, ushort command, bool isResponse, int headerStart)
     {
         switch (command)
         {
             case 0x0000: return GetNegotiateDetail(data, off, len, isResponse);
-            case 0x0003: return GetTreeConnectDetail(data, off, len, isResponse, headerStart);
-            case 0x0005: return GetCreateDetail(data, off, len, isResponse, headerStart);
+            case 0x0003: return GetTreeConnectDetail(data, dataLen, off, len, isResponse, headerStart);
+            case 0x0005: return GetCreateDetail(data, dataLen, off, len, isResponse, headerStart);
             case 0x0008: return GetReadWriteDetail(data, off, len, isResponse, "Read");
             case 0x0009: return GetReadWriteDetail(data, off, len, isResponse, "Write");
             case 0x000B: return GetIoctlDetail(data, off, len, isResponse);
@@ -729,13 +756,13 @@ public static class Smb2Parser
         return null;
     }
 
-    private static string GetTreeConnectDetail(byte[] data, int off, int len, bool isResponse, int headerStart)
+    private static string GetTreeConnectDetail(byte[] data, int dataLen, int off, int len, bool isResponse, int headerStart)
     {
         if (!isResponse && len >= 8)
         {
             ushort pathOffset = ReadUInt16LE(data, off + 4);
             ushort pathLength = ReadUInt16LE(data, off + 6);
-            string path = ExtractUnicodeString(data, headerStart + pathOffset, pathLength);
+            string path = ExtractUnicodeString(data, dataLen, headerStart + pathOffset, pathLength);
             if (path != null) return "Path: " + path;
         }
         else if (isResponse && len >= 8)
@@ -748,13 +775,13 @@ public static class Smb2Parser
         return null;
     }
 
-    private static string GetCreateDetail(byte[] data, int off, int len, bool isResponse, int headerStart)
+    private static string GetCreateDetail(byte[] data, int dataLen, int off, int len, bool isResponse, int headerStart)
     {
         if (!isResponse && len >= 56)
         {
             ushort nameOffset = ReadUInt16LE(data, off + 44);
             ushort nameLength = ReadUInt16LE(data, off + 46);
-            string filename = ExtractUnicodeString(data, headerStart + nameOffset, nameLength);
+            string filename = ExtractUnicodeString(data, dataLen, headerStart + nameOffset, nameLength);
             uint desiredAccess = ReadUInt32LE(data, off + 24);
             uint disp = ReadUInt32LE(data, off + 36);
             uint options = ReadUInt32LE(data, off + 40);
@@ -909,11 +936,11 @@ public static class Smb2Parser
         return sb.ToString();
     }
 
-    private static int CountCompounded(byte[] data, int firstOffset, uint nextCommand)
+    private static int CountCompounded(byte[] data, int dataLen, int firstOffset, uint nextCommand)
     {
         int count = 0;
         int pos = firstOffset + (int)nextCommand;
-        while (pos + 64 <= data.Length && count < 20)
+        while (pos + 64 <= dataLen && count < 20)
         {
             uint magic = (uint)(data[pos] | (data[pos + 1] << 8) | (data[pos + 2] << 16) | (data[pos + 3] << 24));
             if (magic != SMB2_MAGIC) break;
@@ -925,9 +952,9 @@ public static class Smb2Parser
         return count;
     }
 
-    private static string ExtractUnicodeString(byte[] data, int offset, int length)
+    private static string ExtractUnicodeString(byte[] data, int dataLen, int offset, int length)
     {
-        if (offset < 0 || length <= 0 || offset + length > data.Length) return null;
+        if (offset < 0 || length <= 0 || offset + length > dataLen) return null;
         try
         {
             return Encoding.Unicode.GetString(data, offset, length);
@@ -952,9 +979,9 @@ public static class Smb2Parser
         return "0x" + offset.ToString("x");
     }
 
-    private static string FormatHexBytes(byte[] data, int offset, int count)
+    private static string FormatHexBytes(byte[] data, int dataLen, int offset, int count)
     {
-        if (offset + count > data.Length) count = data.Length - offset;
+        if (offset + count > dataLen) count = dataLen - offset;
         StringBuilder sb = new StringBuilder(count * 2);
         for (int i = 0; i < count; i++)
             sb.Append(data[offset + i].ToString("x2"));
@@ -995,18 +1022,27 @@ public static class Smb2Parser
     /// </summary>
     public static bool TryParseSmb2Header(byte[] data, int srcPort, int dstPort, out Smb2Context ctx)
     {
+        return TryParseSmb2Header(data, data != null ? data.Length : 0, srcPort, dstPort, out ctx);
+    }
+
+    public static bool TryParseSmb2Header(byte[] data, int dataLen, int srcPort, int dstPort, out Smb2Context ctx)
+    {
+        int len = dataLen;
+        if (data == null) len = 0;
+        else if (len > data.Length) len = data.Length;
+
         ctx = default(Smb2Context);
-        if (!IsSmb2Packet(data, srcPort, dstPort)) return false;
+        if (!IsSmb2Packet(data, len, srcPort, dstPort)) return false;
 
         // Same Direct TCP framing skip as the formatters.
         int offset = 0;
-        if (data[0] == 0x00 && data.Length >= 8)
+        if (data[0] == 0x00 && len >= 8)
         {
             uint probe = (uint)(data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24));
             if (probe == SMB2_MAGIC || probe == SMB2_TRANSFORM_MAGIC)
                 offset = 4;
         }
-        if (data.Length < offset + 4) return false;
+        if (len < offset + 4) return false;
         uint headerMagic = (uint)(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24));
 
         // Transform header — only the session ID is reachable; everything else
@@ -1014,7 +1050,7 @@ public static class Smb2Parser
         if (headerMagic == SMB2_TRANSFORM_MAGIC)
         {
             ctx.IsEncrypted = true;
-            if (data.Length >= offset + 52)
+            if (len >= offset + 52)
             {
                 ctx.SessionId = ReadUInt64LE(data, offset + 44);
             }
@@ -1023,7 +1059,7 @@ public static class Smb2Parser
         }
 
         if (headerMagic != SMB2_MAGIC) return false;
-        if (data.Length < offset + 64) return false;
+        if (len < offset + 64) return false;
         ushort structSize = ReadUInt16LE(data, offset + 4);
         if (structSize != 64) return false;
 
@@ -1038,7 +1074,7 @@ public static class Smb2Parser
         ctx.IsCompounded = nextCommand != 0;
 
         int bodyOff = offset + 64;
-        int bodyLen = data.Length - bodyOff;
+        int bodyLen = len - bodyOff;
 
         // Per-command extraction for the only two predicate-relevant fields.
         // Layouts mirror the existing formatter extractions verbatim so behavior
@@ -1050,9 +1086,9 @@ public static class Smb2Parser
                 ushort nameOffset = ReadUInt16LE(data, bodyOff + 44);
                 ushort nameLength = ReadUInt16LE(data, bodyOff + 46);
                 int absStart = offset + nameOffset;
-                if (nameLength > 0 && absStart >= 0 && absStart + nameLength <= data.Length)
+                if (nameLength > 0 && absStart >= 0 && absStart + nameLength <= len)
                 {
-                    ctx.Filename = DecodeUtf16Le(data, absStart, nameLength);
+                    ctx.Filename = DecodeUtf16Le(data, len, absStart, nameLength);
                 }
                 else if (nameLength > 0)
                 {
@@ -1064,9 +1100,9 @@ public static class Smb2Parser
                 ushort pathOffset = ReadUInt16LE(data, bodyOff + 4);
                 ushort pathLength = ReadUInt16LE(data, bodyOff + 6);
                 int absStart = offset + pathOffset;
-                if (pathLength > 0 && absStart >= 0 && absStart + pathLength <= data.Length)
+                if (pathLength > 0 && absStart >= 0 && absStart + pathLength <= len)
                 {
-                    ctx.TreePath = DecodeUtf16Le(data, absStart, pathLength);
+                    ctx.TreePath = DecodeUtf16Le(data, len, absStart, pathLength);
                 }
                 else if (pathLength > 0)
                 {
@@ -1081,10 +1117,10 @@ public static class Smb2Parser
 
     // Standalone UTF-16LE decoder — does not require access to ExtractUnicodeString's
     // private state. Stops on first NUL pair to match the existing formatter behavior.
-    private static string DecodeUtf16Le(byte[] data, int offset, int length)
+    private static string DecodeUtf16Le(byte[] data, int dataLen, int offset, int length)
     {
         if (data == null || length <= 0) return null;
-        if (offset < 0 || offset + length > data.Length) return null;
+        if (offset < 0 || offset + length > dataLen) return null;
         // Length is in bytes; ensure even.
         int byteLen = length & ~1;
         if (byteLen == 0) return string.Empty;
