@@ -987,8 +987,7 @@ public static class PacketLineFormatter
                     optLen = tcpDataOffset - 20;
                 }
                 transportDetail = TcpParser.FormatTcpDetailed(tcpFlags, (ushort)srcPort, (ushort)dstPort, tcpSeq, tcpAck, tcpWin, dataLen, rawPacketData, optOffset >= 0 ? optOffset : 0, optLen);
-                appDetail = DetectTcpAppDetailed(srcPort, dstPort, transportPayload, dataLen,
-                    HttpParser.BuildConnKey(srcAddr, srcPort, dstAddr, dstPort));
+                appDetail = DetectTcpAppDetailed(srcPort, dstPort, transportPayload, dataLen, srcAddr, dstAddr);
             }
             else if (protoKind == 3)
             {
@@ -1086,8 +1085,7 @@ public static class PacketLineFormatter
                     Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + ipv6DataOffset, ipv6Payload, 0, payloadLen);
                     ipv6PayLen = payloadLen;
                 }
-                appDetail = DetectTcpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload, ipv6PayLen,
-                    HttpParser.BuildConnKey(ipv6Src, ipv6SrcPort, ipv6Dst, ipv6DstPort));
+                appDetail = DetectTcpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload, ipv6PayLen, ipv6Src, ipv6Dst);
             }
             else if (haveUpper && upperProto == 17 && ipv6TransportLength >= 8)
             {
@@ -1180,9 +1178,20 @@ public static class PacketLineFormatter
 
     private static string FormatComponentPrefixInternal(int compId, int edgeId, int lineCounter)
     {
+        // Steady-state fast path: on a cache hit the fully-built prefix is returned without
+        // touching the component map (compName/parentId are only needed to build on a miss).
+        // In text-box (Analysis) mode the component name is omitted from the scrolling line —
+        // it's shown in the Details box instead — so the prefix is the compact
+        // "GGG:CCC[dir edge]" form. See BoxyBox TUI spec.
+        bool includeName = !_textBoxMode;
+        string cachedPrefix;
+        if (PacketFormatter.TryGetCachedComponentPrefix(compId, lineCounter, edgeId, _currentDirection, includeName, out cachedPrefix))
+        {
+            return cachedPrefix;
+        }
+
         string compName = "";
         int parentId = 0;
-
         ComponentInfo info;
         if (_componentMap.TryGetValue(compId, out info))
         {
@@ -1190,10 +1199,7 @@ public static class PacketLineFormatter
             parentId = info.ParentId;
         }
 
-        // In text-box (Analysis) mode the component name is omitted from the scrolling
-        // line — it's shown in the Details box instead — so the prefix is the compact
-        // "GGG:CCC[dir edge]" form. See BoxyBox TUI spec.
-        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection, !_textBoxMode);
+        return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection, includeName);
     }
 
     private static string FormatDataLinkInternal(int linkKind, string srcMac, string dstMac, int etherType, int rawLen)
@@ -1227,13 +1233,17 @@ public static class PacketLineFormatter
     {
         // The network tuple is always prefixed with the network-layer name (IPv4 here),
         // including ICMP.
-        string netSrc = "IPv4 " + srcAddr;
+        // Network-layer label for the tuple. Built lazily per-branch: TCP/UDP use the
+        // "IPv4.TCP"/"IPv4.UDP" form (assigned below), while ICMP and the fallback append the
+        // plain "IPv4 " form inline — so the common TCP/UDP path never allocates the unused
+        // "IPv4 " concat.
+        string netSrc = null;
 
         // ICMP
         if (protoKind == 1)
         {
             StringBuilder sb = new StringBuilder(96);
-            sb.Append(netSrc).Append(" > ").Append(dstAddr).Append(": ");
+            sb.Append("IPv4 ").Append(srcAddr).Append(" > ").Append(dstAddr).Append(": ");
             if (icmpType == 0 || icmpType == 8)
             {
                 sb.Append("ICMP echo ").Append(icmpType == 8 ? "request" : "reply")
@@ -1343,7 +1353,7 @@ public static class PacketLineFormatter
 
         // Fallback (non-TCP/UDP/ICMP IP payload) — still prefixed with the network name.
         StringBuilder fsb = new StringBuilder(64);
-        fsb.Append(netSrc).Append(" > ").Append(dstAddr);
+        fsb.Append("IPv4 ").Append(srcAddr).Append(" > ").Append(dstAddr);
         return PacketFormatter.FormatNetworkOnly(fsb.ToString(), lineCounter);
     }
 
@@ -1813,10 +1823,14 @@ public static class PacketLineFormatter
 
     private static string DetectTcpAppDetailed(int srcPort, int dstPort, byte[] data)
     {
-        return DetectTcpAppDetailed(srcPort, dstPort, data, data == null ? 0 : data.Length, null);
+        return DetectTcpAppDetailed(srcPort, dstPort, data, data == null ? 0 : data.Length, null, null);
     }
 
-    private static string DetectTcpAppDetailed(int srcPort, int dstPort, byte[] data, int dataLen, string connKey)
+    // srcAddr/dstAddr are carried (instead of a pre-built connection key) so the HTTP
+    // request/response correlation key is only constructed when the payload is actually HTTP —
+    // avoiding 3 throwaway strings on every non-HTTP Detailed TCP segment (handshakes, TLS,
+    // SMB2, DNS-over-TCP, ACKs).
+    private static string DetectTcpAppDetailed(int srcPort, int dstPort, byte[] data, int dataLen, string srcAddr, string dstAddr)
     {
         if (data == null || dataLen <= 0)
             return null;
@@ -1855,6 +1869,11 @@ public static class PacketLineFormatter
 
         if (HttpParser.LooksLikeHttp(data, dataLen))
         {
+            // Build the correlation key now that we know the payload is HTTP (order-independent
+            // so a request and its response map to the same key).
+            string connKey = (srcAddr != null && dstAddr != null)
+                ? HttpParser.BuildConnKey(srcAddr, srcPort, dstAddr, dstPort) : null;
+
             // IPv4 fast path: predicate already ran in FormatSinglePacketInto and
             // stashed the parsed context here. Format from cache to avoid a re-parse.
             if (_httpCtxCacheValid)
@@ -2471,8 +2490,11 @@ public static class PacketLineFormatter
         else // Ethernet (default)
         {
             linkKind = 1;
-            // Only format MAC addresses for Default mode (Minimal doesn't display them)
-            if (_detailLevel >= 0)
+            // Only format MAC addresses when they'll actually be displayed: Default/Detailed
+            // non-text-box output. Minimal (level -1) omits them, and Analysis text-box mode
+            // shows only "Eth" on the scrolling line (the Details tree re-parses MACs from the
+            // retained bytes), so formatting them here would be pure throwaway work.
+            if (_detailLevel >= 0 && !_textBoxMode)
             {
                 srcMac = PacketParseHelper.FormatMac(raw, rawOffset + 6);
                 dstMac = PacketParseHelper.FormatMac(raw, rawOffset + 0);

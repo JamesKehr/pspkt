@@ -444,6 +444,42 @@ public static class PacketFormatter
     }
 
     /// <summary>
+    /// Component prefix cache-key bit layout (fields must not overlap — direction/edgeId come
+    /// straight from raw pktmon metadata and can carry values beyond the documented 1/2, so
+    /// each gets a full 4-bit field). Overlapping bits previously caused different
+    /// (direction, edgeId, compId) combinations to collide and return the wrong cached prefix.
+    ///   bit 0    : variant (0-1)
+    ///   bit 1    : includeName
+    ///   bits 2-5 : direction (0-15)
+    ///   bits 6-9 : edgeId    (0-15)
+    ///   bits 10+ : compId
+    /// </summary>
+    private static int ComponentCacheKey(int compId, int variant, int edgeId, int direction, bool includeName)
+    {
+        return variant | ((includeName ? 1 : 0) << 1) | ((direction & 0xF) << 2) | ((edgeId & 0xF) << 6) | (compId << 10);
+    }
+
+    /// <summary>
+    /// Fast path for the steady state: returns the cached component prefix without needing the
+    /// component name / parent id (which are only required to BUILD the string on a miss). Lets
+    /// the caller skip the per-packet component-map lookup on cache hits. Returns false on a
+    /// miss — the caller then resolves name/parent and calls <see cref="FormatComponentPrefix"/>.
+    /// </summary>
+    public static bool TryGetCachedComponentPrefix(int compId, int lineCounter, int edgeId, int direction, bool includeName, out string result)
+    {
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        int cacheKey = ComponentCacheKey(compId, variant, edgeId, direction, includeName);
+        string[] cached;
+        if (_compCache.TryGetValue(cacheKey, out cached))
+        {
+            result = cached[0];
+            return true;
+        }
+        result = null;
+        return false;
+    }
+
+    /// <summary>
     /// Formats the component prefix with Unicode arrow indicators for direction and edge.
     /// Full form:  "GGG:CCC[↑←](CompName        )" — CompName padded/truncated to a fixed
     /// width so the prefix length is identical for every packet (column alignment).
@@ -455,18 +491,7 @@ public static class PacketFormatter
     public static string FormatComponentPrefix(int parentId, int compId, string compName, int lineCounter, int edgeId, int direction, bool includeName)
     {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
-
-        // Cache key bit layout (must not overlap — direction/edgeId are read directly from
-        // raw pktmon metadata and can carry values beyond the 1/2 documented here, so each
-        // gets a full 4-bit field regardless). Overlapping bits previously caused different
-        // (direction, edgeId, compId) combinations to collide on the same cache key, which
-        // silently returned another component's cached — and therefore wrong — prefix string.
-        //   bit 0      : variant   (1 bit,  0-1)
-        //   bit 1      : includeName (1 bit)
-        //   bits 2-5   : direction (4 bits, 0-15)
-        //   bits 6-9   : edgeId    (4 bits, 0-15)
-        //   bits 10+   : compId
-        int cacheKey = variant | ((includeName ? 1 : 0) << 1) | ((direction & 0xF) << 2) | ((edgeId & 0xF) << 6) | (compId << 10);
+        int cacheKey = ComponentCacheKey(compId, variant, edgeId, direction, includeName);
         string[] cached;
         if (_compCache.TryGetValue(cacheKey, out cached))
         {

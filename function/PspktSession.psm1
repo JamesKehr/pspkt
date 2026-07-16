@@ -3515,10 +3515,14 @@ function Start-Pspkt {
 
                 # Scale the user-mode SPSC ring buffer with BufferSizeMultiplier as well.
                 # Base ring size is 1M entries; multiplier scales linearly with a sane cap.
+                # Use [long] for the product + clamp before the [int] cast: a large multiplier
+                # can push baseRingCap * multiplier past int.MaxValue, and casting an
+                # out-of-range double straight to [int] throws.
                 $baseRingCap = 1048576
-                $targetRingCap = [int]($baseRingCap * $BufferSizeMultiplier)
+                $targetRingCap = [long]$baseRingCap * [long]$BufferSizeMultiplier
                 if ($targetRingCap -lt $baseRingCap) { $targetRingCap = $baseRingCap }
                 if ($targetRingCap -gt 67108864) { $targetRingCap = 67108864 } # cap at 64M entries
+                $targetRingCap = [int]$targetRingCap
                 $appliedRingCap = [PktMonApi]::ConfigureRingBuffer($targetRingCap)
                 Write-Verbose "Ring buffer capacity: $appliedRingCap entries (multiplier=$BufferSizeMultiplier)"
 
@@ -4064,7 +4068,6 @@ function Start-Pspkt {
             Write-Host (Get-PspktCaptureHeader)
             # Lock component refresh during capture to prevent stalling the consumer.
             $script:ComponentRefreshLocked = $true
-            $sb = [System.Text.StringBuilder]::new(16384)
             $stream = $Session.OutputStream[0]
             $paused = $false
             $stopRequested = $false
