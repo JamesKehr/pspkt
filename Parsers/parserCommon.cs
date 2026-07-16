@@ -601,19 +601,31 @@ public static class PacketFormatter
     /// </summary>
     public static string FormatTransportLine(string src, int srcPort, string dst, int dstPort, string suffix, int suffixLayer, int lineCounter)
     {
+        StringBuilder sb = new StringBuilder(96);
+        AppendTransportLineInto(sb, src, srcPort, dst, dstPort, suffix, suffixLayer, lineCounter);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append-only variant of <see cref="FormatTransportLine"/>: writes the colored
+    /// "src.srcPort > dst.dstPort: suffix" line directly into <paramref name="sb"/> with no
+    /// intermediate concat string and no port int.ToString() allocations (StringBuilder's int
+    /// overload writes digits directly). Byte-for-byte identical to FormatTransportLine.
+    /// </summary>
+    public static void AppendTransportLineInto(StringBuilder sb, string src, int srcPort, string dst, int dstPort, string suffix, int suffixLayer, int lineCounter)
+    {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
         string netPfx = _prefixes[LAYER_NETWORK, variant];
         string trPfx = _prefixes[LAYER_TRANSPORT, variant];
         string suffPfx = _prefixes[suffixLayer, variant];
 
-        return string.Concat(
-            netPfx, src, _reset,
-            trPfx, ".", srcPort.ToString(), _reset,
-            netPfx, " > ", dst, _reset,
-            trPfx, ".", dstPort.ToString(), _reset,
-            ": ",
-            suffPfx, suffix, _reset
-        );
+        // Append(null) is a no-op on StringBuilder, matching string.Concat's null-as-empty.
+        sb.Append(netPfx).Append(src).Append(_reset)
+          .Append(trPfx).Append('.').Append(srcPort).Append(_reset)
+          .Append(netPfx).Append(" > ").Append(dst).Append(_reset)
+          .Append(trPfx).Append('.').Append(dstPort).Append(_reset)
+          .Append(": ")
+          .Append(suffPfx).Append(suffix).Append(_reset);
     }
 
     /// <summary>
@@ -626,6 +638,15 @@ public static class PacketFormatter
         string pfx = _prefixes[LAYER_NETWORK, variant];
         if (pfx == null) return text;
         return string.Concat(pfx, text, _reset);
+    }
+
+    /// <summary>Append-only variant of <see cref="FormatNetworkOnly"/>.</summary>
+    public static void AppendNetworkOnlyInto(StringBuilder sb, string text, int lineCounter)
+    {
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        string pfx = _prefixes[LAYER_NETWORK, variant];
+        if (pfx == null) { sb.Append(text); return; }
+        sb.Append(pfx).Append(text).Append(_reset);
     }
 
     /// <summary>

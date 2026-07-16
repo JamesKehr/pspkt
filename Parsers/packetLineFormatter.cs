@@ -637,27 +637,27 @@ public static class PacketLineFormatter
         }
 
         // --- Network + Transport segment ---
-        string ntSegment = null;
+        // Append-only: the data-link prefix + ": " are written first, then the network/transport
+        // segment is appended directly into sb (no intermediate per-line string).
         if (srcAddr != null && dstAddr != null)
         {
-            ntSegment = FormatNetworkTransportInternal(
-                lineCounter, protoKind, srcAddr, dstAddr, srcPort, dstPort,
+            if (dlSegment != null)
+            {
+                PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
+                sb.Append(": ");
+            }
+            AppendNetworkTransportInto(
+                sb, lineCounter, protoKind, srcAddr, dstAddr, srcPort, dstPort,
                 tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen,
                 icmpType, icmpCode, icmpId, icmpSeq, udpData);
-        }
-
-        if (dlSegment != null && ntSegment != null)
-        {
-            PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
-            sb.Append(": ").Append(ntSegment);
             return true;
         }
+
         if (dlSegment != null)
         {
             PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
             return true;
         }
-        if (ntSegment != null) { sb.Append(ntSegment); return true; }
         return false;
     }
 
@@ -1226,7 +1226,11 @@ public static class PacketLineFormatter
         return sb.ToString();
     }
 
-    private static string FormatNetworkTransportInternal(
+    // Appends the colored network+transport segment directly into outSb (append-only variant of
+    // the former FormatNetworkTransportInternal). Always produces content for a valid IPv4
+    // src/dst, so the caller can append the data-link prefix + ": " beforehand unconditionally.
+    private static void AppendNetworkTransportInto(
+        StringBuilder outSb,
         int lineCounter, int protoKind, string srcAddr, string dstAddr,
         int srcPort, int dstPort,
         byte tcpFlags, uint tcpSeq, uint tcpAck, ushort tcpWin,
@@ -1264,7 +1268,8 @@ public static class PacketLineFormatter
             {
                 sb.Append("ICMP type ").Append(icmpType).Append(" code ").Append(icmpCode);
             }
-            return PacketFormatter.FormatNetworkOnly(sb.ToString(), lineCounter);
+            PacketFormatter.AppendNetworkOnlyInto(outSb, sb.ToString(), lineCounter);
+            return;
         }
 
         // TCP
@@ -1318,7 +1323,8 @@ public static class PacketLineFormatter
                 }
             }
 
-            return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
+            PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);
+            return;
         }
 
         // UDP
@@ -1332,7 +1338,10 @@ public static class PacketLineFormatter
             {
                 string dnsStr = DnsParser.FormatDnsSegment(udpData, dataLen, srcPort, dstPort);
                 if (dnsStr != null)
-                    return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, dnsStr, 4, lineCounter);
+                {
+                    PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, dnsStr, 4, lineCounter);
+                    return;
+                }
             }
 
             // DHCP detection
@@ -1341,7 +1350,10 @@ public static class PacketLineFormatter
             {
                 string dhcpStr = FormatDhcpBasic(udpData, dataLen, srcPort, dstPort);
                 if (dhcpStr != null)
-                    return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
+                {
+                    PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, dhcpStr, 4, lineCounter);
+                    return;
+                }
             }
 
             StringBuilder usb = new StringBuilder(32);
@@ -1351,13 +1363,14 @@ public static class PacketLineFormatter
                 usb.Append(udpHint).Append(": ");
             }
             usb.Append("UDP, len ").Append(dataLen);
-            return PacketFormatter.FormatTransportLine(netSrc, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
+            PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, usb.ToString(), udpHint != null ? 4 : 3, lineCounter);
+            return;
         }
 
         // Fallback (non-TCP/UDP/ICMP IP payload) — still prefixed with the network name.
         StringBuilder fsb = new StringBuilder(64);
         fsb.Append("IPv4 ").Append(srcAddr).Append(" > ").Append(dstAddr);
-        return PacketFormatter.FormatNetworkOnly(fsb.ToString(), lineCounter);
+        PacketFormatter.AppendNetworkOnlyInto(outSb, fsb.ToString(), lineCounter);
     }
 
     private static string FormatIPv6Segment(byte[] raw, int linkKind, int lineCounter)
