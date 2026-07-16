@@ -81,25 +81,37 @@ public static class DhcpParser
     /// </summary>
     public static bool TryParseDhcp(byte[] data, int srcPort, int dstPort, out DhcpContext ctx)
     {
+        return TryParseDhcp(data, data != null ? data.Length : 0, srcPort, dstPort, out ctx);
+    }
+
+    /// <summary>
+    /// Length-bounded overload: parsing only reads the first <paramref name="dataLength"/>
+    /// bytes (the valid payload), so stale bytes past the real payload in a pooled/over-sized
+    /// buffer never influence the parse result or an app-layer predicate.
+    /// </summary>
+    public static bool TryParseDhcp(byte[] data, int dataLength, int srcPort, int dstPort, out DhcpContext ctx)
+    {
         ctx = default(DhcpContext);
         if (data == null) return false;
+        int len = dataLength;
+        if (len > data.Length) len = data.Length;
 
         if (IsDhcpV6Port(srcPort, dstPort))
         {
-            if (data.Length < 4) return false;
+            if (len < 4) return false;
             ctx.IsV6 = true;
             ctx.MessageType = data[0];
             // 3-byte transaction ID.
             ctx.TransactionId = (uint)((data[1] << 16) | (data[2] << 8) | data[3]);
             // Walk the DHCPv6 option block (starts at byte 4) for the Client Identifier
             // (option 1) and the first IA Address (IA_NA/IA_TA option 3/4 -> nested IAADDR 5).
-            ParseV6Options(data, 4, data.Length, ref ctx);
+            ParseV6Options(data, 4, len, ref ctx);
             ctx.Valid = true;
             return true;
         }
 
         // DHCPv4 / BOOTP — minimum fixed portion is 240 bytes.
-        if (data.Length < 240) return false;
+        if (len < 240) return false;
         ctx.IsV6 = false;
         ctx.Op = data[0];
         ctx.TransactionId = PacketParseHelper.ReadUInt32BE(data, 4);
@@ -108,29 +120,29 @@ public static class DhcpParser
 
         // Walk options to extract the message type (option 53) and requested IP (option 50).
         // Requires the magic cookie at bytes 236-239 immediately before the options block.
-        // We've already verified data.Length >= 240, so reading the cookie is safe; the option
+        // We've already verified len >= 240, so reading the cookie is safe; the option
         // walk itself handles any truncation that follows.
         if (data[236] == Magic0 && data[237] == Magic1
             && data[238] == Magic2 && data[239] == Magic3)
         {
             int pos = 240;
-            while (pos < data.Length)
+            while (pos < len)
             {
                 int code = data[pos++];
                 if (code == 0) continue;          // pad
                 if (code == 255) break;           // end
-                if (pos >= data.Length) { ctx.Truncated = true; break; }
-                int len = data[pos++];
-                if (pos + len > data.Length) { ctx.Truncated = true; break; }
-                if (code == 53 && len >= 1)
+                if (pos >= len) { ctx.Truncated = true; break; }
+                int optlen = data[pos++];
+                if (pos + optlen > len) { ctx.Truncated = true; break; }
+                if (code == 53 && optlen >= 1)
                 {
                     ctx.MessageType = data[pos];
                 }
-                else if (code == 50 && len >= 4)
+                else if (code == 50 && optlen >= 4)
                 {
                     ctx.RequestedIp = PacketParseHelper.FormatIPv4(data, pos);
                 }
-                pos += len;
+                pos += optlen;
             }
         }
 
@@ -266,8 +278,14 @@ public static class DhcpParser
     /// </summary>
     public static string FormatDhcpSegment(byte[] data, int srcPort, int dstPort)
     {
+        return FormatDhcpSegment(data, data != null ? data.Length : 0, srcPort, dstPort);
+    }
+
+    /// <summary>Length-bounded overload: parsing is limited to the valid payload length.</summary>
+    public static string FormatDhcpSegment(byte[] data, int dataLen, int srcPort, int dstPort)
+    {
         DhcpContext ctx;
-        if (!TryParseDhcp(data, srcPort, dstPort, out ctx)) return null;
+        if (!TryParseDhcp(data, dataLen, srcPort, dstPort, out ctx)) return null;
         return FormatDhcpDefaultFromContext(ref ctx);
     }
 

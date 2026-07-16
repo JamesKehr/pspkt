@@ -1652,6 +1652,72 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         }
     }
 
+    Context 'Payload length bounding (pooled-buffer stale tail)' {
+        # Regression tests for the correctness bug where parsers read a pooled/over-sized
+        # buffer's capacity (data.Length) instead of the valid payload length, so stale bytes
+        # from a prior larger packet could influence parsing and predicate accept/reject.
+
+        It 'HTTP: a stale header past dataLen is ignored' {
+            # 'real' ends mid-headers (no blank-line terminator yet); the stale tail adds a
+            # Content-Length header + terminator. A bounded parse must not see the stale header.
+            $real = "GET /x HTTP/1.1`r`nHost: a.example.com`r`n"
+            $stale = "Content-Length: 999`r`n`r`n"
+            $buf = [System.Text.Encoding]::ASCII.GetBytes($real + $stale)
+            $ctx = [HttpContext]::new()
+            # Bounded to the real payload: stale Content-Length must NOT be picked up.
+            [HttpParser]::TryParseHttp($buf, $real.Length, [ref]$ctx) | Should -BeTrue
+            $ctx.Host | Should -Be 'a.example.com'
+            $ctx.ContentLength | Should -Be -1
+            # Unbounded (full buffer) DOES pick it up — proves the stale bytes are really there.
+            $ctx2 = [HttpContext]::new()
+            [HttpParser]::TryParseHttp($buf, $buf.Length, [ref]$ctx2) | Should -BeTrue
+            $ctx2.ContentLength | Should -Be 999
+        }
+
+        It 'HTTP: LooksLikeHttp respects the length bound (short payload, stale method bytes)' {
+            # 2 valid bytes then a stale "GET " — with a 2-byte bound it is not HTTP.
+            $buf = [byte[]](0x01, 0x02) + [System.Text.Encoding]::ASCII.GetBytes('GET / HTTP/1.1')
+            [HttpParser]::LooksLikeHttp($buf, 2)          | Should -BeFalse
+            [HttpParser]::LooksLikeHttp($buf, $buf.Length) | Should -BeFalse   # prefix not at offset 0
+        }
+
+        It 'DHCP: option 53 past dataLen does not set the message type' {
+            # 236-byte BOOTP + magic + option 53 (Discover). Bound the parse before the option.
+            $bootp = [byte[]]::new(236); $bootp[0]=1; $bootp[1]=1; $bootp[2]=6
+            $bootp[4]=0xde;$bootp[5]=0xad;$bootp[6]=0xbe;$bootp[7]=0xef
+            $magic = [byte[]](0x63,0x82,0x53,0x63)
+            $buf = [byte[]]($bootp + $magic + [byte[]](53,1,1,255))
+            $ctxFull = [DhcpContext]::new()
+            [DhcpParser]::TryParseDhcp($buf, $buf.Length, 68, 67, [ref]$ctxFull) | Should -BeTrue
+            $ctxFull.MessageType | Should -Be 1
+            # Bound to 240 (just the magic cookie, before the options): type stays 0.
+            $ctxBounded = [DhcpContext]::new()
+            [DhcpParser]::TryParseDhcp($buf, 240, 68, 67, [ref]$ctxBounded) | Should -BeTrue
+            $ctxBounded.MessageType | Should -Be 0
+        }
+
+        It 'DHCP: a payload shorter than the BOOTP minimum is rejected even in an over-sized buffer' {
+            $buf = [byte[]]::new(300)   # capacity 300 but only 100 valid bytes
+            $ctx = [DhcpContext]::new()
+            [DhcpParser]::TryParseDhcp($buf, 100, 68, 67, [ref]$ctx) | Should -BeFalse
+        }
+
+        It 'DNS: FormatDnsSegment is bounded to dataLength (stale answer past the bound not read)' {
+            # Query for example.com A; then a stale "answer" tail. The query header claims 0
+            # answers, so a length-bounded parse must render the query form (no address),
+            # regardless of the stale bytes appended after the valid query.
+            $b = [System.Collections.Generic.List[byte]]::new()
+            $b.AddRange([byte[]](0x12,0x34, 0x01,0x00, 0,1, 0,0, 0,0, 0,0))
+            $b.Add(7); 'example'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(3); 'com'.ToCharArray() | ForEach-Object { $b.Add([byte][char]$_) }
+            $b.Add(0); $b.AddRange([byte[]](0,1, 0,1))
+            $qlen = $b.Count
+            $b.AddRange([byte[]](0xc0,0x0c, 0,1, 0,1, 0,0,0,60, 0,4, 1,2,3,4))   # stale tail
+            $buf = [byte[]]$b.ToArray()
+            [DnsParser]::FormatDnsSegment($buf, $qlen, 53, 12345) | Should -Be 'DNS: 0x1234 0/0/0 example.com. A'
+        }
+    }
+
     Context 'SMB2 application-layer predicate' {
         BeforeAll {
             $script:smbStartCmd = Get-Command -Name Start-Pspkt -ErrorAction Stop

@@ -286,15 +286,31 @@ public static class DnsParser
     /// </summary>
     public static string FormatDnsSegment(byte[] data, int srcPort, int dstPort, bool detailed)
     {
+        return FormatDnsSegment(data, data != null ? data.Length : 0, srcPort, dstPort, detailed);
+    }
+
+    /// <summary>
+    /// Length-bounded overload: parsing only reads the first <paramref name="dataLength"/>
+    /// bytes (the valid payload), so stale bytes past the real payload in a pooled/over-sized
+    /// buffer never influence the parse result.
+    /// </summary>
+    public static string FormatDnsSegment(byte[] data, int dataLength, int srcPort, int dstPort, bool detailed)
+    {
         DnsContext ctx;
-        if (!TryParseDns(data, srcPort, dstPort, out ctx)) return null;
+        if (!TryParseDns(data, dataLength, srcPort, dstPort, out ctx)) return null;
         return FormatDnsFromContext(ref ctx, detailed);
     }
 
     /// <summary>Default-tier convenience overload (separator "DNS: ...").</summary>
     public static string FormatDnsSegment(byte[] data, int srcPort, int dstPort)
     {
-        return FormatDnsSegment(data, srcPort, dstPort, false);
+        return FormatDnsSegment(data, data != null ? data.Length : 0, srcPort, dstPort, false);
+    }
+
+    /// <summary>Length-bounded Default-tier convenience overload.</summary>
+    public static string FormatDnsSegment(byte[] data, int dataLength, int srcPort, int dstPort)
+    {
+        return FormatDnsSegment(data, dataLength, srcPort, dstPort, false);
     }
 
     // ==================================================================================

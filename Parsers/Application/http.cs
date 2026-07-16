@@ -80,19 +80,32 @@ public static class HttpParser
     /// </summary>
     public static bool LooksLikeHttp(byte[] data)
     {
-        if (data == null || data.Length < 4) return false;
+        return LooksLikeHttp(data, data != null ? data.Length : 0);
+    }
+
+    /// <summary>
+    /// Length-bounded overload of <see cref="LooksLikeHttp(byte[])"/>. Only the first
+    /// <paramref name="dataLength"/> bytes (the valid payload) are considered, so stale bytes
+    /// in a pooled/over-sized buffer past the real payload can't produce a false positive.
+    /// </summary>
+    public static bool LooksLikeHttp(byte[] data, int dataLength)
+    {
+        if (data == null) return false;
+        int n = dataLength;
+        if (n > data.Length) n = data.Length;
+        if (n < 4) return false;
         // HTTP response: "HTTP"
         if (data[0] == 'H' && data[1] == 'T' && data[2] == 'T' && data[3] == 'P') return true;
         // Requests: <METHOD>' ' prefix.
         if (data[0] == 'G' && data[1] == 'E' && data[2] == 'T' && data[3] == ' ') return true;
-        if (data.Length >= 5 && data[0] == 'P' && data[1] == 'O' && data[2] == 'S' && data[3] == 'T' && data[4] == ' ') return true;
+        if (n >= 5 && data[0] == 'P' && data[1] == 'O' && data[2] == 'S' && data[3] == 'T' && data[4] == ' ') return true;
         if (data[0] == 'P' && data[1] == 'U' && data[2] == 'T' && data[3] == ' ') return true;
-        if (data.Length >= 5 && data[0] == 'H' && data[1] == 'E' && data[2] == 'A' && data[3] == 'D' && data[4] == ' ') return true;
-        if (data.Length >= 7 && data[0] == 'D' && data[1] == 'E' && data[2] == 'L' && data[3] == 'E' && data[4] == 'T' && data[5] == 'E' && data[6] == ' ') return true;
-        if (data.Length >= 8 && data[0] == 'O' && data[1] == 'P' && data[2] == 'T' && data[3] == 'I' && data[4] == 'O' && data[5] == 'N' && data[6] == 'S' && data[7] == ' ') return true;
-        if (data.Length >= 6 && data[0] == 'P' && data[1] == 'A' && data[2] == 'T' && data[3] == 'C' && data[4] == 'H' && data[5] == ' ') return true;
-        if (data.Length >= 8 && data[0] == 'C' && data[1] == 'O' && data[2] == 'N' && data[3] == 'N' && data[4] == 'E' && data[5] == 'C' && data[6] == 'T' && data[7] == ' ') return true;
-        if (data.Length >= 6 && data[0] == 'T' && data[1] == 'R' && data[2] == 'A' && data[3] == 'C' && data[4] == 'E' && data[5] == ' ') return true;
+        if (n >= 5 && data[0] == 'H' && data[1] == 'E' && data[2] == 'A' && data[3] == 'D' && data[4] == ' ') return true;
+        if (n >= 7 && data[0] == 'D' && data[1] == 'E' && data[2] == 'L' && data[3] == 'E' && data[4] == 'T' && data[5] == 'E' && data[6] == ' ') return true;
+        if (n >= 8 && data[0] == 'O' && data[1] == 'P' && data[2] == 'T' && data[3] == 'I' && data[4] == 'O' && data[5] == 'N' && data[6] == 'S' && data[7] == ' ') return true;
+        if (n >= 6 && data[0] == 'P' && data[1] == 'A' && data[2] == 'T' && data[3] == 'C' && data[4] == 'H' && data[5] == ' ') return true;
+        if (n >= 8 && data[0] == 'C' && data[1] == 'O' && data[2] == 'N' && data[3] == 'N' && data[4] == 'E' && data[5] == 'C' && data[6] == 'T' && data[7] == ' ') return true;
+        if (n >= 6 && data[0] == 'T' && data[1] == 'R' && data[2] == 'A' && data[3] == 'C' && data[4] == 'E' && data[5] == ' ') return true;
         return false;
     }
 
@@ -105,11 +118,24 @@ public static class HttpParser
     /// </summary>
     public static bool TryParseHttp(byte[] data, out HttpContext ctx)
     {
+        return TryParseHttp(data, data != null ? data.Length : 0, out ctx);
+    }
+
+    /// <summary>
+    /// Length-bounded overload: parsing only reads the first <paramref name="dataLength"/>
+    /// bytes (the valid payload), so stale bytes past the real payload in a pooled/over-sized
+    /// buffer never influence the parse result or an app-layer predicate.
+    /// </summary>
+    public static bool TryParseHttp(byte[] data, int dataLength, out HttpContext ctx)
+    {
         ctx = default(HttpContext);
         ctx.ContentLength = -1;
-        if (!LooksLikeHttp(data)) return false;
+        if (data == null) return false;
+        int len = dataLength;
+        if (len > data.Length) len = data.Length;
+        if (!LooksLikeHttp(data, len)) return false;
 
-        int scanEnd = Math.Min(data.Length, MaxScanBytes);
+        int scanEnd = Math.Min(len, MaxScanBytes);
 
         // --- First line (request line or status line) ---
         int firstLineEnd = FindLineEnd(data, 0, Math.Min(scanEnd, MaxFirstLine));
@@ -328,7 +354,7 @@ public static class HttpParser
     public static string FormatHttpSegment(byte[] data, int dataLen, string connKey)
     {
         HttpContext ctx;
-        if (!TryParseHttp(data, out ctx)) return null;
+        if (!TryParseHttp(data, dataLen, out ctx)) return null;
         return FormatHttpDefaultCorrelated(ref ctx, connKey);
     }
 
