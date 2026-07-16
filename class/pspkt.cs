@@ -144,10 +144,73 @@ public struct PSPacketData
 /// <summary>
 /// Simple power-of-2 bucket pool for packet byte[] buffers.
 /// Reduces allocation pressure on the pktmon callback thread.
-/// Thread-safe Rent/Return via lock-free stack per bucket.
+/// Thread-safe Rent/Return via an array-backed spinlock stack per bucket (no per-operation
+/// node allocation, unlike ConcurrentStack whose Push allocates a linked-list node each call).
 /// </summary>
 public static class PacketBytePool
 {
+    /// <summary>
+    /// Fixed-capacity, allocation-free, thread-safe recycle stack. Stores references in a
+    /// pre-allocated array guarded by a SpinLock; the critical section is a single index
+    /// bump plus one slot store/load, so contention across the producer + console consumer +
+    /// writer threads is negligible. Push returns false when full (soft cap); Pop returns
+    /// null when empty. Replaces ConcurrentStack, which allocated a node on every Push and
+    /// walked the whole list on Count.
+    /// </summary>
+    private sealed class ArrayStack<T> where T : class
+    {
+        private readonly T[] _slots;
+        private int _top;
+        private SpinLock _lock; // mutable struct — entered in place on the field, never copied
+
+        public ArrayStack(int capacity)
+        {
+            _slots = new T[capacity];
+            _top = 0;
+            _lock = new SpinLock(false); // no owner tracking — lowest overhead
+        }
+
+        public T TryPop()
+        {
+            T result = null;
+            bool taken = false;
+            try
+            {
+                _lock.Enter(ref taken);
+                if (_top > 0)
+                {
+                    result = _slots[--_top];
+                    _slots[_top] = null; // release the reference so a discarded buffer can be GC'd
+                }
+            }
+            finally
+            {
+                if (taken) _lock.Exit(false);
+            }
+            return result;
+        }
+
+        public bool TryPush(T item)
+        {
+            bool pushed = false;
+            bool taken = false;
+            try
+            {
+                _lock.Enter(ref taken);
+                if (_top < _slots.Length)
+                {
+                    _slots[_top++] = item;
+                    pushed = true;
+                }
+            }
+            finally
+            {
+                if (taken) _lock.Exit(false);
+            }
+            return pushed;
+        }
+    }
+
     // Bucket sizes (power of 2). Packets larger than the max bucket are not pooled.
     private static readonly int[] BucketSizes = new int[]
     {
@@ -157,12 +220,7 @@ public static class PacketBytePool
     // Cap on number of arrays retained per bucket. Prevents unbounded growth under bursty load.
     private const int MaxArraysPerBucket = 1024;
 
-    private static readonly System.Collections.Concurrent.ConcurrentStack<byte[]>[] _buckets;
-    // Per-bucket array counts. Updated with Interlocked around Push/Pop to avoid the
-    // O(N) walk that ConcurrentStack<T>.Count performs on every Return call.
-    // The counters are advisory: small over/under-shoots vs the underlying stack are
-    // tolerated (MaxArraysPerBucket is a soft cap, off-by-one is harmless).
-    private static long[] _bucketCounts;
+    private static readonly ArrayStack<byte[]>[] _buckets;
     private static long _rentCount;
     private static long _returnCount;
     private static long _missCount; // requested size > max bucket; allocated directly
@@ -170,11 +228,10 @@ public static class PacketBytePool
 
     static PacketBytePool()
     {
-        _buckets = new System.Collections.Concurrent.ConcurrentStack<byte[]>[BucketSizes.Length];
-        _bucketCounts = new long[BucketSizes.Length];
+        _buckets = new ArrayStack<byte[]>[BucketSizes.Length];
         for (int i = 0; i < _buckets.Length; i++)
         {
-            _buckets[i] = new System.Collections.Concurrent.ConcurrentStack<byte[]>();
+            _buckets[i] = new ArrayStack<byte[]>(MaxArraysPerBucket);
         }
     }
 
@@ -203,10 +260,9 @@ public static class PacketBytePool
             Interlocked.Increment(ref _missCount);
             return new byte[minSize];
         }
-        byte[] result;
-        if (_buckets[idx].TryPop(out result))
+        byte[] result = _buckets[idx].TryPop();
+        if (result != null)
         {
-            Interlocked.Decrement(ref _bucketCounts[idx]);
             return result;
         }
         // Pool was empty for this bucket — allocate a fresh array. Under steady state with
@@ -230,11 +286,8 @@ public static class PacketBytePool
             // Off-bucket size — let GC reclaim it.
             return;
         }
-        // Soft-cap check: use the dedicated counter instead of ConcurrentStack.Count, which
-        // walks the entire internal linked list (O(N)) and was the bulk of Return's cost.
-        if (Interlocked.Read(ref _bucketCounts[idx]) >= MaxArraysPerBucket) return;
-        _buckets[idx].Push(array);
-        Interlocked.Increment(ref _bucketCounts[idx]);
+        // TryPush returns false at the soft cap (array full); the buffer is then GC'd.
+        _buckets[idx].TryPush(array);
     }
 
     public static long RentCount { get { return Interlocked.Read(ref _rentCount); } }
@@ -248,10 +301,8 @@ public static class PacketBytePool
     // shared refcount; because it is a reference type it survives the by-value PSPacketData
     // copies sitting in each ring. The boxes are themselves pooled so we don't trade a
     // per-packet byte[] allocation for a per-packet int[] allocation.
-    private static readonly System.Collections.Concurrent.ConcurrentStack<int[]> _leaseBoxes =
-        new System.Collections.Concurrent.ConcurrentStack<int[]>();
-    private static long _leaseBoxCount;
     private const int MaxLeaseBoxes = 8192;
+    private static readonly ArrayStack<int[]> _leaseBoxes = new ArrayStack<int[]>(MaxLeaseBoxes);
     // Incremented if a lease refcount is decremented below zero, which can only happen on a
     // double-release bug. Zero in a correct build; the concurrency harness asserts on it.
     private static long _leaseUnderflow;
@@ -262,12 +313,8 @@ public static class PacketBytePool
     /// </summary>
     public static int[] RentLease(int initialCount)
     {
-        int[] box;
-        if (_leaseBoxes.TryPop(out box))
-        {
-            Interlocked.Decrement(ref _leaseBoxCount);
-        }
-        else
+        int[] box = _leaseBoxes.TryPop();
+        if (box == null)
         {
             box = new int[1];
         }
@@ -278,9 +325,8 @@ public static class PacketBytePool
     private static void ReturnLease(int[] box)
     {
         if (box == null) return;
-        if (Interlocked.Read(ref _leaseBoxCount) >= MaxLeaseBoxes) return;
-        _leaseBoxes.Push(box);
-        Interlocked.Increment(ref _leaseBoxCount);
+        // TryPush returns false at the soft cap; the box is then GC'd.
+        _leaseBoxes.TryPush(box);
     }
 
     /// <summary>
