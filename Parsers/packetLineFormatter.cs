@@ -1312,15 +1312,25 @@ public static class PacketLineFormatter
 
             if (suffix == null)
             {
-                suffix = PacketParseHelper.FormatTcpSegment(tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen);
-                // No active parser produced app content — add a protocol hint if the port
-                // maps to a well-known service so the user can identify traffic at a glance.
+                // No active parser produced app content. If the port maps to a well-known
+                // service, prepend a protocol hint (colored at the app layer); otherwise append
+                // the TCP segment directly (alloc-free) at the transport layer.
                 string hint = GetAppProtocolHint(6, srcPort, dstPort);
                 if (hint != null)
                 {
-                    suffix = hint + ": " + suffix;
-                    appLayer = 4;
+                    PacketFormatter.AppendTransportAddrPrefixInto(outSb, netSrc, srcPort, dstAddr, dstPort, lineCounter);
+                    PacketFormatter.AppendColorStart(outSb, 4, lineCounter);
+                    outSb.Append(hint).Append(": ");
+                    PacketParseHelper.AppendTcpSegmentInto(outSb, tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen);
+                    PacketFormatter.AppendColorReset(outSb);
+                    return;
                 }
+
+                PacketFormatter.AppendTransportAddrPrefixInto(outSb, netSrc, srcPort, dstAddr, dstPort, lineCounter);
+                PacketFormatter.AppendColorStart(outSb, 3, lineCounter);
+                PacketParseHelper.AppendTcpSegmentInto(outSb, tcpFlags, tcpSeq, tcpAck, tcpWin, dataLen);
+                PacketFormatter.AppendColorReset(outSb);
+                return;
             }
 
             PacketFormatter.AppendTransportLineInto(outSb, netSrc, srcPort, dstAddr, dstPort, suffix, appLayer, lineCounter);

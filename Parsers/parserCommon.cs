@@ -317,9 +317,36 @@ public static class PacketParseHelper
     /// </summary>
     public static string FormatTcpSegment(byte flags, uint seq, uint ack, ushort win, int dataLen)
     {
-        string f = FormatTcpFlags(flags);
-        return string.Concat("TCP [", f, "], seq ", seq.ToString(),
-            ", ack ", ack.ToString(), ", win ", win.ToString(), ", len ", dataLen.ToString());
+        StringBuilder sb = new StringBuilder(48);
+        AppendTcpSegmentInto(sb, flags, seq, ack, win, dataLen);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append-only variant of <see cref="FormatTcpSegment"/>: writes the segment summary
+    /// directly into sb with no char[] flag buffer, no int/uint.ToString() strings and no
+    /// concat (StringBuilder's numeric overloads write digits directly). Byte-for-byte
+    /// identical to FormatTcpSegment.
+    /// </summary>
+    public static void AppendTcpSegmentInto(StringBuilder sb, byte flags, uint seq, uint ack, ushort win, int dataLen)
+    {
+        sb.Append("TCP [");
+        AppendTcpFlagsInto(sb, flags);
+        sb.Append("], seq ").Append(seq).Append(", ack ").Append(ack)
+          .Append(", win ").Append(win).Append(", len ").Append(dataLen);
+    }
+
+    /// <summary>Append-only variant of <see cref="FormatTcpFlags"/> (appends set flag chars, or "none").</summary>
+    public static void AppendTcpFlagsInto(StringBuilder sb, byte flags)
+    {
+        if (flags == 0) { sb.Append("none"); return; }
+        for (int i = 0; i < 8; i++)
+        {
+            if ((flags & (0x80 >> i)) != 0)
+            {
+                sb.Append(TcpFlagChars[i]);
+            }
+        }
     }
 }
 
@@ -614,18 +641,42 @@ public static class PacketFormatter
     /// </summary>
     public static void AppendTransportLineInto(StringBuilder sb, string src, int srcPort, string dst, int dstPort, string suffix, int suffixLayer, int lineCounter)
     {
+        AppendTransportAddrPrefixInto(sb, src, srcPort, dst, dstPort, lineCounter);
+        // Suffix, colored by its layer (append(null) is a no-op, matching string.Concat).
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        sb.Append(_prefixes[suffixLayer, variant]).Append(suffix).Append(_reset);
+    }
+
+    /// <summary>
+    /// Appends the colored "src.srcPort > dst.dstPort: " address prefix (no suffix) into sb.
+    /// Callers then append the suffix themselves — either a string (via a colored append) or
+    /// directly (e.g. the alloc-free TCP segment), avoiding a throwaway suffix string.
+    /// </summary>
+    public static void AppendTransportAddrPrefixInto(StringBuilder sb, string src, int srcPort, string dst, int dstPort, int lineCounter)
+    {
         int variant = (lineCounter % 2 == 0) ? 0 : 1;
         string netPfx = _prefixes[LAYER_NETWORK, variant];
         string trPfx = _prefixes[LAYER_TRANSPORT, variant];
-        string suffPfx = _prefixes[suffixLayer, variant];
 
-        // Append(null) is a no-op on StringBuilder, matching string.Concat's null-as-empty.
         sb.Append(netPfx).Append(src).Append(_reset)
           .Append(trPfx).Append('.').Append(srcPort).Append(_reset)
           .Append(netPfx).Append(" > ").Append(dst).Append(_reset)
           .Append(trPfx).Append('.').Append(dstPort).Append(_reset)
-          .Append(": ")
-          .Append(suffPfx).Append(suffix).Append(_reset);
+          .Append(": ");
+    }
+
+    /// <summary>Appends the ANSI color prefix for a layer (or nothing when uncolored).</summary>
+    public static void AppendColorStart(StringBuilder sb, int layerIndex, int lineCounter)
+    {
+        if (layerIndex < 0 || layerIndex >= LAYER_COUNT) return;
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        sb.Append(_prefixes[layerIndex, variant]);
+    }
+
+    /// <summary>Appends the ANSI reset sequence.</summary>
+    public static void AppendColorReset(StringBuilder sb)
+    {
+        sb.Append(_reset);
     }
 
     /// <summary>
