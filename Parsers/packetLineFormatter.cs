@@ -78,6 +78,45 @@ public static class PacketLineFormatter
         return sb;
     }
 
+    // Thread-static char[] used to stream a batch's StringBuilder to the console in chunks,
+    // avoiding a multi-megabyte string.ToString() that would land on the Large Object Heap
+    // (>= 85,000 bytes). 32,768 chars = 65,536 bytes, safely below the LOH threshold, so the
+    // buffer stays on the gen0/1 heap and is reused across batches.
+    private const int ChunkChars = 32768;
+    [ThreadStatic]
+    private static char[] _chunkBuf;
+    private static char[] ChunkBuf()
+    {
+        char[] buf = _chunkBuf;
+        if (buf == null)
+        {
+            buf = new char[ChunkChars];
+            _chunkBuf = buf;
+        }
+        return buf;
+    }
+
+    /// <summary>
+    /// Writes the entire contents of <paramref name="sb"/> to Console.Out in sub-LOH char chunks,
+    /// never materializing a single large string. Used by the high-throughput consumer path.
+    /// </summary>
+    private static void WriteStringBuilderToConsole(StringBuilder sb)
+    {
+        int total = sb.Length;
+        if (total <= 0) return;
+        char[] buf = ChunkBuf();
+        var outw = Console.Out;
+        int pos = 0;
+        while (pos < total)
+        {
+            int n = total - pos;
+            if (n > buf.Length) n = buf.Length;
+            sb.CopyTo(pos, buf, 0, n);
+            outw.Write(buf, 0, n);
+            pos += n;
+        }
+    }
+
     // State
     private static bool _showTimestamp = false;
     private static int _detailLevel = 0; // -1=Minimal, 0=Default, 1+=Detailed
@@ -2211,14 +2250,66 @@ public static class PacketLineFormatter
     {
         if (buffer == null || count <= 0) return null;
 
+        int lineCounter, droppedCount, triggerAction;
+        StringBuilder sb = FormatBatchIntoSb(buffer, count, startLineCounter,
+            out lineCounter, out droppedCount, out triggerAction);
+
+        // Materialize sb to a string for string-consuming callers (tests and any caller that
+        // wants the formatted text back). The high-throughput console path uses WriteBatch
+        // instead, which streams sb to the console without this (potentially LOH) allocation.
+        return new BatchResult
+        {
+            Output = sb.Length > 0 ? sb.ToString() : null,
+            PacketCount = count,
+            DroppedCount = droppedCount,
+            LineCounter = lineCounter,
+            TriggerAction = triggerAction
+        };
+    }
+
+    /// <summary>
+    /// Like <see cref="FormatBatch"/> but writes the formatted output directly to Console.Out in
+    /// sub-LOH char chunks instead of returning it as a single string, avoiding a multi-megabyte
+    /// string.ToString() on the Large Object Heap every drain cycle. The returned BatchResult has
+    /// Output == null (already written); the caller uses only the statistics/trigger fields.
+    /// </summary>
+    public static BatchResult WriteBatch(PSPacketData[] buffer, int count, int startLineCounter)
+    {
+        if (buffer == null || count <= 0) return null;
+
+        int lineCounter, droppedCount, triggerAction;
+        StringBuilder sb = FormatBatchIntoSb(buffer, count, startLineCounter,
+            out lineCounter, out droppedCount, out triggerAction);
+
+        WriteStringBuilderToConsole(sb);
+
+        return new BatchResult
+        {
+            Output = null, // written straight to the console; no string materialized
+            PacketCount = count,
+            DroppedCount = droppedCount,
+            LineCounter = lineCounter,
+            TriggerAction = triggerAction
+        };
+    }
+
+    /// <summary>
+    /// Shared formatting core for <see cref="FormatBatch"/> / <see cref="WriteBatch"/>. Formats
+    /// every packet into the thread-static batch StringBuilder and returns it along with the
+    /// updated line counter, drop count, and trigger action. The caller decides how to emit the
+    /// buffer (materialize to a string vs stream to the console).
+    /// </summary>
+    private static StringBuilder FormatBatchIntoSb(PSPacketData[] buffer, int count, int startLineCounter,
+        out int lineCounter, out int droppedCount, out int triggerAction)
+    {
         // Use the thread-static batch SB instead of allocating per drain cycle. The
         // estimated capacity (count * 120) keeps amortized growth cheap for the common
         // case where this is the first call on the thread or the cap has been resized
         // downward by GC pressure.
         var sb = BatchSb(count * 120);
-        int lineCounter = startLineCounter;
-        int droppedCount = 0;
-        int triggerAction = 0;
+        lineCounter = startLineCounter;
+        droppedCount = 0;
+        triggerAction = 0;
         bool checkTriggers = _stopOnDrop || _pauseOnDrop ||
                              _stopOnReason != 0 || _stopOnLocation != 0 ||
                              _pauseOnReason != 0 || _pauseOnLocation != 0;
@@ -2290,17 +2381,7 @@ public static class PacketLineFormatter
             }
         }
 
-        // Materializing sb to a string here is unavoidable — Console.Write(SB) is not
-        // available on .NET Framework 4.x. The materialized string is then handed to the
-        // caller, which passes it straight to [Console]::Write.
-        return new BatchResult
-        {
-            Output = sb.Length > 0 ? sb.ToString() : null,
-            PacketCount = count,
-            DroppedCount = droppedCount,
-            LineCounter = lineCounter,
-            TriggerAction = triggerAction
-        };
+        return sb;
     }
 
     /// <summary>

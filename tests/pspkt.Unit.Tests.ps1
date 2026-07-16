@@ -2315,6 +2315,71 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         }
     }
 
+    Context 'WriteBatch matches FormatBatch (LOH-free console path)' {
+        BeforeAll {
+            # Self-contained Ethernet + IPv4 + ICMP packet builder (metadata offset past the
+            # packet so the metadata branch is skipped).
+            function script:New-WbIcmpPacket([byte]$IcmpType) {
+                $packet = [byte[]]::new(42)
+                $packet[12] = 0x08; $packet[13] = 0x00      # EtherType IPv4
+                $packet[14] = 0x45                          # IPv4 v4 IHL5
+                $packet[16] = 0x00; $packet[17] = 0x1C      # total length 28
+                $packet[22] = 0x40                          # TTL 64
+                $packet[23] = 0x01                          # protocol ICMP
+                $packet[26] = 10; $packet[29] = 1           # src 10.0.0.1
+                $packet[30] = 10; $packet[33] = 2           # dst 10.0.0.2
+                $packet[34] = $IcmpType
+                return [PSPacketData]::new($packet, [uint32]$packet.Length, [uint32]200,
+                    [uint32]0, [uint32]$packet.Length, [uint32]0, [uint32]0)
+            }
+        }
+
+        AfterEach {
+            [PacketLineFormatter]::SetOptions($false, 0)
+        }
+
+        It 'writes byte-for-byte the same output as FormatBatch, across chunk boundaries' {
+            [PacketLineFormatter]::SetOptions($false, 0)
+
+            # Enough packets that the batch output exceeds the 32,768-char chunk buffer, so the
+            # multi-chunk copy path is exercised.
+            $n = 1200
+            $buffer = [PSPacketData[]]::new($n)
+            for ($i = 0; $i -lt $n; $i++) { $buffer[$i] = script:New-WbIcmpPacket -IcmpType 8 }
+
+            $expected = [PacketLineFormatter]::FormatBatch($buffer, $n, 0).Output
+            $expected | Should -Not -BeNullOrEmpty
+            $expected.Length | Should -BeGreaterThan 32768 -Because 'the test must cross a chunk boundary'
+
+            $sw = [System.IO.StringWriter]::new()
+            $orig = [Console]::Out
+            try {
+                [Console]::SetOut($sw)
+                $res = [PacketLineFormatter]::WriteBatch($buffer, $n, 0)
+            } finally {
+                [Console]::SetOut($orig)
+            }
+
+            $res | Should -Not -BeNullOrEmpty
+            $res.Output | Should -BeNullOrEmpty -Because 'WriteBatch writes to the console, not a returned string'
+            $res.PacketCount | Should -Be $n
+            $sw.ToString() | Should -Be $expected -Because 'the streamed console output must equal the materialized string'
+        }
+
+        It 'returns null for an empty batch and writes nothing' {
+            $sw = [System.IO.StringWriter]::new()
+            $orig = [Console]::Out
+            try {
+                [Console]::SetOut($sw)
+                $res = [PacketLineFormatter]::WriteBatch([PSPacketData[]]::new(0), 0, 0)
+            } finally {
+                [Console]::SetOut($orig)
+            }
+            $res | Should -BeNullOrEmpty
+            $sw.ToString() | Should -BeNullOrEmpty
+        }
+    }
+
     Context 'Quick-filter coverage check (auto-imply suppression)' {
         BeforeAll {
             $script:subMod = Get-Module PspktSession
