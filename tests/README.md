@@ -26,6 +26,12 @@ Run only full unit tests (requires elevated shell):
 pwsh -File .\tests\Invoke-Tests.ps1 -Mode Unit
 ```
 
+Run the concurrency + benchmark harness (opt-in, admin **not** required):
+
+```powershell
+pwsh -File .\tests\Invoke-Tests.ps1 -Mode Concurrency
+```
+
 Or with custom verbosity:
 
 ```powershell
@@ -38,3 +44,7 @@ pwsh -File .\tests\Invoke-Tests.ps1 -Verbosity Normal
 - `Precheck` tests are safe for non-admin CI agents.
 - `Unit` tests are focused on command exports and stateful behavior that does not require live pktmon handles.
 - Commands that require native pktmon session handles are intentionally not invoked in unit tests.
+- The concurrency harness (`tests\pspkt.Concurrency.Tests.ps1`, tag `Concurrency`) drives the real
+  producer/console-consumer/pcapng-writer buffer-pooling code from in-process threads to validate the
+  shared ref-counted buffer lease (no leak, no double-free, no corruption). It is excluded from `Auto`
+  because it is a slower stress/benchmark run; it needs no elevation (no live pktmon).
