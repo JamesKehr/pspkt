@@ -63,7 +63,10 @@ BeforeAll {
     # each packet's payload against its embedded seq (detecting torn reads and duplicate delivery),
     # then release the buffers. Runs in its own runspace.
     $script:ConsumerScript = {
-        param($ctrl, $packetCount, $payloadSize, $seenBits, $consumerSlowSpin)
+        param($ctrl, $packetCount, $payloadSize, $seenBits, $consumerSlowSpin, $startDelayMs)
+        # Optional late start so the producer can overflow the console ring first, deterministically
+        # exercising the enqueue-fail buffer-release path.
+        if ($startDelayMs -gt 0) { [System.Threading.Thread]::Sleep($startDelayMs) }
         $drain = [PSPacketData[]]::new(1024)
         $last = $payloadSize - 1
         $count = 0; $corrupt = 0; $dup = 0
@@ -155,7 +158,8 @@ BeforeAll {
             [switch]$NoFile,
             [int]$ProducerSpin   = 0,
             [int]$ConsumerSpin   = 0,
-            [int]$StopWriterAfterMs = 0
+            [int]$StopWriterAfterMs = 0,
+            [int]$ConsumerStartDelayMs = 0
         )
 
         [PktMonApi]::SetCaptureActive($false) | Out-Null
@@ -185,7 +189,7 @@ BeforeAll {
 
         $consRs = [runspacefactory]::CreateRunspace(); $consRs.Open()
         $consPs = [powershell]::Create(); $consPs.Runspace = $consRs
-        [void]$consPs.AddScript($script:ConsumerScript).AddArgument($ctrl).AddArgument($PacketCount).AddArgument($PayloadSize).AddArgument($seenBits).AddArgument($ConsumerSpin)
+        [void]$consPs.AddScript($script:ConsumerScript).AddArgument($ctrl).AddArgument($PacketCount).AddArgument($PayloadSize).AddArgument($seenBits).AddArgument($ConsumerSpin).AddArgument($ConsumerStartDelayMs)
 
         $prodRs = [runspacefactory]::CreateRunspace(); $prodRs.Open()
         $prodPs = [powershell]::Create(); $prodPs.Runspace = $prodRs
@@ -295,8 +299,11 @@ Describe 'Buffer pooling concurrency (file capture)' -Tag 'Concurrency' {
         $r.BucketAlloc | Should -BeLessThan 20000 -Because 'pooled buffers should be recycled, not reallocated per packet'
     }
 
-    It 'stays correct under heavy ring pressure (small rings, fast producer, slow consumer)' {
-        $r = Invoke-PspktCaptureSimulation -PacketCount 60000 -PayloadSize 256 -ConsoleRingCap 1024 -FileRingCap 64 -ConsumerSpin 40
+    It 'stays correct under heavy ring pressure (deterministic console-ring overflow)' {
+        # Delay the consumer so the producer floods and overflows the console ring, deterministically
+        # exercising the enqueue-fail buffer-release path (a shared buffer dropped by the console ring
+        # must still have its console reference released so it isn't leaked or double-freed).
+        $r = Invoke-PspktCaptureSimulation -PacketCount 60000 -PayloadSize 256 -ConsoleRingCap 1024 -FileRingCap 512 -ConsumerStartDelayMs 300
 
         $r.LeaseUnderflow | Should -Be 0 -Because 'the drop paths must release refs without double-freeing'
         $r.RentCount      | Should -Be $r.PacketCount
@@ -305,9 +312,10 @@ Describe 'Buffer pooling concurrency (file capture)' -Tag 'Concurrency' {
         $r.ConsumerDup    | Should -Be 0
         $r.FileIntegrity.Corrupt | Should -Be 0
         $r.FileIntegrity.Dup     | Should -Be 0
-        # Under this pressure both rings should drop some packets, exercising the release-on-drop paths.
-        ($r.ConsoleDropped + $r.FileDropped) | Should -BeGreaterThan 0 -Because 'the scenario is designed to force drops'
-        ($r.WriterPackets + $r.FileDropped)  | Should -Be $r.PacketCount
+        # The delayed consumer guarantees the console ring overflows, forcing the drop-release path.
+        $r.ConsoleDropped | Should -BeGreaterThan 0 -Because 'the delayed consumer guarantees console-ring overflow'
+        ($r.ConsumerCount + $r.ConsoleDropped) | Should -Be $r.PacketCount
+        ($r.WriterPackets + $r.FileDropped)    | Should -Be $r.PacketCount
     }
 
     It 'survives the writer stopping mid-capture with no double-free and no corruption' {
