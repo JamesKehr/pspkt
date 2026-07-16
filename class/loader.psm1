@@ -23,7 +23,9 @@ $typeCheck = 'PktMonApi' -as [type]
 if ($null -eq $typeCheck) {
     # Collect all source, deduplicate using directives at the top.
     $usingSet = [System.Collections.Generic.HashSet[string]]::new()
-    $bodyParts = @()
+    # List (O(1) append) rather than array += (which reallocates the whole array each
+    # iteration). Produces the identical combined source string.
+    $bodyParts = [System.Collections.Generic.List[string]]::new()
     foreach ($file in $csFiles) {
         $content = Get-Content -Path $file.FullName -Raw
         # Extract using lines and body separately.
@@ -37,7 +39,7 @@ if ($null -eq $typeCheck) {
                 $null = $bodyLines.Add($line)
             }
         }
-        $bodyParts += ($bodyLines -join "`n")
+        $null = $bodyParts.Add($bodyLines -join "`n")
     }
     $combinedSource = ($usingSet -join "`n") + "`n`n" + ($bodyParts -join "`n")
     try {
