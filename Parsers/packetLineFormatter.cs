@@ -1462,9 +1462,9 @@ public static class PacketLineFormatter
                         int udpDataLen = (rawOffset + rawLength) - transOff - 8;
                         if (udpDataLen > 0)
                         {
-                            byte[] udpPayload = new byte[udpDataLen];
+                            byte[] udpPayload = RentPayloadBuffer(udpDataLen);
                             Buffer.BlockCopy(data, transOff + 8, udpPayload, 0, udpDataLen);
-                            string dnsStr = DnsParser.FormatDnsSegment(udpPayload, sp, dp);
+                            string dnsStr = DnsParser.FormatDnsSegment(udpPayload, udpDataLen, sp, dp);
                             if (dnsStr != null)
                                 return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, dnsStr, 4, lineCounter);
                         }
@@ -1478,9 +1478,9 @@ public static class PacketLineFormatter
                     int dhcpLen = (rawOffset + rawLength) - transOff - 8;
                     if (dhcpLen > 0)
                     {
-                        byte[] dhcpPayload = new byte[dhcpLen];
+                        byte[] dhcpPayload = RentPayloadBuffer(dhcpLen);
                         Buffer.BlockCopy(data, transOff + 8, dhcpPayload, 0, dhcpLen);
-                        string dhcpStr = FormatDhcpBasic(dhcpPayload, sp, dp);
+                        string dhcpStr = FormatDhcpBasic(dhcpPayload, dhcpLen, sp, dp);
                         if (dhcpStr != null)
                             return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, dhcpStr, 4, lineCounter);
                     }
@@ -1495,7 +1495,7 @@ public static class PacketLineFormatter
                     int httpLen = (rawOffset + rawLength) - payloadStart;
                     if (tcpDataOff >= 20 && httpLen > 0)
                     {
-                        byte[] httpPayload = new byte[httpLen];
+                        byte[] httpPayload = RentPayloadBuffer(httpLen);
                         Buffer.BlockCopy(data, payloadStart, httpPayload, 0, httpLen);
                         string httpStr = DetectHttpContent(httpPayload, httpLen, sp, dp,
                             HttpParser.BuildConnKey(src, sp, dst, dp));

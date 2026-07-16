@@ -3627,6 +3627,40 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
     }
 
+    Context 'PacketParseHelper.FormatIPv6 (RFC 5952)' {
+        function script:V6([byte[]]$b) { [PacketParseHelper]::FormatIPv6($b, 0) }
+        It 'renders a full address with no compression' {
+            V6 ([byte[]](0x20,0x01,0x0d,0xb8,0x00,0x01,0x00,0x02,0x00,0x03,0x00,0x04,0x00,0x05,0x00,0x06)) | Should -Be '2001:db8:1:2:3:4:5:6'
+        }
+        It 'suppresses leading zeros within each group' {
+            V6 ([byte[]](0x20,0x01,0x0d,0xb8,0x00,0x0a,0x00,0x0b,0x0c,0x00,0x00,0x0d,0x00,0x00,0x00,0x01)) | Should -Be '2001:db8:a:b:c00:d:0:1'
+        }
+        It 'compresses the longest zero run with ::' {
+            V6 ([byte[]](0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,0x01)) | Should -Be '2001:db8::1'
+        }
+        It 'renders the all-zeros address as ::' {
+            V6 ([byte[]]::new(16)) | Should -Be '::'
+        }
+        It 'renders the loopback address as ::1' {
+            $b = [byte[]]::new(16); $b[15]=1; V6 $b | Should -Be '::1'
+        }
+        It 'compresses a leading zero run (link-local all-nodes)' {
+            $b = [byte[]]::new(16); $b[0]=0xff; $b[1]=0x02; $b[15]=0x01; V6 $b | Should -Be 'ff02::1'
+        }
+        It 'compresses only the longest run when two runs exist' {
+            # 2001:0:0:1:0:0:0:1 -> the longer (second) run compresses
+            V6 ([byte[]](0x20,0x01,0,0,0,0,0,0x01,0,0,0,0,0,0,0,0x01)) | Should -Be '2001:0:0:1::1'
+        }
+        It 'produces the same result across repeated calls (reused scratch buffers)' {
+            $a = V6 ([byte[]](0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,0x01))
+            $b = V6 ([byte[]]::new(16))
+            $c = V6 ([byte[]](0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,0x01))
+            $a | Should -Be '2001:db8::1'
+            $b | Should -Be '::'
+            $c | Should -Be '2001:db8::1'   # scratch reuse must not corrupt a later call
+        }
+    }
+
     Context 'Network parser one-liners' {
         function script:EmitLine($pkt, $lvl) {
             Set-PspktDetailLevel -Level $lvl

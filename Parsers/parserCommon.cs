@@ -65,10 +65,14 @@ public static class PacketParseHelper
                DecBytes[data[offset+2]], ".", DecBytes[data[offset+3]]);
     }
 
-    // Pre-computed hex word lookup for IPv6 formatting (0000-ffff).
-    // Lazy-initialized on first FormatIPv6 call to save ~2.5 MB when captures
-    // never encounter IPv6 traffic.
-    private static string[] HexWords;
+    // Lowercase hex nibbles for direct IPv6 word formatting (no per-word string lookup).
+    private static readonly char[] HexNibble = new char[]
+        { '0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f' };
+
+    // Reusable per-thread scratch (single consumer thread) so FormatIPv6 allocates only its
+    // returned string — no per-call int[8] groups array and no per-call StringBuilder.
+    [ThreadStatic] private static int[] _v6Groups;
+    [ThreadStatic] private static StringBuilder _v6Sb;
 
     /// <summary>
     /// Formats an IPv6 address from 16 bytes at the given offset using RFC 5952 compressed
@@ -78,30 +82,14 @@ public static class PacketParseHelper
     {
         if (data == null || data.Length < offset + 16) return "";
 
-        // Lazy-init the lookup table. Single-threaded consumer means no lock needed;
-        // worst case on a race is double-init (harmless, same data).
-        if (HexWords == null)
-        {
-            var table = new string[65536];
-            for (int i = 0; i < 65536; i++)
-                table[i] = i.ToString("x");
-            HexWords = table;
-        }
-
-        // Read 8 groups as 16-bit words.
-        int g0 = (data[offset]     << 8) | data[offset + 1];
-        int g1 = (data[offset + 2] << 8) | data[offset + 3];
-        int g2 = (data[offset + 4] << 8) | data[offset + 5];
-        int g3 = (data[offset + 6] << 8) | data[offset + 7];
-        int g4 = (data[offset + 8] << 8) | data[offset + 9];
-        int g5 = (data[offset + 10] << 8) | data[offset + 11];
-        int g6 = (data[offset + 12] << 8) | data[offset + 13];
-        int g7 = (data[offset + 14] << 8) | data[offset + 15];
+        int[] groups = _v6Groups;
+        if (groups == null) { groups = new int[8]; _v6Groups = groups; }
+        for (int i = 0; i < 8; i++)
+            groups[i] = (data[offset + i * 2] << 8) | data[offset + i * 2 + 1];
 
         // Find the longest run of consecutive zero groups for :: compression.
         int bestStart = -1, bestLen = 0;
         int curStart = -1, curLen = 0;
-        int[] groups = { g0, g1, g2, g3, g4, g5, g6, g7 };
         for (int i = 0; i < 8; i++)
         {
             if (groups[i] == 0)
@@ -119,8 +107,9 @@ public static class PacketParseHelper
         // RFC 5952: only compress runs of length >= 2.
         if (bestLen < 2) { bestStart = -1; bestLen = 0; }
 
-        // Build the string. Worst case is "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" = 39 chars.
-        var sb = new StringBuilder(39);
+        StringBuilder sb = _v6Sb;
+        if (sb == null) { sb = new StringBuilder(39); _v6Sb = sb; }
+        else sb.Length = 0;
         for (int i = 0; i < 8; i++)
         {
             if (i == bestStart)
@@ -130,9 +119,25 @@ public static class PacketParseHelper
                 continue;
             }
             if (i > 0 && !(i == bestStart + bestLen && bestStart >= 0)) sb.Append(':');
-            sb.Append(HexWords[groups[i]]);
+            AppendHexWord(sb, groups[i]);
         }
         return sb.ToString();
+    }
+
+    // Appends a 16-bit word as lowercase hex with no leading zeros (RFC 5952), matching
+    // word.ToString("x") but without the intermediate string.
+    private static void AppendHexWord(StringBuilder sb, int word)
+    {
+        if (word == 0) { sb.Append('0'); return; }
+        int n0 = (word >> 12) & 0xF;
+        int n1 = (word >> 8) & 0xF;
+        int n2 = (word >> 4) & 0xF;
+        int n3 = word & 0xF;
+        bool started = false;
+        if (n0 != 0) { sb.Append(HexNibble[n0]); started = true; }
+        if (started || n1 != 0) { sb.Append(HexNibble[n1]); started = true; }
+        if (started || n2 != 0) { sb.Append(HexNibble[n2]); }
+        sb.Append(HexNibble[n3]);
     }
 
     /// <summary>
@@ -709,13 +714,13 @@ public static class PacketFormatter
         src = null;
         dst = null;
         if (raw == null || raw.Length < ipv6Offset + 40) return false;
-        
-        byte[] srcBytes = new byte[16];
-        byte[] dstBytes = new byte[16];
-        Buffer.BlockCopy(raw, ipv6Offset + 8, srcBytes, 0, 16);
-        Buffer.BlockCopy(raw, ipv6Offset + 24, dstBytes, 0, 16);
-        src = new System.Net.IPAddress(srcBytes).ToString();
-        dst = new System.Net.IPAddress(dstBytes).ToString();
+
+        // Use the allocation-light FormatIPv6 (RFC 5952) directly on the source range instead
+        // of copying two byte[16] buffers into IPAddress objects. This also makes the Default
+        // one-liner's IPv6 rendering consistent with the Analysis Details tree, which already
+        // uses FormatIPv6.
+        src = PacketParseHelper.FormatIPv6(raw, ipv6Offset + 8);
+        dst = PacketParseHelper.FormatIPv6(raw, ipv6Offset + 24);
         return true;
     }
 
