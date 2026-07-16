@@ -4304,6 +4304,14 @@ function Start-Pspkt {
                 }
             }
 
+            # Drain the console ring so any pooled buffers still parked in it (packets produced
+            # but not yet consumed when the loop exited) are released back to the pool instead of
+            # being stranded until the next capture reconfigures the ring. Safe here: the consumer
+            # loop has exited, so this runs on the (sole) consumer thread. Any packets the still-live
+            # native producer delivers after this point are console-only (FileWriter was cleared
+            # above) and are released by the next capture's ring reconfigure.
+            [PktMonApi]::ClearPacketBuffer()
+
             if ($useRealTime) {
                 $missedWrite = [PacketData]::MissedPacketWriteCount
                 $missedRead  = [PacketData]::MissedPacketReadCount
