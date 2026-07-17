@@ -2847,6 +2847,64 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
     }
 
+    Context 'AnsiText.FitToWidth' {
+        It 'pads a short line and matches BuildFrame''s fitting' {
+            [BoxyBox.AnsiText]::FitToWidth('hi', 5) | Should -Be 'hi   '
+            [BoxyBox.AnsiText]::FitToWidth($null, 4) | Should -Be '    '
+            [BoxyBox.AnsiText]::VisibleLength([BoxyBox.AnsiText]::FitToWidth('abcdef', 3)) | Should -Be 3
+        }
+        It 'is byte-identical to a single-row ScreenRegion.BuildFrame body' {
+            $region = [BoxyBox.ScreenRegion]::new(1, 1, 12, 1)
+            $frame = $region.BuildFrame([string[]]@('hi'))
+            $body = $frame.Substring($frame.IndexOf('H') + 1)
+            $body | Should -Be ([BoxyBox.AnsiText]::FitToWidth('hi', 12))
+        }
+    }
+
+    Context 'FrameBuffer row diffing' {
+        It 'first Diff emits every row; an unchanged Diff emits nothing' {
+            $fb = [BoxyBox.FrameBuffer]::new(1, 1, 10, 3)
+            $first = $fb.Diff([string[]]@('a', 'b', 'c'))
+            $first | Should -Not -BeNullOrEmpty
+            ([regex]::Matches($first, "$($script:ESC)\[\d+;\d+H")).Count | Should -Be 3
+            $fb.Diff([string[]]@('a', 'b', 'c')) | Should -BeNullOrEmpty
+        }
+        It 'emits only the row that changed' {
+            $fb = [BoxyBox.FrameBuffer]::new(1, 1, 10, 3)
+            $null = $fb.Diff([string[]]@('a', 'b', 'c'))
+            $d = $fb.Diff([string[]]@('a', 'X', 'c'))
+            ([regex]::Matches($d, "$($script:ESC)\[\d+;\d+H")).Count | Should -Be 1
+            $d.Contains("$($script:ESC)[2;1H") | Should -BeTrue
+        }
+        It 'rows are fitted to Width (so a shrunk row clears its tail)' {
+            $fb = [BoxyBox.FrameBuffer]::new(3, 5, 6, 1)
+            $d = $fb.Diff([string[]]@('hi'))
+            $d | Should -Be ("$($script:ESC)[3;5Hhi    ")
+        }
+        It 'Invalidate() forces a full re-emit on the next Diff' {
+            $fb = [BoxyBox.FrameBuffer]::new(1, 1, 8, 2)
+            $null = $fb.Diff([string[]]@('a', 'b'))
+            $fb.Invalidate()
+            ([regex]::Matches($fb.Diff([string[]]@('a', 'b')), "$($script:ESC)\[\d+;\d+H")).Count | Should -Be 2
+        }
+        It 'InvalidateRows() re-emits only the given absolute rows (overlay-reclaim contract)' {
+            $fb = [BoxyBox.FrameBuffer]::new(1, 1, 8, 4)
+            $null = $fb.Diff([string[]]@('a', 'b', 'c', 'd'))
+            $fb.InvalidateRows(2, 2)   # absolute rows 2 and 3
+            $d = $fb.Diff([string[]]@('a', 'b', 'c', 'd'))
+            ([regex]::Matches($d, "$($script:ESC)\[\d+;\d+H")).Count | Should -Be 2
+            $d.Contains("$($script:ESC)[2;1H") | Should -BeTrue
+            $d.Contains("$($script:ESC)[3;1H") | Should -BeTrue
+            $d.Contains("$($script:ESC)[1;1H") | Should -BeFalse
+        }
+        It 'InvalidateRows() ignores rows outside the region' {
+            $fb = [BoxyBox.FrameBuffer]::new(5, 1, 8, 2)   # covers absolute rows 5,6
+            $null = $fb.Diff([string[]]@('a', 'b'))
+            $fb.InvalidateRows(1, 3)   # rows 1-3, all outside
+            $fb.Diff([string[]]@('a', 'b')) | Should -BeNullOrEmpty
+        }
+    }
+
     Context 'MenuBar.Build' {
         It 'fills to the requested width with the double rule' {
             $opts = [System.Collections.Generic.List[string]]@('(R)esume')

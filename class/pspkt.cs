@@ -290,6 +290,21 @@ public static class PacketBytePool
         _buckets[idx].TryPush(array);
     }
 
+    /// <summary>
+    /// Drops every pooled byte[] and lease box so the pool's retained memory can be reclaimed by
+    /// the GC. Call on capture teardown (not on the hot path) — under a very large -BufferLevel
+    /// the pool can retain hundreds of MB of packet buffers that would otherwise persist until the
+    /// next capture reuses or replaces them.
+    /// </summary>
+    public static void Clear()
+    {
+        for (int i = 0; i < _buckets.Length; i++)
+        {
+            while (_buckets[i].TryPop() != null) { }
+        }
+        while (_leaseBoxes.TryPop() != null) { }
+    }
+
     public static long RentCount { get { return Interlocked.Read(ref _rentCount); } }
     public static long ReturnCount { get { return Interlocked.Read(ref _returnCount); } }
     public static long MissCount { get { return Interlocked.Read(ref _missCount); } }
@@ -862,6 +877,42 @@ public static class PktMonApi
     public static void ResetDroppedCount()
     {
         _ringBuffer.ResetDroppedCount();
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetProcessWorkingSetSizeEx(IntPtr hProcess, IntPtr minSize, IntPtr maxSize, uint flags);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    /// <summary>
+    /// Releases the memory retained by a just-finished capture back to the OS. The large
+    /// user-mode SPSC ring (up to ~1.8 GB) and the packet byte[] pool live on the managed heap
+    /// (the ring is a single Large Object Heap array); freeing them makes them collectable, but
+    /// .NET keeps the freed segments committed and Windows keeps the physical pages resident, so
+    /// the process working set does not drop on its own. This forces a full GC with a one-time
+    /// LOH compaction (so the big dead array's segment is reclaimed) and then trims the working
+    /// set (SetProcessWorkingSetSizeEx with -1/-1) so the pages are returned to the OS. Intended
+    /// for capture teardown only, not the hot path.
+    /// </summary>
+    public static void ReleaseCaptureMemory()
+    {
+        try
+        {
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+        }
+        catch { }
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        try
+        {
+            // -1/-1 tells Windows to trim the working set to the minimum; the pages move to the
+            // standby list and fault back on demand if the process touches them again.
+            SetProcessWorkingSetSizeEx(GetCurrentProcess(), (IntPtr)(-1), (IntPtr)(-1), 0);
+        }
+        catch { }
     }
     
     public static IntPtr CreateRealtimeStream(IntPtr pktmonHandle, PACKETMONITOR_REALTIME_STREAM_CONFIGURATION cfg)
