@@ -1747,7 +1747,7 @@ function Invoke-PspktAnalysisLoop {
             $animBox = [BoxyBox.Box]::new($boxWidth, $h)
             $animBox.MenuStyle = [BoxyBox.MenuBar+Cap]::TerminalSingle   # single-line bottom (matches the Details box)
             $animRegion = [BoxyBox.ScreenRegion]::new($areaTop + $areaHeight - $h, 1, $boxWidth, $h)
-            [Console]::Write($animRegion.BuildFrame($animBox.Render($null)))
+            [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $animRegion.BuildFrame($animBox.Render($null)) + [BoxyBox.ScreenRegion]::EndSyncOutput())
             Start-Sleep -Milliseconds 12
         }
         $dirty = $true
@@ -1800,8 +1800,13 @@ function Invoke-PspktAnalysisLoop {
         $ovW = [Math]::Min(70, $consoleWidth - 4)
         $ovTop = 0; $ovLeft = 0
         $ovLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $ovW, ' Save Capture ', $body, [ref]$ovTop, [ref]$ovLeft)
-        $ovRegion = [BoxyBox.ScreenRegion]::new($ovTop, $ovLeft, $ovW, $ovLines.Count)
-        [Console]::Write($ovRegion.BuildFrame($ovLines))
+        # Region width = the overlay's actual line width (Build may clamp $ovW) so the prompt
+        # overwrites only its own columns and doesn't erase whatever is beside it.
+        $ovActualW = [BoxyBox.AnsiText]::VisibleLength($ovLines[0])
+        $ovRegion = [BoxyBox.ScreenRegion]::new($ovTop, $ovLeft, $ovActualW, $ovLines.Count)
+        # Draw the prompt in its own synchronized transaction; it ends BEFORE the cursor
+        # positioning + ReadLine below (a sync block must never straddle a blocking read).
+        [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $ovRegion.BuildFrame($ovLines) + [BoxyBox.ScreenRegion]::EndSyncOutput())
         # Position the cursor on the input row inside the box and read a line.
         $inputRow = $ovTop + 3
         [Console]::Write("$ESC[$inputRow;$($ovLeft + 2)H" + [BoxyBox.ScreenRegion]::ShowCursor())
@@ -2129,8 +2134,15 @@ function Invoke-PspktAnalysisLoop {
                     $frame = $liveRegion.BuildFrame($liveBox.Render($liveWindow))
                 }
                 if ($status.Length -gt $boxWidth) { $status = $status.Substring(0, $boxWidth) }
-                $statusLine = "$ESC[1;1H$ESC[2K$status"
-                [Console]::Write($statusLine + $frame)
+                # Pad the status row to the box width and overwrite it in place (no CSI 2K erase),
+                # matching BuildFrame's flicker-free overwrite strategy.
+                $statusLine = "$ESC[1;1H" + $status.PadRight($boxWidth)
+
+                # Compose the entire repaint — status row, box frame, and any overlays — into a
+                # single string, then present it inside one DEC 2026 synchronized-output
+                # transaction so a supporting terminal shows the whole frame atomically (no
+                # tearing / border flicker). Overlays are appended on top of the base frame.
+                $composed = $statusLine + $frame
 
                 # Transient notification overlay (copy/save results) on top of the frame.
                 if ($null -ne $notifyText -and [DateTime]::UtcNow -lt $notifyUntil) {
@@ -2141,8 +2153,12 @@ function Invoke-PspktAnalysisLoop {
                     $nW = [Math]::Min([Math]::Max(24, $notifyText.Length + 6), $consoleWidth - 4)
                     $nTop = 0; $nLeft = 0
                     $nLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $nW, ' pspkt ', $nbody, [ref]$nTop, [ref]$nLeft)
-                    $nRegion = [BoxyBox.ScreenRegion]::new($nTop, $nLeft, $nW, $nLines.Count)
-                    [Console]::Write($nRegion.BuildFrame($nLines))
+                    # Use the overlay's ACTUAL line width (Build may clamp $nW) so BuildFrame pads
+                    # only the overlay's own columns and never erases the base frame's borders to
+                    # either side of the centered box.
+                    $nActualW = [BoxyBox.AnsiText]::VisibleLength($nLines[0])
+                    $nRegion = [BoxyBox.ScreenRegion]::new($nTop, $nLeft, $nActualW, $nLines.Count)
+                    $composed += $nRegion.BuildFrame($nLines)
                 }
 
                 # Runtime warning panel: a bottom box expanded just enough to fit the (yellow)
@@ -2169,13 +2185,16 @@ function Invoke-PspktAnalysisLoop {
                     $null = $panelFrame.Add($divider)
                     foreach ($bl in $warnBox.Render($warnLines)) { $null = $panelFrame.Add($bl) }
                     $warnRegion = [BoxyBox.ScreenRegion]::new($panelTop, 1, $boxWidth, $panelHeight)
-                    [Console]::Write($warnRegion.BuildFrame($panelFrame))
+                    $composed += $warnRegion.BuildFrame($panelFrame)
                     $warnDrawn = $true
                 } elseif ($warnDrawn) {
                     # Expired: the base frame above already repainted over the panel region.
                     $warnDrawn = $false
                     $warnState.Text = $null
                 }
+
+                # Single synchronized write of the whole composed frame (base + overlays).
+                [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $composed + [BoxyBox.ScreenRegion]::EndSyncOutput())
 
                 $frameWatch.Restart()
                 $dirty = $false
