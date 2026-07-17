@@ -106,6 +106,19 @@ currently retained for analysis (real timestamps and per-packet component/edge/d
 comments — the same format as a live `-WriteFile` capture). A `.pcapng` extension is added if
 you omit it. The save is bounded to the retention window (the most recent **50,000** packets).
 
+## Saving on exit
+
+When you stop Analysis mode (`s`), pspkt asks **"Save packets to file?"** in a Yes/No overlay.
+Choosing **Yes** opens the same save prompt as the `w` hotkey. Two parameters change this:
+
+- `-AutoSave` — skip the prompt and automatically write the retained buffer to a uniquely-named
+  file, `pspkt-<filters>-<timestamp>.pcapng`, in the current directory (`<filters>` is built from
+  the active quick filters, or `all` when none were used). Takes precedence over the prompt.
+- `-NoSave` — suppress the "Save packets to file?" prompt entirely. The `w` hotkey still works
+  during capture.
+
+Both apply to Analysis mode only; used elsewhere they are ignored with a warning.
+
 ## Copying
 
 **Copy** (`Shift+Ctrl+C`, Focus only) puts the selected Text line plus the **complete** detail

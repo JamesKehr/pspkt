@@ -8,8 +8,8 @@ The module exports the alias **`pspkt`** for this command.
 
 ```powershell
 Start-Pspkt [-Name <string>] [-CaptureType <PspktCaptureType>] [-PacketSize <uint32>]
-            [-BufferSizeMultiplier <uint16>] [-TruncationSize <uint16>] [-PollingIntervalMs <int>]
-            [-ParsingLevel <PspktParsingLevel>] [-Component <string[]>] [-VM <object>] [-VMName <string>]
+            [-BufferSizeMultiplier <uint16>] [-BufferLevel <PspktBufferLevel>] [-TruncationSize <uint16>] [-PollingIntervalMs <int>]
+            [-ParsingLevel <PspktParsingLevel>] [-AutoSave] [-NoSave] [-Component <string[]>] [-VM <object>] [-VMName <string>]
             [-IPAddress <string>] [-Spaced] [-Timestamp]
             [-ARP] [-NDP] [-AA] [-AAv4] [-AAv6] [-DHCP] [-DHCPv6] [-DNS] [-DNSoverHTTPS] [-DNSoverTLS]
             [-SMB] [-SMBoverQUIC] [-SMBoverQuicAltPort <uint16>] [-SSH] [-RDP] [-RPC] [-RCP]
@@ -72,6 +72,7 @@ Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `-BufferSizeMultiplier` | `uint16` | `4` | Scales both the pktmon driver buffer **and** the user-mode SPSC ring (base 1,048,576 entries). Range 1-65535. Effective ring capacity is capped at 64M entries. |
+| `-BufferLevel` | `PspktBufferLevel` | `Default` | Scales the effective `-BufferSizeMultiplier` by a friendly level: `VerySmall` (25%), `Small` (50%), `Default` (100%), `Large` (150%), `Huge` (200%), `Massive` (400%). The result is clamped to 1-65535. |
 | `-TruncationSize` | `uint16` | `0` | Stream-level packet truncation in bytes. 0 means derive from `-PacketSize`. |
 | `-PollingIntervalMs` | `int` | `50` | Upper bound (ms) on the consumer wait when no packets are available. Range 10-5000. With AutoResetEvent signaling, the consumer wakes immediately on the first packet — this value is now a timeout safety net, not the steady-state interval. |
 
@@ -80,6 +81,8 @@ Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `-ParsingLevel` (`-pl`) | `PspktParsingLevel` | `Default` | Display detail: `Minimal`, `Default`, `Detailed`, or `Analysis`. `Analysis` opens an interactive full-screen TUI — see [Analysis Mode](./Analysis-Mode.md). |
+| `-AutoSave` | `switch` | — | **Analysis mode only.** On exit, automatically save the retained packet buffer to a uniquely-named pcapng (`pspkt-<filters>-<timestamp>.pcapng`) in the current directory, with no prompt. Takes precedence over the exit save prompt. Ignored (with a warning) outside Analysis mode. |
+| `-NoSave` | `switch` | — | **Analysis mode only.** Suppress the "Save packets to file?" prompt shown on exit. Does **not** disable the in-capture `w` save hotkey. Ignored (with a warning) outside Analysis mode. |
 | `-Spaced` | `switch` | — | Adds a blank line between formatted packet lines. |
 | `-Timestamp` (`-t`) | `switch` | — | Prefixes each line with the high-resolution local timestamp. |
 | `-NoWarning` | `switch` | — | Suppresses non-fatal setup warnings (auto-bumps from application-layer filters, missing-MAC vmNIC skip, non-numeric component value). Does **not** suppress pcapng data-loss / writer-error warnings — those indicate actual data loss. For full suppression of every `Write-Warning` use `-WarningAction SilentlyContinue`. |

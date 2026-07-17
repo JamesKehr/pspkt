@@ -2125,6 +2125,36 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         }
     }
 
+    Context 'Analysis save/buffer helpers' {
+        It 'Get-PspktBufferLevelMultiplier scales the base multiplier by the level' {
+            $subMod = Get-Module PspktSession
+            $calc = { param($base, $lvl) Get-PspktBufferLevelMultiplier -BaseMultiplier $base -Level ([PspktBufferLevel]::$lvl) }
+            (& $subMod $calc 4 'VerySmall') | Should -Be 1
+            (& $subMod $calc 4 'Small')     | Should -Be 2
+            (& $subMod $calc 4 'Default')   | Should -Be 4
+            (& $subMod $calc 4 'Large')     | Should -Be 6
+            (& $subMod $calc 4 'Huge')      | Should -Be 8
+            (& $subMod $calc 4 'Massive')   | Should -Be 16
+        }
+        It 'Get-PspktBufferLevelMultiplier clamps to the valid uint16 range' {
+            $subMod = Get-Module PspktSession
+            $calc = { param($base, $lvl) Get-PspktBufferLevelMultiplier -BaseMultiplier $base -Level ([PspktBufferLevel]::$lvl) }
+            # 1 * 0.25 = 0.25 -> clamps up to 1
+            (& $subMod $calc 1 'VerySmall') | Should -Be 1
+            # 65535 * 4 -> clamps down to 65535
+            (& $subMod $calc 65535 'Massive') | Should -Be 65535
+        }
+        It 'New-PspktCaptureFileName builds a tagged, timestamped, sanitized name' {
+            $subMod = Get-Module PspktSession
+            $ts = [datetime]'2026-01-02 12:34:56'
+            $make = { param($tag, $t) New-PspktCaptureFileName -FilterTag $tag -Timestamp $t }
+            (& $subMod $make 'DNS-Ping' $ts)     | Should -Be 'pspkt-DNS-Ping-20260102-123456.pcapng'
+            (& $subMod $make '' $ts)             | Should -Be 'pspkt-all-20260102-123456.pcapng'
+            # Path-traversal / wildcard characters are stripped.
+            (& $subMod $make 'DNS/../evil*' $ts) | Should -Be 'pspkt-DNSevil-20260102-123456.pcapng'
+        }
+    }
+
     Context 'NDP detailed parser' {
         BeforeAll {
             function script:To16U([uint16]$v) {

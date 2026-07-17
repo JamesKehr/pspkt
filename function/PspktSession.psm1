@@ -1477,6 +1477,93 @@ function Split-PspktWarningText {
 
 <#
 .SYNOPSIS
+Scales a base buffer-size multiplier by a PspktBufferLevel and returns the effective multiplier.
+
+.DESCRIPTION
+Maps the -BufferLevel enum to a scale factor (VerySmall 0.25, Small 0.5, Default 1.0,
+Large 1.5, Huge 2.0, Massive 4.0), applies it to the base BufferSizeMultiplier, rounds, and
+clamps the result to the valid uint16 multiplier range [1, 65535].
+
+.PARAMETER BaseMultiplier
+The base BufferSizeMultiplier ("the currently defined buffer size") to scale.
+
+.PARAMETER Level
+The PspktBufferLevel that determines the scale factor.
+
+.OUTPUTS
+System.UInt16 — the effective buffer-size multiplier.
+#>
+function Get-PspktBufferLevelMultiplier {
+    [CmdletBinding()]
+    [OutputType([uint16])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [uint16]
+        $BaseMultiplier,
+
+        [Parameter(Mandatory = $true)]
+        [PspktBufferLevel]
+        $Level
+    )
+
+    $factor = switch ($Level) {
+        ([PspktBufferLevel]::VerySmall) { 0.25 }
+        ([PspktBufferLevel]::Small)     { 0.5 }
+        ([PspktBufferLevel]::Default)   { 1.0 }
+        ([PspktBufferLevel]::Large)     { 1.5 }
+        ([PspktBufferLevel]::Huge)      { 2.0 }
+        ([PspktBufferLevel]::Massive)   { 4.0 }
+        default                         { 1.0 }
+    }
+
+    $scaled = [Math]::Round([double]$BaseMultiplier * $factor)
+    if ($scaled -lt 1) { $scaled = 1 }
+    if ($scaled -gt 65535) { $scaled = 65535 }
+    return [uint16]$scaled
+}
+
+<#
+.SYNOPSIS
+Builds a unique pcapng file name for an auto-saved capture from the active quick filters and a timestamp.
+
+.DESCRIPTION
+Produces a name of the form 'pspkt-<tag>-<yyyyMMdd-HHmmss>.pcapng', where <tag> is the joined,
+sanitized list of active quick-filter names (or 'all' when none were used). Only characters
+valid in a file name (letters, digits, dash, underscore) are kept.
+
+.PARAMETER FilterTag
+The quick-filter tag (e.g. 'DNS-Ping'). Empty/whitespace becomes 'all'.
+
+.PARAMETER Timestamp
+The timestamp to embed. Defaults to the current local time.
+
+.OUTPUTS
+System.String — the generated file name (no directory).
+#>
+function New-PspktCaptureFileName {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string]
+        $FilterTag = 'all',
+
+        [Parameter(Mandatory = $false)]
+        [datetime]
+        $Timestamp = (Get-Date)
+    )
+
+    $tag = if ([string]::IsNullOrWhiteSpace($FilterTag)) { 'all' } else { $FilterTag }
+    # Keep only file-name-safe characters; collapse everything else away.
+    $tag = ($tag -replace '[^A-Za-z0-9_-]', '')
+    if ([string]::IsNullOrWhiteSpace($tag)) { $tag = 'all' }
+    $ts = $Timestamp.ToString('yyyyMMdd-HHmmss')
+    return "pspkt-$tag-$ts.pcapng"
+}
+
+<#
+.SYNOPSIS
 Runs the BoxyBox Analysis-mode consumer loop: a live scrolling Text Box, with a
 focus mode that opens a Details box and supports copy/save.
 
@@ -1503,8 +1590,18 @@ Setup warnings collected by Start-Pspkt before the TUI started (e.g. the Analysi
 PacketSize auto-bump). They are shown in the runtime warning panel at first paint so
 they appear inside the TUI instead of scrolling above it.
 
+.PARAMETER AutoSave
+Automatically save the retained packet buffer to a uniquely-named pcapng file on exit
+(no prompt). Overrides the exit save prompt.
+
+.PARAMETER NoSave
+Suppress the "Save packets to file?" prompt shown on exit. Does not affect the 'w' hotkey.
+
+.PARAMETER AutoSaveTag
+Quick-filter tag used to build the auto-save file name (e.g. 'DNS-Ping', or 'all').
+
 .OUTPUTS
-PSCustomObject with PacketCount and DroppedCount.
+PSCustomObject with PacketCount, DroppedCount, and SaveResult (a status string or $null).
 #>
 function Invoke-PspktAnalysisLoop {
     [CmdletBinding()]
@@ -1521,7 +1618,19 @@ function Invoke-PspktAnalysisLoop {
         [Parameter(Mandatory = $false)]
         [AllowNull()]
         [string[]]
-        $InitialWarnings = $null
+        $InitialWarnings = $null,
+
+        [Parameter(Mandatory = $false)]
+        [switch]
+        $AutoSave,
+
+        [Parameter(Mandatory = $false)]
+        [switch]
+        $NoSave,
+
+        [Parameter(Mandatory = $false)]
+        [string]
+        $AutoSaveTag = 'all'
     )
 
     $stream = $Session.OutputStream[0]
@@ -1587,6 +1696,7 @@ function Invoke-PspktAnalysisLoop {
     $packetCount  = 0
     $droppedCount = 0
     $stopRequested = $false
+    $saveResult = $null
     $dirty = $true
 
     # --- Focus state ---
@@ -1718,6 +1828,57 @@ function Invoke-PspktAnalysisLoop {
             return "Saved $written packets to $resolved"
         } catch {
             return "Save failed: $($_.Exception.Message)"
+        }
+    }
+
+    # Yes/No overlay prompt (used for the "Save packets to file?" question on exit). Draws the
+    # same centered overlay style as $saveToFile and reads a single key: Y = true; N/Esc/Enter
+    # = false.
+    $promptYesNo = {
+        param([string]$question)
+        $body = [System.Collections.Generic.List[string]]::new()
+        $null = $body.Add('')
+        $null = $body.Add(' ' + $question)
+        $null = $body.Add('')
+        $null = $body.Add('   (Y)es      (N)o')
+        $null = $body.Add('')
+        $pW = [Math]::Min([Math]::Max(40, $question.Length + 8), $consoleWidth - 4)
+        $pTop = 0; $pLeft = 0
+        $pLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $pW, ' Exit ', $body, [ref]$pTop, [ref]$pLeft)
+        $pRegion = [BoxyBox.ScreenRegion]::new($pTop, $pLeft, $pW, $pLines.Count)
+        [Console]::Write($pRegion.BuildFrame($pLines))
+        while ($true) {
+            $k = [Console]::ReadKey($true)
+            if ($k.Key -eq [ConsoleKey]::Y) { return $true }
+            if ($k.Key -eq [ConsoleKey]::N -or $k.Key -eq [ConsoleKey]::Escape -or $k.Key -eq [ConsoleKey]::Enter) { return $false }
+        }
+    }
+
+    # Auto-save the retained buffer to a uniquely-named pcapng in the current directory (no
+    # prompt). The name is built from the active quick filters + a timestamp.
+    $autoSaveToFile = {
+        $name = New-PspktCaptureFileName -FilterTag $AutoSaveTag
+        try {
+            # Resolve against the current FileSystem location so it works even if the user has
+            # cd'd into a non-FileSystem provider (e.g. HKLM:).
+            $dir = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath
+            $path = [System.IO.Path]::Combine($dir, $name)
+            # Guarantee uniqueness: on a same-second, same-filter collision add a -N suffix so an
+            # existing capture is never overwritten.
+            if (Test-Path -LiteralPath $path) {
+                $stem = [System.IO.Path]::GetFileNameWithoutExtension($name)
+                $ext  = [System.IO.Path]::GetExtension($name)
+                $n = 1
+                do {
+                    $path = [System.IO.Path]::Combine($dir, "$stem-$n$ext")
+                    $n++
+                } while (Test-Path -LiteralPath $path)
+            }
+            $written = $detailStore.WritePcapng($path)
+            if ($written -le 0) { return 'No retained packets to auto-save' }
+            return "Auto-saved $written packets to $path"
+        } catch {
+            return "Auto-save failed: $($_.Exception.Message)"
         }
     }
 
@@ -2023,6 +2184,23 @@ function Invoke-PspktAnalysisLoop {
                 if ($warnActive) { $dirty = $true }
             }
         }
+
+        # --- Save-on-exit (Analysis retention buffer) ---
+        # The loop has stopped normally (S key / stop trigger). Offer to persist the retained
+        # packets: -AutoSave writes a uniquely-named file with no prompt; otherwise a Yes/No
+        # prompt is shown unless -NoSave suppressed it. The 'w' hotkey stays available during
+        # capture regardless of -NoSave. Wrapped so a prompt/IO failure can't escape the loop.
+        try {
+            if ($AutoSave) {
+                $saveResult = & $autoSaveToFile
+            } elseif (-not $NoSave) {
+                if (& $promptYesNo 'Save packets to file?') {
+                    $saveResult = & $saveToFile
+                }
+            }
+        } catch {
+            $saveResult = "Save on exit failed: $($_.Exception.Message)"
+        }
     }
     finally {
         # Restore console + formatter state.
@@ -2034,7 +2212,7 @@ function Invoke-PspktAnalysisLoop {
         Set-PspktDetailLevel -Level $prevDetail
     }
 
-    return [pscustomobject]@{ PacketCount = $packetCount; DroppedCount = $droppedCount }
+    return [pscustomobject]@{ PacketCount = $packetCount; DroppedCount = $droppedCount; SaveResult = $saveResult }
 }
 
 <#
@@ -2088,6 +2266,21 @@ haven't set it explicitly.
 Multiplier applied to both the pktmon driver-side buffer AND the user-mode SPSC ring buffer (base 1,048,576
 entries). Higher values reduce drops during traffic bursts at the cost of memory. Range 1-65535, default 4.
 Effective ring capacity is clamped to a 64M-entry maximum.
+
+.PARAMETER BufferLevel
+Relative buffer sizing that scales the effective -BufferSizeMultiplier by a friendly level instead of a raw
+number: VerySmall (25%), Small (50%), Default (100%, the currently defined size), Large (150%), Huge (200%),
+Massive (400%). The scaled multiplier is clamped to the valid 1-65535 range. Default is Default.
+
+.PARAMETER AutoSave
+Analysis mode only. Automatically save the retained packet buffer to a uniquely-named pcapng file on exit,
+with no prompt. The file name is built from the active quick filters and a timestamp
+(e.g. pspkt-DNS-Ping-20260101-120000.pcapng) in the current directory. Takes precedence over the exit save
+prompt. Ignored (with a warning) outside Analysis mode.
+
+.PARAMETER NoSave
+Analysis mode only. Suppress the "Save packets to file?" prompt shown when exiting Analysis mode. Does NOT
+disable the in-capture 'w' save hotkey. Ignored (with a warning) outside Analysis mode.
 
 .PARAMETER TruncationSize
 Stream-level packet truncation in bytes. 0 (default) means derive from PacketSize.
@@ -2529,6 +2722,10 @@ function Start-Pspkt {
         $BufferSizeMultiplier = 4,
 
         [Parameter(Mandatory = $false)]
+        [PspktBufferLevel]
+        $BufferLevel = [PspktBufferLevel]::Default,
+
+        [Parameter(Mandatory = $false)]
         [ValidateRange(0, 65535)]
         [uint16]
         $TruncationSize = 0,
@@ -2542,6 +2739,19 @@ function Start-Pspkt {
         [Alias('pl')]
         [PspktParsingLevel]
         $ParsingLevel = [PspktParsingLevel]::Default,
+
+        # Analysis mode only: automatically save the retained packet buffer to a uniquely-named
+        # pcapng file on exit (no prompt). The file name is built from the active quick filters
+        # and a timestamp. Takes precedence over the exit save prompt.
+        [Parameter(Mandatory = $false)]
+        [switch]
+        $AutoSave,
+
+        # Analysis mode only: suppress the "Save packets to file?" prompt shown on exit. Does NOT
+        # disable the in-capture 'w' save hotkey.
+        [Parameter(Mandatory = $false)]
+        [switch]
+        $NoSave,
 
         [Parameter(Mandatory = $false)]
         [Alias('comp')]
@@ -3482,6 +3692,14 @@ function Start-Pspkt {
             }
         }
 
+        # -AutoSave / -NoSave act on the Analysis retention buffer, so they only take effect in
+        # Analysis mode; warn (and ignore) if used with any other parsing level.
+        if (($AutoSave.IsPresent -or $NoSave.IsPresent) -and $ParsingLevel -ne [PspktParsingLevel]::Analysis) {
+            if (-not $NoWarning.IsPresent) {
+                Write-Warning "-AutoSave / -NoSave apply to Analysis mode only (-ParsingLevel Analysis); ignoring them for this capture."
+            }
+        }
+
         if ($Session.Active) {
             throw "Session '$($Session.Name)' is already active. Stop it before starting again."
         }
@@ -3513,20 +3731,24 @@ function Start-Pspkt {
                     $streamTruncation = [uint16]65535
                 }
 
-                # Scale the user-mode SPSC ring buffer with BufferSizeMultiplier as well.
+                # Scale the effective buffer-size multiplier by -BufferLevel (Default = no change),
+                # then use it to size BOTH the pktmon driver buffer and the user-mode SPSC ring.
+                $effectiveBufferMultiplier = Get-PspktBufferLevelMultiplier -BaseMultiplier $BufferSizeMultiplier -Level $BufferLevel
+
+                # Scale the user-mode SPSC ring buffer with the effective multiplier as well.
                 # Base ring size is 1M entries; multiplier scales linearly with a sane cap.
                 # Use [long] for the product + clamp before the [int] cast: a large multiplier
                 # can push baseRingCap * multiplier past int.MaxValue, and casting an
                 # out-of-range double straight to [int] throws.
                 $baseRingCap = 1048576
-                $targetRingCap = [long]$baseRingCap * [long]$BufferSizeMultiplier
+                $targetRingCap = [long]$baseRingCap * [long]$effectiveBufferMultiplier
                 if ($targetRingCap -lt $baseRingCap) { $targetRingCap = $baseRingCap }
                 if ($targetRingCap -gt 67108864) { $targetRingCap = 67108864 } # cap at 64M entries
                 $targetRingCap = [int]$targetRingCap
                 $appliedRingCap = [PktMonApi]::ConfigureRingBuffer($targetRingCap)
-                Write-Verbose "Ring buffer capacity: $appliedRingCap entries (multiplier=$BufferSizeMultiplier)"
+                Write-Verbose "Ring buffer capacity: $appliedRingCap entries (multiplier=$effectiveBufferMultiplier, level=$BufferLevel)"
 
-                $createdStream = $Session.Pspkt.CreateRealtimeStream($BufferSizeMultiplier, $streamTruncation)
+                $createdStream = $Session.Pspkt.CreateRealtimeStream($effectiveBufferMultiplier, $streamTruncation)
                 $Session.AttachOutputToSession($createdStream)
             }
         }
@@ -4029,12 +4251,25 @@ function Start-Pspkt {
             $icmpNdpOnly  = $NDP.IsPresent -or $AA.IsPresent -or $AAv6.IsPresent
             [PacketLineFormatter]::SetIcmpDisplayFilter($icmpEchoOnly, $icmpNdpOnly)
 
+            # Build the quick-filter tag for the auto-save / save-on-exit file name from the
+            # user-facing quick-filter switches that were specified (falls back to 'all').
+            $qfSwitchNames = @('ARP','NDP','AA','AAv4','AAv6','DHCP','DHCPv6','DNS','DNSoverHTTPS',
+                'DNSoverTLS','SMB','SMBoverQUIC','SSH','RDP','RPC','RCP','HTTP','HTTPS','WinRM',
+                'WinRMS','Ping','Ping4','Ping6')
+            $activeQf = foreach ($qn in $qfSwitchNames) {
+                if ($PSBoundParameters.ContainsKey($qn) -and $PSBoundParameters[$qn]) { $qn }
+            }
+            $autoSaveTag = if ($activeQf) { ($activeQf -join '-') } else { 'all' }
+
             # Hand the setup warnings collected before the TUI took over to the loop so they
             # appear in the in-TUI warning panel (the Write-Warning proxy was already restored
             # above, before this dispatch, so cleanup warns to the console normally).
-            $analysisResult = Invoke-PspktAnalysisLoop -Session $Session -PollingIntervalMs $PollingIntervalMs -InitialWarnings $analysisPendingWarnings.ToArray()
+            $analysisResult = Invoke-PspktAnalysisLoop -Session $Session -PollingIntervalMs $PollingIntervalMs -InitialWarnings $analysisPendingWarnings.ToArray() -AutoSave:$AutoSave -NoSave:$NoSave -AutoSaveTag $autoSaveTag
             $packetCount += $analysisResult.PacketCount
             $droppedCount += $analysisResult.DroppedCount
+            if (-not [string]::IsNullOrEmpty($analysisResult.SaveResult)) {
+                Write-Host $analysisResult.SaveResult -ForegroundColor DarkCyan
+            }
           }
           elseif ($useRealTime) {
             # Determine if pause/stop features are active.
