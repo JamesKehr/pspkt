@@ -331,20 +331,25 @@ namespace BoxyBox
             sb.Append(left);
 
             var content = new StringBuilder(inner);
+            int contentVis = 0;
             if (options != null)
             {
                 for (int i = 0; i < options.Count; i++)
                 {
                     string opt = options[i] ?? string.Empty;
                     string chunk = new string(rule, 2) + opt;
-                    if (AnsiText.VisibleLength(content.ToString()) + AnsiText.VisibleLength(chunk) > inner) break;
+                    int chunkVis = AnsiText.VisibleLength(chunk);
+                    // Track accumulated visible width numerically instead of materializing
+                    // content.ToString() (an O(n^2) allocation) on every option.
+                    if (contentVis + chunkVis > inner) break;
                     content.Append(chunk);
+                    contentVis += chunkVis;
                 }
             }
 
             string contentStr = content.ToString();
             sb.Append(contentStr);
-            int fill = inner - AnsiText.VisibleLength(contentStr);
+            int fill = inner - contentVis;
             if (fill > 0) sb.Append(new string(rule, fill));
             sb.Append(right);
             return sb.ToString();
@@ -399,14 +404,42 @@ namespace BoxyBox
             Height = height;
         }
 
-        /// <summary>Builds the top border line.</summary>
+        /// <summary>Builds the top border line (cached; rebuilt only when Width changes).</summary>
+        private string _cachedTopBorder;
+        private int _cachedTopBorderWidth = -1;
         private string TopBorder()
         {
+            if (_cachedTopBorder != null && _cachedTopBorderWidth == Width) return _cachedTopBorder;
             var sb = new StringBuilder(Width);
             sb.Append(BoxChars.TopLeft);
             sb.Append(new string(BoxChars.Horizontal, Width - 2));
             sb.Append(BoxChars.TopRight);
-            return sb.ToString();
+            _cachedTopBorder = sb.ToString();
+            _cachedTopBorderWidth = Width;
+            return _cachedTopBorder;
+        }
+
+        /// <summary>
+        /// Builds the bottom menu bar (cached; rebuilt only when Width, MenuStyle, or the
+        /// MenuOptions reference changes — the options list is assigned wholesale, not mutated
+        /// in place, so reference identity is a sufficient cache key).
+        /// </summary>
+        private string _cachedMenu;
+        private IList<string> _cachedMenuOptions;
+        private int _cachedMenuWidth = -1;
+        private MenuBar.Cap _cachedMenuStyle;
+        private string MenuRow()
+        {
+            if (_cachedMenu != null && ReferenceEquals(_cachedMenuOptions, MenuOptions) &&
+                _cachedMenuWidth == Width && _cachedMenuStyle == MenuStyle)
+            {
+                return _cachedMenu;
+            }
+            _cachedMenu = MenuBar.Build(MenuOptions, Width, MenuStyle);
+            _cachedMenuOptions = MenuOptions;
+            _cachedMenuWidth = Width;
+            _cachedMenuStyle = MenuStyle;
+            return _cachedMenu;
         }
 
         /// <summary>Builds a single content row with side borders.</summary>
@@ -475,7 +508,7 @@ namespace BoxyBox
                     result[row + r] = ContentLine(text);
                 }
             }
-            result[Height - 1] = MenuBar.Build(MenuOptions, Width, MenuStyle);
+            result[Height - 1] = MenuRow();
             return result;
         }
     }
