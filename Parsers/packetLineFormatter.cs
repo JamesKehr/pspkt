@@ -1728,13 +1728,13 @@ public static class PacketLineFormatter
         }
         else if (transportProto == 6) // TCP
         {
-            // Note: parsed TCP app protocols (DNS over TCP on 53, HTTP on 80/8080/8000/8888)
-            // are intentionally NOT hinted here. A packet on one of those ports only reaches
-            // this hint fallback when it carries no app-layer message (handshake / ACK / FIN
-            // segments), which is a pure transport event and must render as a plain
-            // "TCP [flags] ..." segment rather than "HTTP: TCP [flags] ..." / "DNS: TCP ...".
+            // Note: parsed TCP app protocols (DNS over TCP on 53, HTTP on 80/8080/8000/8888,
+            // SMB2 on 445) are intentionally NOT hinted here. A packet on one of those ports
+            // only reaches this hint fallback when it carries no app-layer message (handshake /
+            // ACK / FIN segments), which is a pure transport event and must render as a plain
+            // "TCP [flags] ..." segment rather than "SMB: TCP [flags] ..." / "HTTP: TCP ..." /
+            // "DNS: TCP ...".
             if (srcPort == 443   || dstPort == 443)   return "HTTPS";
-            if (srcPort == 445   || dstPort == 445)   return "SMB";
             if (srcPort == 22    || dstPort == 22)    return "SSH";
             if (srcPort == 23    || dstPort == 23)    return "Telnet";
             if (srcPort == 25    || dstPort == 25)    return "SMTP";

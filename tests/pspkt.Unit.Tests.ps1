@@ -1836,6 +1836,26 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $script:smbStartCmd.Parameters['SmbMatchTruncated'].ParameterType | Should -Be ([switch])
         }
 
+        It 'contentless TCP on the SMB port renders as plain TCP, not an SMB hint' {
+            # A bare ACK on port 445 carries no SMB2 message; it must render as a plain
+            # transport segment ("TCP [.] ...") rather than "SMB: TCP [.] ...".
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6; $ip[3]=40
+            $ip[12]=10;$ip[13]=24;$ip[14]=0;$ip[15]=72; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=5
+            # src ephemeral, dst 445 (0x01BD), seq 1, ack 2, ACK-only (0x10), win 252, no payload
+            $tcp = [byte[]](0xe4,0x37, 0x01,0xBD, 0,0,0,1, 0,0,0,2, 0x50,0x10, 0x00,0xFC, 0,0, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'TCP \[\.\], seq 1, ack 2'
+            $out | Should -Not -Match 'SMB'
+        }
+
         It 'Smb2Parser.TryParseSmb2Header extracts Create request fields' {
             $ctx = [Smb2Context]::new()
             $ok = [Smb2Parser]::TryParseSmb2Header($script:smbCreateReq, 12345, 445, [ref]$ctx)
