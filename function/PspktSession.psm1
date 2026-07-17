@@ -4748,6 +4748,12 @@ function Stop-Pspkt {
             try { [void][PktMonApi]::ConfigureRingBuffer(1024) } catch { }
             [PacketBytePool]::Clear()
 
+            # The above freed the buffers on the managed heap, but .NET keeps the segments
+            # committed and Windows keeps the pages resident, so the process working set doesn't
+            # drop on its own. Force a GC (with LOH compaction) and trim the working set so the
+            # memory actually returns to the OS after a large capture.
+            [PktMonApi]::ReleaseCaptureMemory()
+
             # Reset the SPSC ring buffer dropped counter for a clean next session.
             [PktMonApi]::ResetDroppedCount()
 
