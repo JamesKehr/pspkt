@@ -2780,13 +2780,40 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         It 'positions the cursor absolutely for the first row' {
             $script:frame.Contains("$($script:ESC)[1;1H") | Should -BeTrue
         }
-        It 'clears each line before writing' {
-            $script:frame.Contains("$($script:ESC)[2K") | Should -BeTrue
+        It 'does not erase rows (no CSI 2K) so borders do not flicker' {
+            $script:frame.Contains("$($script:ESC)[2K") | Should -BeFalse
+        }
+        It 'pads a short line to exactly Width in place of an erase' {
+            $r = [BoxyBox.ScreenRegion]::new(3, 5, 10, 1)
+            $f = $r.BuildFrame([string[]]@('hi'))
+            $f | Should -Be ("$($script:ESC)[3;5Hhi        ")
+        }
+        It 'pads a missing/null row to Width spaces' {
+            $r = [BoxyBox.ScreenRegion]::new(1, 1, 4, 2)
+            $f = $r.BuildFrame([string[]]@('ab'))
+            $f | Should -Be ("$($script:ESC)[1;1Hab  $($script:ESC)[2;1H    ")
+        }
+        It 'clips an over-long line to Width visible columns' {
+            $r = [BoxyBox.ScreenRegion]::new(1, 1, 3, 1)
+            $f = $r.BuildFrame([string[]]@('abcdef'))
+            [BoxyBox.AnsiText]::VisibleLength($f.Substring($f.IndexOf('H') + 1)) | Should -Be 3
+        }
+        It 'produces frame rows that are each exactly Width visible columns' {
+            # Split the concatenated frame at each cursor-move and check the content width.
+            $rowContents = $script:frame -split "$($script:ESC)\[\d+;\d+H" | Where-Object { $_ -ne '' }
+            $rowContents.Count | Should -Be 5
+            foreach ($rc in $rowContents) {
+                [BoxyBox.AnsiText]::VisibleLength($rc) | Should -Be 20
+            }
         }
         It 'cursor hide/show/clear helpers emit expected sequences' {
             [BoxyBox.ScreenRegion]::HideCursor()  | Should -Be "$($script:ESC)[?25l"
             [BoxyBox.ScreenRegion]::ShowCursor()  | Should -Be "$($script:ESC)[?25h"
             [BoxyBox.ScreenRegion]::ClearScreen() | Should -Be "$($script:ESC)[2J$($script:ESC)[H"
+        }
+        It 'synchronized-output helpers emit the DEC 2026 begin/end sequences' {
+            [BoxyBox.ScreenRegion]::BeginSyncOutput() | Should -Be "$($script:ESC)[?2026h"
+            [BoxyBox.ScreenRegion]::EndSyncOutput()   | Should -Be "$($script:ESC)[?2026l"
         }
     }
 

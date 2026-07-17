@@ -505,28 +505,81 @@ namespace BoxyBox
 
         /// <summary>
         /// Builds the escape-sequence string that positions the cursor at each row of the
-        /// region, clears that row, and writes the corresponding line. Never emits a trailing
-        /// newline, so the console does not scroll.
+        /// region and writes the corresponding line, each fitted to exactly <see cref="Width"/>
+        /// visible columns so it overwrites the previous frame's row in place. It deliberately
+        /// does NOT erase the row first (no <c>CSI 2K</c>): erasing the whole physical line
+        /// blanks the cells — including box-border cells and, for a region narrower than the
+        /// terminal, the cells of any box underneath — for the instant before the content is
+        /// rewritten, which the terminal's render thread can present as flicker. Overwriting a
+        /// fixed-width line has no such blank gap and never touches cells outside the region.
+        /// Never emits a trailing newline, so the console does not scroll.
         /// </summary>
         public string BuildFrame(IList<string> lines)
         {
-            var sb = new StringBuilder();
+            var sb = new StringBuilder(Height * (Width + 16));
             for (int i = 0; i < Height; i++)
             {
                 int row = Top + i;
                 sb.Append(CSI).Append(row).Append(';').Append(Left).Append('H');
-                sb.Append(CSI).Append("2K");
-                if (lines != null && i < lines.Count && lines[i] != null)
-                {
-                    sb.Append(lines[i]);
-                }
+                string line = (lines != null && i < lines.Count) ? lines[i] : null;
+                AppendFitted(sb, line);
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Appends <paramref name="line"/> to <paramref name="sb"/> occupying exactly
+        /// <see cref="Width"/> visible columns: a null/short line is right-padded with spaces
+        /// (clearing the rest of the region row in place of a <c>CSI 2K</c> erase), and an
+        /// over-long line is clipped ANSI-aware. Padding after a colored line is preceded by a
+        /// reset so the trailing spaces don't inherit a background attribute.
+        /// Width is measured in UTF-16 units via <see cref="AnsiText.VisibleLength"/> — the same
+        /// single-cell assumption the whole engine uses (see <see cref="TextJustify.Fit"/>); wide
+        /// (CJK/emoji) or combining characters are not cell-accurate. pspkt's rendered content is
+        /// ASCII, so this is not hit in practice; full east-asian-width support is a separate,
+        /// engine-wide change.
+        /// </summary>
+        private void AppendFitted(StringBuilder sb, string line)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                sb.Append(' ', Width);
+                return;
+            }
+            int visible = AnsiText.VisibleLength(line);
+            if (visible == Width)
+            {
+                sb.Append(line);
+            }
+            else if (visible < Width)
+            {
+                sb.Append(line);
+                if (AnsiText.ContainsAnsi(line)) sb.Append(AnsiText.Reset);
+                sb.Append(' ', Width - visible);
+            }
+            else
+            {
+                // Over-long: clip to Width visible columns (TakeVisiblePrefix re-appends a reset
+                // when it truncated a colored run).
+                sb.Append(AnsiText.TakeVisiblePrefix(line, Width));
+            }
         }
 
         public static string HideCursor() { return CSI + "?25l"; }
         public static string ShowCursor() { return CSI + "?25h"; }
         public static string ClearScreen() { return CSI + "2J" + CSI + "H"; }
+
+        /// <summary>
+        /// DEC private mode 2026 "synchronized output" begin/end. Wrapping a full frame in
+        /// <c>BeginSyncOutput()</c> ... <c>EndSyncOutput()</c> tells a supporting terminal
+        /// (e.g. Windows Terminal) to buffer every cell update and present the whole frame
+        /// atomically, so no partially-drawn (torn) frame is ever shown. Terminals that don't
+        /// support it ignore the unknown private mode and render normally. The pair MUST be
+        /// emitted around a single self-contained frame write and MUST NOT straddle a blocking
+        /// read (e.g. Console.ReadLine) or a sleep, or the terminal stays frozen.
+        /// </summary>
+        public static string BeginSyncOutput() { return CSI + "?2026h"; }
+        public static string EndSyncOutput() { return CSI + "?2026l"; }
     }
 
     /// <summary>

@@ -47,7 +47,7 @@ All types live in the `BoxyBox` namespace.
 |---|---|
 | `Box` | A bordered box: optional top border, N content rows, and a bottom **menu bar**. `Render(...)` returns a `string[]` frame (each line exactly `Width` visible columns). Supports a highlighted selected row and in-place `Resize(width, height)`. `ShowTopBorder=false` lets a box sit flush beneath another (shared divider). |
 | `MenuBar` | Builds the bottom bar from option strings, filling with a rule and end caps. `Cap.Terminal` (`╘══╛`, double) is the outer bottom border of a standalone/collapsed box; `Cap.Mid` (`╞══╡`, double) is a divider shared with the box below; `Cap.TerminalSingle` (`└──┘`, single) is the outer bottom of a box that sits below a divider (e.g. the expanded Details box). Double-line style is reserved for dividers and collapsed/live bottoms; boxes opened beneath a divider close with the single-line cap. |
-| `ScreenRegion` | A fixed rectangle on the console. `BuildFrame(lines)` turns a `string[]` into one absolute-positioned string ready for a single `[Console]::Write`. Also exposes `ClearScreen()`, `ShowCursor()`, `HideCursor()`. |
+| `ScreenRegion` | A fixed rectangle on the console. `BuildFrame(lines)` turns a `string[]` into one absolute-positioned string (each row fitted to `Width` and overwritten in place — no `CSI 2K` erase) ready for a single `[Console]::Write`. Also exposes `ClearScreen()`, `ShowCursor()`, `HideCursor()`, and `BeginSyncOutput()`/`EndSyncOutput()` (DEC 2026 synchronized output) for atomic, flicker-free frame presentation. |
 
 ### Scrolling text
 
@@ -84,9 +84,14 @@ lines (string[])  ──►  Box.Render()  ──►  frame (string[])  ──�
 2. `Box.Render(lines, selectedRow, hlOn, hlOff)` frames them: top border (optional), content
    rows fitted to the inner width with the selected row background-highlighted, and the menu
    bar.
-3. `ScreenRegion.BuildFrame(frame)` prefixes each row with an absolute cursor move so the
-   whole rectangle paints in place.
-4. The host writes the single resulting string. No scroll, no flicker beyond the repaint.
+3. `ScreenRegion.BuildFrame(frame)` prefixes each row with an absolute cursor move and fits
+   each line to exactly the region `Width` (padding short/missing rows with spaces, ANSI-aware
+   clipping long ones) so the row is **overwritten in place** — it deliberately does not erase
+   the row first (`CSI 2K`), which would blank the border cells for the instant before the
+   content is rewritten and show as flicker.
+4. The host writes the single resulting string, ideally wrapped in synchronized-output mode
+   (`ScreenRegion.BeginSyncOutput()` … `EndSyncOutput()`, DEC private mode 2026) so a
+   supporting terminal presents the whole frame atomically. No scroll, no flicker.
 
 Two boxes can be stacked by giving the top box a `Cap.Mid` menu bar (the shared divider) and
 the bottom box `ShowTopBorder=false`, positioned flush beneath. An `OverlayBox` frame can be
