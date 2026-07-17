@@ -81,6 +81,30 @@ pspkt -AA -comp 5
 pspkt -DNS -DoH
 ```
 
+## Discovering filters and parameters
+
+Two helper cmdlets print the current filter/parameter surface directly from `Start-Pspkt` — the types, aliases, and parameter-set tags are resolved live via reflection, so the output never drifts from the actual command.
+
+### Get-PspktQuickFilter
+
+Prints a tree of every quick filter and its application-layer predicates, grouped by protocol. Pass `-Protocol` to show a single subtree.
+
+```powershell
+# All quick filters and application-layer predicates
+Get-PspktQuickFilter
+
+# Just the DNS subtree
+Get-PspktQuickFilter -Protocol DNS
+```
+
+### Get-PspktParameterTree
+
+An expanded view that adds **every** non-filter `Start-Pspkt` parameter (buffers, output, scope, pause/stop triggers, diagnostics, …) organized by function, on top of the full quick-filter tree. Parameter-set-specific parameters are tagged `[Default]` or `[WithSession]`; everything else is common to both sets. Use it as a one-screen map of the whole command.
+
+```powershell
+Get-PspktParameterTree
+```
+
 ## See also
 
 - [Start-Pspkt](./Start-Pspkt.md)

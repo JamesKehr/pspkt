@@ -69,7 +69,7 @@ pspkt -WriteFile capture.pcapng -FileSize 100 -NumFiles 5
 ## Command index
 
 ### Sessions
-[`New-PspktSession`](./Sessions.md#new-pspktsession) · [`Get-PspktSession`](./Sessions.md#get-pspktsession) · [`Set-PspktSession`](./Sessions.md#set-pspktsession) · [`Start-Pspkt`](./Start-Pspkt.md) · [`Stop-Pspkt`](./Sessions.md#stop-pspkt)
+[`New-PspktSession`](./Sessions.md#new-pspktsession) · [`Get-PspktSession`](./Sessions.md#get-pspktsession) · [`Set-PspktSession`](./Sessions.md#set-pspktsession) · [`Start-Pspkt`](./Start-Pspkt.md) · [`Stop-Pspkt`](./Sessions.md#stop-pspkt) · [`Get-PspktQuickFilter`](./Quick-Filters.md#get-pspktquickfilter) · [`Get-PspktParameterTree`](./Quick-Filters.md#get-pspktparametertree)
 
 ### Filters
 [`New-PspktFilter`](./Filters.md#new-pspktfilter) · [`Get-PspktFilter`](./Filters.md#get-pspktfilter) · [`Set-PspktFilter`](./Filters.md#set-pspktfilter) · [`Add-PspktFilter`](./Filters.md#add-pspktfilter) · [`Remove-PspktFilter`](./Filters.md#remove-pspktfilter) · [`ConvertTo-PspktIpAddress`](./Filters.md#convertto-pspktipaddress)

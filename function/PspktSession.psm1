@@ -4824,48 +4824,188 @@ function Stop-Pspkt {
 
 Set-Alias -Name pspkt -Value Start-Pspkt
 
+<#
+.SYNOPSIS
+Converts a .NET type to the short display name pspkt uses in its parameter trees.
+
+.DESCRIPTION
+Maps common .NET types to concise lowercase names (SwitchParameter -> 'switch',
+String -> 'string', Int32 -> 'int', UInt16 -> 'uint16', etc.), appending '[]' for array
+types. Unknown types fall back to their .NET short name.
+
+.PARAMETER Type
+The System.Type to convert.
+
+.OUTPUTS
+System.String
+#>
+function ConvertTo-PspktShortTypeName {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [type]
+        $Type
+    )
+
+    if ($null -eq $Type) { return '' }
+    $isArray = $Type.IsArray
+    $base = if ($isArray) { $Type.GetElementType() } else { $Type }
+    $name = switch ($base.Name) {
+        'SwitchParameter' { 'switch' }
+        'String'          { 'string' }
+        'Int32'           { 'int' }
+        'UInt16'          { 'uint16' }
+        'UInt32'          { 'uint32' }
+        'Int64'           { 'long' }
+        'Boolean'         { 'bool' }
+        'Object'          { 'object' }
+        default           { $base.Name }
+    }
+    if ($isArray) { return "$name[]" }
+    return $name
+}
+
+<#
+.SYNOPSIS
+Returns reflection metadata for every non-common Start-Pspkt parameter.
+
+.DESCRIPTION
+Builds a hashtable keyed by parameter name, each value carrying the short display Type
+(via ConvertTo-PspktShortTypeName), Aliases, and the parameter Sets the parameter belongs to.
+Used by the parameter-tree discovery cmdlets so displayed types/aliases/sets are always
+derived from the live Start-Pspkt definition and can never go stale.
+
+.OUTPUTS
+System.Collections.Hashtable
+#>
+function Get-PspktStartParamMeta {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    $meta = @{}
+    $cmd = Get-Command -Name Start-Pspkt -ErrorAction SilentlyContinue
+    if ($null -eq $cmd) { return $meta }
+    # PowerShell common + optional common parameters that aren't part of the pspkt surface.
+    $common = @(
+        'Verbose','Debug','ErrorAction','WarningAction','InformationAction','ProgressAction',
+        'ErrorVariable','WarningVariable','InformationVariable','OutVariable','OutBuffer',
+        'PipelineVariable','WhatIf','Confirm'
+    )
+    foreach ($p in $cmd.Parameters.Values) {
+        if ($p.Name -in $common) { continue }
+        $meta[$p.Name] = [pscustomobject]@{
+            Type    = ConvertTo-PspktShortTypeName -Type $p.ParameterType
+            Aliases = @($p.Aliases)
+            Sets    = @($p.ParameterSets.Keys)
+        }
+    }
+    return $meta
+}
+
+<#
+.SYNOPSIS
+Renders a pspkt parameter/quick-filter tree (ordered group -> entries) to box-drawing text lines.
+
+.DESCRIPTION
+Shared renderer for Get-PspktQuickFilter and Get-PspktParameterTree. Each group maps to an
+array of entry hashtables with keys Name, Desc, Alias (optional), Type (optional, shown as
+'<type>' after the name), and Params (optional array of PSCustomObjects with .N .T .D shown as
+indented child nodes). Returns the lines (leading blank + titled tree); the caller adds any
+footer and joins them.
+
+.PARAMETER Tree
+An ordered dictionary of group-name -> entry-array.
+
+.PARAMETER Title
+The heading shown at the root of the tree.
+
+.OUTPUTS
+System.String[]
+#>
+function Format-PspktFilterTree {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]
+        $Tree,
+
+        [Parameter(Mandatory = $true)]
+        [string]
+        $Title
+    )
+
+    $lines = [System.Collections.ArrayList]::new()
+    $null = $lines.Add('')
+    $null = $lines.Add("  $([char]0x250C)$([char]0x2500) $Title")
+    $null = $lines.Add("  $([char]0x2502)")
+
+    $groupKeys = @($Tree.Keys)
+    for ($gi = 0; $gi -lt $groupKeys.Count; $gi++) {
+        $groupName = $groupKeys[$gi]
+        $entries   = $Tree[$groupName]
+        $isLastGroup = ($gi -eq $groupKeys.Count - 1)
+        $groupPrefix = if ($isLastGroup) { [char]0x2514 } else { [char]0x251C }  # └ or ├
+        $groupLine   = if ($isLastGroup) { ' ' } else { [char]0x2502 }           # │ or space
+
+        $null = $lines.Add("  $groupPrefix$([char]0x2500)$([char]0x2500) $groupName")
+
+        for ($ei = 0; $ei -lt $entries.Count; $ei++) {
+            $entry = $entries[$ei]
+            $isLastEntry = ($ei -eq $entries.Count - 1)
+            $entryPrefix = if ($isLastEntry) { [char]0x2514 } else { [char]0x251C }
+            $entryLine   = if ($isLastEntry) { ' ' } else { [char]0x2502 }
+
+            $aliasStr = if ($entry.Alias) { " (alias: $($entry.Alias))" } else { '' }
+            $typeStr  = if ($entry.Type)  { " <$($entry.Type)>" } else { '' }
+            $nameStr  = "$($entry.Name)$aliasStr$typeStr"
+            $null = $lines.Add("  $groupLine   $entryPrefix$([char]0x2500)$([char]0x2500) $nameStr  $([char]0x2500)$([char]0x2500) $($entry.Desc)")
+
+            if ($entry.Params -and $entry.Params.Count -gt 0) {
+                $null = $lines.Add("  $groupLine   $entryLine       Application-layer filters:")
+                for ($pi = 0; $pi -lt $entry.Params.Count; $pi++) {
+                    $p = $entry.Params[$pi]
+                    $isLastParam = ($pi -eq $entry.Params.Count - 1)
+                    $paramPrefix = if ($isLastParam) { [char]0x2514 } else { [char]0x251C }
+                    $null = $lines.Add("  $groupLine   $entryLine       $paramPrefix$([char]0x2500) $($p.N) <$($p.T)>  $([char]0x2500) $($p.D)")
+                }
+            }
+        }
+    }
+
+    return $lines.ToArray()
+}
+
 # --------------------------------------------------------------------------
 # Get-PspktQuickFilter — discovery cmdlet for quick filters and app predicates
 # --------------------------------------------------------------------------
 
 <#
 .SYNOPSIS
-Displays all available quick filters and their associated application-layer
-filter parameters in a tree view.
+Returns the structured quick-filter / application-layer-predicate tree (shared data source).
 
 .DESCRIPTION
-Get-PspktQuickFilter outputs a formatted tree showing every quick filter
-switch available on Start-Pspkt, grouped by protocol family. Under each
-quick filter that has associated application-layer predicate parameters,
-the predicate parameters are listed as child nodes.
-
-This is a discovery / help tool — it does not modify any session state.
+Private data provider shared by Get-PspktQuickFilter and Get-PspktParameterTree. Returns an
+ordered dictionary of protocol-group -> entry hashtables. Each entry's app-layer predicate
+types and switch aliases are resolved from the live Start-Pspkt definition (via
+Get-PspktStartParamMeta) so they always reflect the current parameter set. Optionally filters
+to specific protocol families by tag.
 
 .PARAMETER Protocol
-Optional filter to show only a specific protocol family. Accepts one or
-more names (e.g. 'DNS', 'SMB', 'ICMP'). When omitted, all protocols are
-shown.
-
-.EXAMPLE
-Get-PspktQuickFilter
-
-Shows the full tree of all quick filters and app-layer predicates.
-
-.EXAMPLE
-Get-PspktQuickFilter -Protocol DNS, TLS
-
-Shows only the DNS and TLS quick filters with their predicates.
+Optional protocol family name(s) to include (matched against each entry's Tags). When omitted,
+the full tree is returned.
 
 .OUTPUTS
-System.String
-Formatted tree-view text written to the output stream.
+System.Collections.Specialized.OrderedDictionary
 #>
-function Get-PspktQuickFilter {
+function Get-PspktQuickFilterTree {
     [CmdletBinding()]
-    [OutputType([string])]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory = $false, Position = 0)]
-        [ValidateSet('ARP','NDP','AA','AAv4','AAv6','DHCP','DHCPv6','DNS','DNSoverHTTPS','DNSoverTLS','SMB','SMBoverQUIC','SSH','RDP','RPC','RCP','HTTP','HTTPS','WinRM','WinRMS','Ping','Ping4','Ping6','TLS','ICMP')]
         [string[]]
         $Protocol
     )
@@ -5107,6 +5247,24 @@ function Get-PspktQuickFilter {
         )
     }
 
+    # Resolve each app-layer predicate's display type and each switch's alias from the live
+    # Start-Pspkt definition so the tree always reflects the current parameter set (types/aliases
+    # can never go stale relative to the actual cmdlet).
+    $meta = Get-PspktStartParamMeta
+    foreach ($groupName in @($tree.Keys)) {
+        foreach ($entry in $tree[$groupName]) {
+            $ekey = ($entry.Name -replace '^-', '')
+            if ($meta.ContainsKey($ekey)) {
+                $al = $meta[$ekey].Aliases
+                if ($al -and $al.Count -gt 0) { $entry.Alias = '-' + $al[0] }
+            }
+            foreach ($p in $entry.Params) {
+                $pkey = ($p.N -replace '^-', '')
+                if ($meta.ContainsKey($pkey)) { $p.T = $meta[$pkey].Type }
+            }
+        }
+    }
+
     # Filter by -Protocol if specified.
     $filteredTree = [ordered]@{}
     foreach ($group in $tree.Keys) {
@@ -5129,60 +5287,225 @@ function Get-PspktQuickFilter {
         }
     }
 
-    if ($filteredTree.Count -eq 0) {
+    return $filteredTree
+}
+
+<#
+.SYNOPSIS
+Displays all available quick filters and their associated application-layer
+filter parameters in a tree view.
+
+.DESCRIPTION
+Get-PspktQuickFilter outputs a formatted tree showing every quick filter
+switch available on Start-Pspkt, grouped by protocol family. Under each
+quick filter that has associated application-layer predicate parameters,
+the predicate parameters are listed as child nodes. Parameter types and
+switch aliases are resolved from the live Start-Pspkt definition, so the
+output always reflects the current parameter set.
+
+This is a discovery / help tool — it does not modify any session state.
+
+.PARAMETER Protocol
+Optional filter to show only a specific protocol family. Accepts one or
+more names (e.g. 'DNS', 'SMB', 'ICMP'). When omitted, all protocols are
+shown.
+
+.EXAMPLE
+Get-PspktQuickFilter
+
+Shows the full tree of all quick filters and app-layer predicates.
+
+.EXAMPLE
+Get-PspktQuickFilter -Protocol DNS, TLS
+
+Shows only the DNS and TLS quick filters with their predicates.
+
+.OUTPUTS
+System.String
+Formatted tree-view text written to the output stream.
+#>
+function Get-PspktQuickFilter {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $false, Position = 0)]
+        [ValidateSet('ARP','NDP','AA','AAv4','AAv6','DHCP','DHCPv6','DNS','DNSoverHTTPS','DNSoverTLS','SMB','SMBoverQUIC','SSH','RDP','RPC','RCP','HTTP','HTTPS','WinRM','WinRMS','Ping','Ping4','Ping6','TLS','ICMP')]
+        [string[]]
+        $Protocol
+    )
+
+    $tree = if ($Protocol -and $Protocol.Count -gt 0) {
+        Get-PspktQuickFilterTree -Protocol $Protocol
+    } else {
+        Get-PspktQuickFilterTree
+    }
+
+    if ($tree.Count -eq 0) {
         Write-Host "No quick filters match the specified protocol filter." -ForegroundColor Yellow
         return
     }
 
-    # Render the tree.
     $lines = [System.Collections.ArrayList]::new()
-    $null = $lines.Add('')
-    $null = $lines.Add("  $([char]0x250C)$([char]0x2500) Quick Filters and Application-Layer Predicates")
-    $null = $lines.Add("  $([char]0x2502)")
-
-    $groupKeys = @($filteredTree.Keys)
-    for ($gi = 0; $gi -lt $groupKeys.Count; $gi++) {
-        $groupName = $groupKeys[$gi]
-        $entries   = $filteredTree[$groupName]
-        $isLastGroup = ($gi -eq $groupKeys.Count - 1)
-        $groupPrefix = if ($isLastGroup) { [char]0x2514 } else { [char]0x251C }  # └ or ├
-        $groupLine   = if ($isLastGroup) { ' ' } else { [char]0x2502 }           # │ or space
-
-        $null = $lines.Add("  $groupPrefix$([char]0x2500)$([char]0x2500) $groupName")
-
-        for ($ei = 0; $ei -lt $entries.Count; $ei++) {
-            $entry = $entries[$ei]
-            $isLastEntry = ($ei -eq $entries.Count - 1)
-            $entryPrefix = if ($isLastEntry) { [char]0x2514 } else { [char]0x251C }
-            $entryLine   = if ($isLastEntry) { ' ' } else { [char]0x2502 }
-
-            $aliasStr = if ($entry.Alias) { " (alias: $($entry.Alias))" } else { '' }
-            $nameStr  = "$($entry.Name)$aliasStr"
-            $null = $lines.Add("  $groupLine   $entryPrefix$([char]0x2500)$([char]0x2500) $nameStr  $([char]0x2500)$([char]0x2500) $($entry.Desc)")
-
-            if ($entry.Params.Count -gt 0) {
-                $null = $lines.Add("  $groupLine   $entryLine       Application-layer filters:")
-                for ($pi = 0; $pi -lt $entry.Params.Count; $pi++) {
-                    $p = $entry.Params[$pi]
-                    $isLastParam = ($pi -eq $entry.Params.Count - 1)
-                    $paramPrefix = if ($isLastParam) { [char]0x2514 } else { [char]0x251C }
-                    $paramName = $p.N
-                    $paramType = $p.T
-                    $paramDesc = $p.D
-                    $null = $lines.Add("  $groupLine   $entryLine       $paramPrefix$([char]0x2500) $paramName <$paramType>  $([char]0x2500) $paramDesc")
-                }
-            }
-        }
-    }
-
+    foreach ($l in (Format-PspktFilterTree -Tree $tree -Title 'Quick Filters and Application-Layer Predicates')) { $null = $lines.Add($l) }
     $null = $lines.Add('')
     $null = $lines.Add("  Tip: Application-layer filters auto-imply the parent quick filter if")
     $null = $lines.Add("  not already covered. Use 'Get-Help Start-Pspkt -Parameter Dns*' for")
     $null = $lines.Add("  full parameter documentation, or see wiki/Application-Filters.md.")
     $null = $lines.Add('')
 
-    $output = $lines -join "`n"
-    $output
+    return ($lines -join "`n")
 }
 
-Export-ModuleMember -Function New-PspktSession, Get-PspktSession, Set-PspktSession, Start-Pspkt, Stop-Pspkt, Get-PspktQuickFilter -Alias pspkt
+<#
+.SYNOPSIS
+Displays every Start-Pspkt parameter in a tree view, grouped by function and quick filter.
+
+.DESCRIPTION
+Get-PspktParameterTree is an expanded version of Get-PspktQuickFilter: it shows a "General
+Parameters" section (session, buffer, display, save, scope, triggers, file output, and
+diagnostics parameters — each with its short type, alias, brief description, and parameter-set
+annotation) followed by the full quick-filter / application-layer-predicate tree (shared with
+Get-PspktQuickFilter). Parameters are enumerated from the live Start-Pspkt definition, so every
+current parameter is shown — any unrecognized parameter falls into an 'Other' group rather than
+being dropped. This is a discovery / help tool; it does not modify session state.
+
+.PARAMETER Protocol
+Optional filter to show only a specific quick-filter protocol family (e.g. 'DNS', 'SMB').
+When specified, only the matching quick-filter subtree is shown (the general-parameter section
+is omitted). When omitted, the full parameter tree is shown.
+
+.EXAMPLE
+Get-PspktParameterTree
+
+Shows the full Start-Pspkt parameter tree (general parameters + quick filters).
+
+.EXAMPLE
+Get-PspktParameterTree -Protocol SMB
+
+Shows only the SMB quick filter and its application-layer predicates.
+
+.OUTPUTS
+System.String
+Formatted tree-view text written to the output stream.
+#>
+function Get-PspktParameterTree {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $false, Position = 0)]
+        [ValidateSet('ARP','NDP','AA','AAv4','AAv6','DHCP','DHCPv6','DNS','DNSoverHTTPS','DNSoverTLS','SMB','SMBoverQUIC','SSH','RDP','RPC','RCP','HTTP','HTTPS','WinRM','WinRMS','Ping','Ping4','Ping6','TLS','ICMP')]
+        [string[]]
+        $Protocol
+    )
+
+    $meta = Get-PspktStartParamMeta
+
+    # Names shown in the Quick Filters section (so the general section excludes them).
+    $qfTree  = Get-PspktQuickFilterTree
+    $qfNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($g in @($qfTree.Keys)) {
+        foreach ($e in $qfTree[$g]) {
+            [void]$qfNames.Add(($e.Name -replace '^-', ''))
+            foreach ($p in $e.Params) { [void]$qfNames.Add(($p.N -replace '^-', '')) }
+        }
+    }
+
+    # Group + brief description for each non-QF parameter. Group order defines display order.
+    $groupsOrder = @('Session & Identity','Buffer & Performance','Display','Analysis Save',
+                     'Scope / Targeting','Protocol Options','Pause / Stop Triggers',
+                     'File / ETL Output','Diagnostics','Other')
+    $paramGroup = @{
+        Session              = @('Session & Identity',    'Existing pspktSession to capture with (pipeline)')
+        Name                 = @('Session & Identity',    'Name for a new session')
+        CaptureType          = @('Session & Identity',    'All / Flow / Drop capture type')
+        PacketSize           = @('Session & Identity',    'Bytes captured per packet (0 = full packet)')
+        BufferSizeMultiplier = @('Buffer & Performance',  'Base multiplier for the driver + SPSC ring buffers')
+        BufferLevel          = @('Buffer & Performance',  'Relative buffer size (Tiny..Massive)')
+        TruncationSize       = @('Buffer & Performance',  'Stream-level packet truncation (0 = from PacketSize)')
+        PollingIntervalMs    = @('Buffer & Performance',  'Consumer wait upper bound when idle')
+        ParsingLevel         = @('Display',               'Output detail: Minimal/Default/Detailed/Analysis')
+        Spaced               = @('Display',               'Blank line between packets')
+        Timestamp            = @('Display',               'Show per-packet timestamps')
+        AutoSave             = @('Analysis Save',         'Analysis: auto-save buffer to unique pcapng on exit')
+        NoSave               = @('Analysis Save',         'Analysis: suppress the save-on-exit prompt')
+        Component            = @('Scope / Targeting',     'Components to capture (All / NICs / IDs)')
+        VM                   = @('Scope / Targeting',     'Hyper-V VM object to constrain capture to')
+        VMName               = @('Scope / Targeting',     'Hyper-V VM name to constrain capture to')
+        IPAddress            = @('Scope / Targeting',     'AND-merge an IP into every quick filter')
+        SMBoverQuicAltPort   = @('Protocol Options',      'Alternate UDP port for -SMBoverQUIC')
+        Pause                = @('Pause / Stop Triggers', 'Enable p=pause / r=resume')
+        PauseOnDrop          = @('Pause / Stop Triggers', 'Pause when any drop is seen')
+        PauseOnLocation      = @('Pause / Stop Triggers', 'Pause on a matching drop location')
+        PauseOnReason        = @('Pause / Stop Triggers', 'Pause on a matching drop reason')
+        StopOnDrop           = @('Pause / Stop Triggers', 'Stop when any drop is seen')
+        StopOnLocation       = @('Pause / Stop Triggers', 'Stop on a matching drop location')
+        StopOnReason         = @('Pause / Stop Triggers', 'Stop on a matching drop reason')
+        StopDelay            = @('Pause / Stop Triggers', 'Keep capturing N ms after a stop trigger')
+        WriteFile            = @('File / ETL Output',     'Write a pcapng file (async writer)')
+        RealTime             = @('File / ETL Output',     'Console output alongside -WriteFile')
+        FileSize             = @('File / ETL Output',     'Max MB per pcapng file before rotation')
+        FlushDisk            = @('File / ETL Output',     'Flush the writer after every batch')
+        NumFiles             = @('File / ETL Output',     'Number of files in the rotation')
+        WriteEtl             = @('File / ETL Output',     'Write an ETL file via the pktmon CLI')
+        DumpInterfaces       = @('Diagnostics',           'List capturable interfaces and exit')
+        NoWarning            = @('Diagnostics',           'Suppress advisory warnings')
+    }
+
+    # Build the general (non-QF) tree, dynamically including every non-QF parameter so a newly
+    # added parameter always appears (unknown ones land in 'Other').
+    $nonQf = [ordered]@{}
+    foreach ($grp in $groupsOrder) { $nonQf[$grp] = [System.Collections.ArrayList]::new() }
+    foreach ($name in ($meta.Keys | Sort-Object)) {
+        if ($qfNames.Contains($name)) { continue }
+        $grp  = if ($paramGroup.ContainsKey($name)) { $paramGroup[$name][0] } else { 'Other' }
+        $desc = if ($paramGroup.ContainsKey($name)) { $paramGroup[$name][1] } else { '(see Get-Help Start-Pspkt)' }
+        $m = $meta[$name]
+        $aliasStr = if ($m.Aliases.Count -gt 0) { '-' + $m.Aliases[0] } else { $null }
+        # Parameter-set annotation for parameters that aren't common to every set.
+        $setTag = ''
+        if ($m.Sets -notcontains '__AllParameterSets') {
+            $setTag = ' [' + (($m.Sets | Where-Object { $_ -ne '__AllParameterSets' }) -join '/') + ']'
+        }
+        $null = $nonQf[$grp].Add(@{
+            Name   = "-$name"
+            Desc   = "$desc$setTag"
+            Alias  = $aliasStr
+            Type   = $m.Type
+            Params = @()
+        })
+    }
+    # Drop empty groups and convert to arrays for the renderer.
+    $nonQfTree = [ordered]@{}
+    foreach ($grp in @($nonQf.Keys)) {
+        if ($nonQf[$grp].Count -gt 0) { $nonQfTree[$grp] = @($nonQf[$grp]) }
+    }
+
+    # QF section (respects -Protocol). An explicitly empty array is treated as "no filter".
+    $hasProtocol = ($Protocol -and $Protocol.Count -gt 0)
+    $qfSection = if ($hasProtocol) {
+        Get-PspktQuickFilterTree -Protocol $Protocol
+    } else {
+        $qfTree
+    }
+
+    $lines = [System.Collections.ArrayList]::new()
+    $null = $lines.Add('')
+    $null = $lines.Add("  Start-Pspkt parameter tree")
+    $null = $lines.Add("  Parameter sets: Default (new session -Name/-CaptureType/-PacketSize) | WithSession (-Session);")
+    $null = $lines.Add("  all other parameters are common to both sets.")
+    if (-not $hasProtocol -and $nonQfTree.Count -gt 0) {
+        foreach ($l in (Format-PspktFilterTree -Tree $nonQfTree -Title 'General Parameters')) { $null = $lines.Add($l) }
+    }
+    if ($qfSection.Count -gt 0) {
+        foreach ($l in (Format-PspktFilterTree -Tree $qfSection -Title 'Quick Filters and Application-Layer Predicates')) { $null = $lines.Add($l) }
+    }
+    $null = $lines.Add('')
+    $null = $lines.Add("  Tip: switch quick filters auto-create capture filters; application-layer")
+    $null = $lines.Add("  filters auto-imply their parent quick filter. Use 'Get-Help Start-Pspkt -Full'")
+    $null = $lines.Add("  for complete parameter documentation.")
+    $null = $lines.Add('')
+
+    return ($lines -join "`n")
+}
+
+Export-ModuleMember -Function New-PspktSession, Get-PspktSession, Set-PspktSession, Start-Pspkt, Stop-Pspkt, Get-PspktQuickFilter, Get-PspktParameterTree -Alias pspkt

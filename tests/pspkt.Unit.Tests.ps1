@@ -38,6 +38,7 @@ $allExportedCommands = @(
     'Start-Pspkt',
     'Stop-Pspkt',
     'Get-PspktQuickFilter',
+    'Get-PspktParameterTree',
     'Get-PspktParserColorProfile',
     'Import-PspktParserColorProfile',
     'Set-PspktParserColorProfile',
@@ -2152,6 +2153,104 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             (& $subMod $make '' $ts)             | Should -Be 'pspkt-all-20260102-123456.pcapng'
             # Path-traversal / wildcard characters are stripped.
             (& $subMod $make 'DNS/../evil*' $ts) | Should -Be 'pspkt-DNSevil-20260102-123456.pcapng'
+        }
+    }
+
+    Context 'Quick filter / parameter tree helpers' {
+        BeforeAll {
+            $script:commonParams = @(
+                'Verbose','Debug','ErrorAction','WarningAction','InformationAction',
+                'ProgressAction','ErrorVariable','WarningVariable','InformationVariable',
+                'OutVariable','OutBuffer','PipelineVariable','WhatIf','Confirm'
+            )
+            $script:startParams = (Get-Command Start-Pspkt).Parameters
+            $script:nonCommonParams = @($script:startParams.Keys | Where-Object { $_ -notin $script:commonParams })
+            $script:qfText = (Get-PspktQuickFilter) -join "`n"
+            $script:paramTreeText = (Get-PspktParameterTree) -join "`n"
+        }
+
+        It 'exports Get-PspktQuickFilter and Get-PspktParameterTree' {
+            (Get-Command -Name Get-PspktQuickFilter -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
+            (Get-Command -Name Get-PspktParameterTree -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
+        }
+
+        It 'Get-PspktQuickFilter returns non-empty text' {
+            $script:qfText | Should -Not -BeNullOrEmpty
+            $script:qfText | Should -Match 'Quick Filters and Application-Layer Predicates'
+        }
+
+        It 'Get-PspktQuickFilterTree entries all reference real Start-Pspkt parameters' {
+            $subMod = Get-Module PspktSession
+            $tree = & $subMod { Get-PspktQuickFilterTree }
+            $names = @($script:startParams.Keys)
+            foreach ($section in $tree.Keys) {
+                foreach ($entry in $tree[$section]) {
+                    # A switch quick filter has a real '-Name' parameter (except the
+                    # synthetic '(ICMP app filters)' grouping entry, which has none).
+                    if ($entry.Name -like '-*') {
+                        $names | Should -Contain $entry.Name.TrimStart('-')
+                    }
+                    # Every application-layer predicate must be a real parameter too.
+                    foreach ($appParam in $entry.Params) {
+                        $names | Should -Contain $appParam.N.TrimStart('-')
+                    }
+                }
+            }
+        }
+
+        It 'Get-PspktQuickFilter shows the current (array) predicate types' {
+            # These were previously stale scalar types; reflection must render them as arrays.
+            $script:qfText | Should -Match '-DnsName <string\[\]>'
+            $script:qfText | Should -Match '-DnsId <int\[\]>'
+            $script:qfText | Should -Match '-TlsSni <string\[\]>'
+            $script:qfText | Should -Match '-HttpStatus <string\[\]>'
+            $script:qfText | Should -Match '-DhcpClientMac <string\[\]>'
+            $script:qfText | Should -Match '-SmbFilename <string\[\]>'
+            $script:qfText | Should -Match '-Icmpv6NdpTarget <string\[\]>'
+        }
+
+        It 'Get-PspktQuickFilter renders switch aliases' {
+            $script:qfText | Should -Match '-DNSoverHTTPS \(alias: -DoH\)'
+            $script:qfText | Should -Match '-DNSoverTLS \(alias: -DoT\)'
+            $script:qfText | Should -Match '-SMBoverQUIC \(alias: -SoQ\)'
+        }
+
+        It 'Get-PspktQuickFilter shows every application-layer predicate parameter' {
+            # App-predicate params follow the mixed-case convention (DnsName, TlsSni, ...).
+            # Case-sensitive prefix match excludes the all-caps switch filters (DNS, HTTP, SMB).
+            $appPredicates = @($script:startParams.Keys |
+                Where-Object { $_ -cmatch '^(Dns|Tls|Http|Dhcp|Smb|Icmp)' })
+            $appPredicates.Count | Should -BeGreaterThan 0
+            $missing = @()
+            foreach ($p in $appPredicates) {
+                if ($script:qfText -notmatch "(?m)-$([regex]::Escape($p))\b") { $missing += $p }
+            }
+            # A newly-added predicate that isn't wired into the curated tree fails here.
+            $missing | Should -BeNullOrEmpty
+        }
+
+        It 'Get-PspktParameterTree -Protocol with an empty array shows the full tree' {
+            $emptyProtoText = (Get-PspktParameterTree -Protocol @()) -join "`n"
+            $emptyProtoText | Should -Match 'General Parameters'
+            $emptyProtoText | Should -Match 'Quick Filters and Application-Layer Predicates'
+        }
+
+        It 'Get-PspktParameterTree includes every non-common Start-Pspkt parameter' {
+            $missing = @()
+            foreach ($p in $script:nonCommonParams) {
+                if ($script:paramTreeText -notmatch "(?m)-$([regex]::Escape($p))\b") { $missing += $p }
+            }
+            $missing | Should -BeNullOrEmpty
+        }
+
+        It 'Get-PspktParameterTree contains both the general and quick-filter sections' {
+            $script:paramTreeText | Should -Match 'General Parameters'
+            $script:paramTreeText | Should -Match 'Quick Filters and Application-Layer Predicates'
+        }
+
+        It 'Get-PspktParameterTree tags parameter-set-specific parameters' {
+            $script:paramTreeText | Should -Match '-Session <pspktSession>.*\[WithSession\]'
+            $script:paramTreeText | Should -Match '-Name <string>.*\[Default\]'
         }
     }
 
