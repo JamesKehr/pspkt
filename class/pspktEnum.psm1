@@ -1321,12 +1321,12 @@ enum PspktParsingLevel {
 # Relative packet-buffer sizing for -BufferLevel. The factor scales the effective
 # BufferSizeMultiplier: Default keeps it as-is, the others scale it down or up.
 enum PspktBufferLevel {
-    VerySmall = 0   # 25% of default
+    Tiny      = 0   # 25% of default
     Small     = 1   # 50% of default
     Default   = 2   # 100% (the currently defined buffer size)
     Large     = 3   # 150% of default
-    Huge      = 4   # 200% of default
-    Massive   = 5   # 400% of default
+    Huge      = 4   # 400% of default
+    Massive   = 5   # 800% of default
 }
 
 # create the type accelerator

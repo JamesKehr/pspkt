@@ -1480,8 +1480,8 @@ function Split-PspktWarningText {
 Scales a base buffer-size multiplier by a PspktBufferLevel and returns the effective multiplier.
 
 .DESCRIPTION
-Maps the -BufferLevel enum to a scale factor (VerySmall 0.25, Small 0.5, Default 1.0,
-Large 1.5, Huge 2.0, Massive 4.0), applies it to the base BufferSizeMultiplier, rounds, and
+Maps the -BufferLevel enum to a scale factor (Tiny 0.25, Small 0.5, Default 1.0,
+Large 1.5, Huge 4.0, Massive 8.0), applies it to the base BufferSizeMultiplier, rounds, and
 clamps the result to the valid uint16 multiplier range [1, 65535].
 
 .PARAMETER BaseMultiplier
@@ -1507,12 +1507,12 @@ function Get-PspktBufferLevelMultiplier {
     )
 
     $factor = switch ($Level) {
-        ([PspktBufferLevel]::VerySmall) { 0.25 }
+        ([PspktBufferLevel]::Tiny)      { 0.25 }
         ([PspktBufferLevel]::Small)     { 0.5 }
         ([PspktBufferLevel]::Default)   { 1.0 }
         ([PspktBufferLevel]::Large)     { 1.5 }
-        ([PspktBufferLevel]::Huge)      { 2.0 }
-        ([PspktBufferLevel]::Massive)   { 4.0 }
+        ([PspktBufferLevel]::Huge)      { 4.0 }
+        ([PspktBufferLevel]::Massive)   { 8.0 }
         default                         { 1.0 }
     }
 
@@ -2269,13 +2269,13 @@ Effective ring capacity is clamped to a 64M-entry maximum.
 
 .PARAMETER BufferLevel
 Relative buffer sizing that scales the effective -BufferSizeMultiplier by a friendly level instead of a raw
-number: VerySmall (25%), Small (50%), Default (100%, the currently defined size), Large (150%), Huge (200%),
-Massive (400%). The scaled multiplier is clamped to the valid 1-65535 range. Default is Default.
+number: Tiny (25%), Small (50%), Default (100%, the currently defined size), Large (150%), Huge (400%),
+Massive (800%). The scaled multiplier is clamped to the valid 1-65535 range. Default is Default.
 The user-mode SPSC ring is allocated up front at 1,048,576 x effective-multiplier entries (rounded up to a
-power of two), at 56 bytes/entry. With the default -BufferSizeMultiplier 4 that is roughly: VerySmall 56 MB,
-Small 112 MB, Default 224 MB, Large 448 MB, Huge 448 MB (Large and Huge coincide because 6M entries round up
-to 8M), Massive 896 MB. The same multiplier also scales the kernel-side pktmon buffer (additional,
-OS-managed). See the "Buffer sizing and memory" section of the Start-Pspkt wiki page.
+power of two), at 56 bytes/entry. With the default -BufferSizeMultiplier 4 that is roughly: Tiny 56 MB,
+Small 112 MB, Default 224 MB, Large 448 MB, Huge 896 MB, Massive 1792 MB. The same multiplier also scales the
+kernel-side pktmon buffer (additional, OS-managed). See the "Buffer sizing and memory" section of the
+Start-Pspkt wiki page.
 
 .PARAMETER AutoSave
 Analysis mode only. Automatically save the retained packet buffer to a uniquely-named pcapng file on exit,

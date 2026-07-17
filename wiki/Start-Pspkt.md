@@ -72,7 +72,7 @@ Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `-BufferSizeMultiplier` | `uint16` | `4` | Scales both the pktmon driver buffer **and** the user-mode SPSC ring (base 1,048,576 entries). Range 1-65535. Effective ring capacity is capped at 64M entries. |
-| `-BufferLevel` | `PspktBufferLevel` | `Default` | Scales the effective `-BufferSizeMultiplier` by a friendly level: `VerySmall` (25%), `Small` (50%), `Default` (100%), `Large` (150%), `Huge` (200%), `Massive` (400%). The result is clamped to 1-65535. See [Buffer sizing and memory](#buffer-sizing-and-memory) for the per-level memory cost (≈ 56 MB to ≈ 896 MB at the default multiplier). |
+| `-BufferLevel` | `PspktBufferLevel` | `Default` | Scales the effective `-BufferSizeMultiplier` by a friendly level: `Tiny` (25%), `Small` (50%), `Default` (100%), `Large` (150%), `Huge` (400%), `Massive` (800%). The result is clamped to 1-65535. See [Buffer sizing and memory](#buffer-sizing-and-memory) for the per-level memory cost (≈ 56 MB to ≈ 1,792 MB at the default multiplier). |
 | `-TruncationSize` | `uint16` | `0` | Stream-level packet truncation in bytes. 0 means derive from `-PacketSize`. |
 | `-PollingIntervalMs` | `int` | `50` | Upper bound (ms) on the consumer wait when no packets are available. Range 10-5000. With AutoResetEvent signaling, the consumer wakes immediately on the first packet — this value is now a timeout safety net, not the steady-state interval. |
 
@@ -183,18 +183,18 @@ at 64M entries. Each entry is **56 bytes**, so the ring's process memory is
 
 | `-BufferLevel` | Factor | Effective multiplier | Ring entries (rounded to 2ⁿ) | Ring memory |
 |---|---|---|---|---|
-| `VerySmall` | 0.25 | 1 | 1,048,576 | **≈ 56 MB** |
+| `Tiny` | 0.25 | 1 | 1,048,576 | **≈ 56 MB** |
 | `Small` | 0.50 | 2 | 2,097,152 | **≈ 112 MB** |
 | `Default` | 1.00 | 4 | 4,194,304 | **≈ 224 MB** |
 | `Large` | 1.50 | 6 | 8,388,608 | **≈ 448 MB** |
-| `Huge` | 2.00 | 8 | 8,388,608 | **≈ 448 MB** |
-| `Massive` | 4.00 | 16 | 16,777,216 | **≈ 896 MB** |
+| `Huge` | 4.00 | 16 | 16,777,216 | **≈ 896 MB** |
+| `Massive` | 8.00 | 32 | 33,554,432 | **≈ 1,792 MB** |
 
-> **Note:** `Large` and `Huge` use the **same** memory at the default multiplier — 6M entries
-> rounds up to the next power of two (8M), which is exactly what `Huge` requests. They diverge
-> only at larger `-BufferSizeMultiplier` values. Because both the multiplier (rounded to an
-> integer) and the ring size (rounded to a power of two) are quantized, adjacent levels can
-> coincide; use `-Verbose` to see the applied ring capacity.
+> **Note:** the effective multiplier is rounded to an integer and the ring is rounded up to a
+> power of two, so the applied size is quantized. At the default `-BufferSizeMultiplier 4` the
+> levels form a clean doubling ladder (56 → 112 → 224 → 448 → 896 → 1,792 MB); at very small
+> `-BufferSizeMultiplier` values adjacent levels can round to the same size. Use `-Verbose` to
+> see the applied ring capacity.
 
 For a custom base, compute:
 `ring-memory = nextPow2(1,048,576 × round(BufferSizeMultiplier × factor)) × 56 bytes`.
@@ -350,14 +350,14 @@ pspkt -SMB -pl Analysis -NoSave
 
 ```powershell
 # Larger ring buffer for a high-rate capture that was dropping (BufferOverflow).
-# Massive ≈ 896 MB ring at the default -BufferSizeMultiplier; use -Verbose to see
+# Huge ≈ 896 MB ring at the default -BufferSizeMultiplier; use -Verbose to see
 # the applied ring capacity. See "Buffer sizing and memory" for the full table.
 pspkt -HTTPS -BufferLevel Huge -Verbose
 ```
 
 ```powershell
-# Smaller footprint on a memory-constrained host (VerySmall ≈ 56 MB ring).
-pspkt -DNS -BufferLevel VerySmall
+# Smaller footprint on a memory-constrained host (Tiny ≈ 56 MB ring).
+pspkt -DNS -BufferLevel Tiny
 ```
 
 ```powershell
