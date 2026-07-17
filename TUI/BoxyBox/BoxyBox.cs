@@ -211,6 +211,28 @@ namespace BoxyBox
             }
             return sb.ToString();
         }
+
+        /// <summary>
+        /// Returns <paramref name="line"/> fitted to exactly <paramref name="width"/> visible
+        /// columns: null/short lines are right-padded with spaces (a reset is inserted first when
+        /// the line contains ANSI so the padding doesn't inherit a background), and over-long
+        /// lines are clipped ANSI-aware. This is the single fitting used by both
+        /// <see cref="ScreenRegion.BuildFrame"/> and <see cref="FrameBuffer.Diff"/> so an
+        /// overwrite and a diff of the same content produce byte-identical rows.
+        /// </summary>
+        public static string FitToWidth(string line, int width)
+        {
+            if (width <= 0) return string.Empty;
+            if (string.IsNullOrEmpty(line)) return new string(' ', width);
+            int visible = VisibleLength(line);
+            if (visible == width) return line;
+            if (visible < width)
+            {
+                string pad = new string(' ', width - visible);
+                return ContainsAnsi(line) ? (line + Reset + pad) : (line + pad);
+            }
+            return TakeVisiblePrefix(line, width);
+        }
     }
 
     /// <summary>
@@ -561,41 +583,17 @@ namespace BoxyBox
         }
 
         /// <summary>
-        /// Appends <paramref name="line"/> to <paramref name="sb"/> occupying exactly
-        /// <see cref="Width"/> visible columns: a null/short line is right-padded with spaces
-        /// (clearing the rest of the region row in place of a <c>CSI 2K</c> erase), and an
-        /// over-long line is clipped ANSI-aware. Padding after a colored line is preceded by a
-        /// reset so the trailing spaces don't inherit a background attribute.
-        /// Width is measured in UTF-16 units via <see cref="AnsiText.VisibleLength"/> — the same
-        /// single-cell assumption the whole engine uses (see <see cref="TextJustify.Fit"/>); wide
-        /// (CJK/emoji) or combining characters are not cell-accurate. pspkt's rendered content is
-        /// ASCII, so this is not hit in practice; full east-asian-width support is a separate,
-        /// engine-wide change.
+        /// Appends <paramref name="line"/> to <paramref name="sb"/> fitted to exactly
+        /// <see cref="Width"/> visible columns (see <see cref="AnsiText.FitToWidth"/>), in place
+        /// of a <c>CSI 2K</c> erase. Shares the fitting with <see cref="FrameBuffer.Diff"/> so an
+        /// overwrite and a diff of the same content are byte-identical.
+        /// Width is measured in UTF-16 units — the same single-cell assumption the whole engine
+        /// uses (see <see cref="TextJustify.Fit"/>); wide (CJK/emoji) or combining characters are
+        /// not cell-accurate. pspkt's rendered content is ASCII, so this is not hit in practice.
         /// </summary>
         private void AppendFitted(StringBuilder sb, string line)
         {
-            if (string.IsNullOrEmpty(line))
-            {
-                sb.Append(' ', Width);
-                return;
-            }
-            int visible = AnsiText.VisibleLength(line);
-            if (visible == Width)
-            {
-                sb.Append(line);
-            }
-            else if (visible < Width)
-            {
-                sb.Append(line);
-                if (AnsiText.ContainsAnsi(line)) sb.Append(AnsiText.Reset);
-                sb.Append(' ', Width - visible);
-            }
-            else
-            {
-                // Over-long: clip to Width visible columns (TakeVisiblePrefix re-appends a reset
-                // when it truncated a colored run).
-                sb.Append(AnsiText.TakeVisiblePrefix(line, Width));
-            }
+            sb.Append(AnsiText.FitToWidth(line, Width));
         }
 
         public static string HideCursor() { return CSI + "?25l"; }
@@ -613,6 +611,88 @@ namespace BoxyBox
         /// </summary>
         public static string BeginSyncOutput() { return CSI + "?2026h"; }
         public static string EndSyncOutput() { return CSI + "?2026l"; }
+    }
+
+    /// <summary>
+    /// A row-diffing companion to <see cref="ScreenRegion"/>: it remembers the fitted content
+    /// last emitted for each row of a fixed rectangular region and, on the next frame, emits a
+    /// cursor-move + content ONLY for the rows whose content actually changed. Static rows (box
+    /// borders, menu bars, unchanged text) are therefore not re-sent every frame, which both cuts
+    /// the bytes written and — because a row that isn't re-sent can't blank — removes redundant
+    /// work on the hot repaint path.
+    ///
+    /// Ownership rule for overlapping content: the caller draws overlays (notifications, prompts,
+    /// the warning panel, transition animations) ON TOP of the diffed base frame and MUST call
+    /// <see cref="InvalidateRows"/> for the rows an overlay covered (or <see cref="Invalidate"/>
+    /// after a full-screen clear), so the next base frame re-emits those rows and reclaims them.
+    /// Without that, the diff would see the base content unchanged and skip the row, leaving the
+    /// overlay on screen.
+    /// </summary>
+    public sealed class FrameBuffer
+    {
+        private const string CSI = "\x1b[";
+
+        public int Top { get; private set; }
+        public int Left { get; private set; }
+        public int Width { get; private set; }
+        public int Height { get; private set; }
+
+        // Fitted content last emitted for each row (index 0 = Top). null means "unknown" — the
+        // next Diff re-emits the row unconditionally.
+        private readonly string[] _prev;
+
+        public FrameBuffer(int top, int left, int width, int height)
+        {
+            Top = top < 1 ? 1 : top;
+            Left = left < 1 ? 1 : left;
+            Width = width < 1 ? 1 : width;
+            Height = height < 1 ? 1 : height;
+            _prev = new string[Height];
+        }
+
+        /// <summary>
+        /// Emits cursor-move + fitted content for each row whose fitted content differs from the
+        /// last <see cref="Diff"/> (or that was invalidated). Returns the escape-sequence string
+        /// (empty when nothing changed). <paramref name="lines"/> supplies the desired rows
+        /// top-to-bottom; missing/null rows become blank (a full-width run of spaces).
+        /// </summary>
+        public string Diff(IList<string> lines)
+        {
+            StringBuilder sb = null;
+            for (int i = 0; i < Height; i++)
+            {
+                string src = (lines != null && i < lines.Count) ? lines[i] : null;
+                string fitted = AnsiText.FitToWidth(src, Width);
+                if (!string.Equals(fitted, _prev[i], StringComparison.Ordinal))
+                {
+                    if (sb == null) sb = new StringBuilder(Height * (Width + 16));
+                    sb.Append(CSI).Append(Top + i).Append(';').Append(Left).Append('H').Append(fitted);
+                    _prev[i] = fitted;
+                }
+            }
+            return sb == null ? string.Empty : sb.ToString();
+        }
+
+        /// <summary>Forces the next <see cref="Diff"/> to re-emit every row (e.g. after a full-screen clear).</summary>
+        public void Invalidate()
+        {
+            for (int i = 0; i < Height; i++) _prev[i] = null;
+        }
+
+        /// <summary>
+        /// Forces the next <see cref="Diff"/> to re-emit the rows in the absolute row range
+        /// [<paramref name="absoluteTop"/>, absoluteTop + <paramref name="count"/>) that fall
+        /// within this region (e.g. the rows an overlay just drew over). Out-of-range rows are
+        /// ignored.
+        /// </summary>
+        public void InvalidateRows(int absoluteTop, int count)
+        {
+            for (int r = absoluteTop; r < absoluteTop + count; r++)
+            {
+                int i = r - Top;
+                if (i >= 0 && i < Height) _prev[i] = null;
+            }
+        }
     }
 
     /// <summary>

@@ -83,6 +83,7 @@ if ($null -eq $typeCheck) {
         [BoxyBox.MenuBar]
         [BoxyBox.Box]
         [BoxyBox.ScreenRegion]
+        [BoxyBox.FrameBuffer]
         [BoxyBox.TextBox]
         [BoxyBox.TreeNode]
         [BoxyBox.TreeRow]
