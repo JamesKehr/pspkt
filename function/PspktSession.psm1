@@ -1708,6 +1708,7 @@ function Invoke-PspktAnalysisLoop {
     $packetCount  = 0
     $droppedCount = 0
     $stopRequested = $false
+    $stopWasTrigger = $false   # true when the stop was raised by a drop stop-trigger (not the 's' key)
     $saveResult = $null
     $dirty = $true
 
@@ -1852,26 +1853,28 @@ function Invoke-PspktAnalysisLoop {
         }
     }
 
-    # Yes/No overlay prompt (used for the "Save packets to file?" question on exit). Draws the
-    # same centered overlay style as $saveToFile and reads a single key: Y = true; N/Esc/Enter
-    # = false.
+    # Exit-prompt overlay (the "Save packets to file?" question). Draws the same centered overlay
+    # style as $saveToFile and reads a single key: Y = 'yes' (save), N/Enter = 'no' (don't save),
+    # Esc = 'cancel' (abort the exit and keep capturing).
     $promptYesNo = {
         param([string]$question)
         $body = [System.Collections.Generic.List[string]]::new()
         $null = $body.Add('')
         $null = $body.Add(' ' + $question)
         $null = $body.Add('')
-        $null = $body.Add('   (Y)es      (N)o')
+        $null = $body.Add('   (Y)es      (N)o      (Esc) Cancel')
         $null = $body.Add('')
-        $pW = [Math]::Min([Math]::Max(40, $question.Length + 8), $consoleWidth - 4)
+        $pW = [Math]::Min([Math]::Max(44, $question.Length + 8), $consoleWidth - 4)
         $pTop = 0; $pLeft = 0
         $pLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $pW, ' Exit ', $body, [ref]$pTop, [ref]$pLeft)
-        $pRegion = [BoxyBox.ScreenRegion]::new($pTop, $pLeft, $pW, $pLines.Count)
-        [Console]::Write($pRegion.BuildFrame($pLines))
+        $pActualW = [BoxyBox.AnsiText]::VisibleLength($pLines[0])
+        $pRegion = [BoxyBox.ScreenRegion]::new($pTop, $pLeft, $pActualW, $pLines.Count)
+        [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $pRegion.BuildFrame($pLines) + [BoxyBox.ScreenRegion]::EndSyncOutput())
         while ($true) {
             $k = [Console]::ReadKey($true)
-            if ($k.Key -eq [ConsoleKey]::Y) { return $true }
-            if ($k.Key -eq [ConsoleKey]::N -or $k.Key -eq [ConsoleKey]::Escape -or $k.Key -eq [ConsoleKey]::Enter) { return $false }
+            if ($k.Key -eq [ConsoleKey]::Y) { return 'yes' }
+            if ($k.Key -eq [ConsoleKey]::N -or $k.Key -eq [ConsoleKey]::Enter) { return 'no' }
+            if ($k.Key -eq [ConsoleKey]::Escape) { return 'cancel' }
         }
     }
 
@@ -1915,6 +1918,9 @@ function Invoke-PspktAnalysisLoop {
     [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen() + [BoxyBox.ScreenRegion]::HideCursor())
 
     try {
+        # Outer loop lets the "Save packets to file?" prompt CANCEL the exit (Esc) and resume
+        # capturing, rather than always stopping.
+        while ($true) {
         while ($Session.Active -and -not $stopRequested) {
             # --- Detect a console (Windows Terminal) resize and rebuild the layout in place ---
             # Boxes and regions are sized from the console dimensions read once at startup; when
@@ -1999,7 +2005,7 @@ function Invoke-PspktAnalysisLoop {
                     continue
                 }
 
-                if ($ch -eq 's') { $stopRequested = $true; continue }
+                if ($ch -eq 's') { $stopRequested = $true; $stopWasTrigger = $false; continue }
 
                 # Pause ('p'): stop collecting new packets (drained packets are discarded, so
                 # nothing more is added to the Text box or JIT store) and enter Focus so the
@@ -2110,7 +2116,7 @@ function Invoke-PspktAnalysisLoop {
                                 $textBox.AppendRange($res.Lines)
                                 $dirty = $true
                             }
-                            if ($res.TriggerAction -eq 2) { $stopRequested = $true }
+                            if ($res.TriggerAction -eq 2) { $stopRequested = $true; $stopWasTrigger = $true }
                         }
                     } finally {
                         [PktMonApi]::ReturnPacketBuffers($stream.PacketBuffer, $pktCount)
@@ -2250,21 +2256,55 @@ function Invoke-PspktAnalysisLoop {
         }
 
         # --- Save-on-exit (Analysis retention buffer) ---
-        # The loop has stopped normally (S key / stop trigger). Offer to persist the retained
-        # packets: -AutoSave writes a uniquely-named file with no prompt; otherwise a Yes/No
-        # prompt is shown unless -NoSave suppressed it. The 'w' hotkey stays available during
-        # capture regardless of -NoSave. Wrapped so a prompt/IO failure can't escape the loop.
+        # The capture stopped (S key / stop trigger). Offer to persist the retained packets:
+        # -AutoSave writes a uniquely-named file with no prompt; otherwise a Yes/No/Cancel prompt
+        # is shown unless -NoSave suppressed it. Esc on the prompt CANCELS the exit and resumes
+        # capturing. The 'w' hotkey stays available during capture regardless of -NoSave. Wrapped
+        # so a prompt/IO failure can't escape the loop.
+        $exitCancelled = $false
         try {
             if ($AutoSave) {
                 $saveResult = & $autoSaveToFile
             } elseif (-not $NoSave) {
-                if (& $promptYesNo 'Save packets to file?') {
+                $answer = & $promptYesNo 'Save packets to file?'
+                if ($answer -eq 'yes') {
                     $saveResult = & $saveToFile
+                } elseif ($answer -eq 'cancel' -and $Session.Active) {
+                    # Abort the exit and keep capturing (only possible while the session is live).
+                    # If the stop was raised by a drop stop-trigger, disable the drop triggers so
+                    # the accumulated / next matching packet doesn't immediately reopen the prompt.
+                    if ($stopWasTrigger) {
+                        [PacketLineFormatter]::SetDropTriggers($false, $false, 0, 0, 0, 0)
+                    }
+                    $exitCancelled = $true
+                    $stopRequested = $false
+                    $stopWasTrigger = $false
                 }
             }
         } catch {
             $saveResult = "Save on exit failed: $($_.Exception.Message)"
         }
+
+        if ($exitCancelled) {
+            # Repaint over the exit prompt and resume the capture loop.
+            $frameBuffer.Invalidate()
+            $dirty = $true
+            continue
+        }
+        break
+        }  # end outer resume loop
+
+        # Final clean repaint: draw the live text view over any exit/save prompt overlay so the
+        # parsed capture text stays visible on close for the user to reference.
+        try {
+            $frameBuffer.Invalidate()
+            $finalWindow = $textBox.GetTailWindow($liveBox.ContentRows)
+            $finalFrame = $frameBuffer.Diff($liveBox.Render($finalWindow))
+            $finalStatus = "  pspkt Analysis stopped  |  packets: $packetCount  drops: $droppedCount"
+            if ($finalStatus.Length -gt $boxWidth) { $finalStatus = $finalStatus.Substring(0, $boxWidth) }
+            $finalStatusLine = "$ESC[1;1H" + $finalStatus.PadRight($boxWidth)
+            [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $finalStatusLine + $finalFrame + [BoxyBox.ScreenRegion]::EndSyncOutput())
+        } catch { }
     }
     finally {
         # Restore console + formatter state.
@@ -4698,6 +4738,15 @@ function Stop-Pspkt {
                     }
                 }
             }
+
+            # Free the managed capture buffers now that the native producer is stopped. Under a
+            # large -BufferLevel the user-mode SPSC ring is hundreds of MB (up to ~1.8 GB) and the
+            # packet byte[] pool can retain hundreds of MB more; both are static and would
+            # otherwise persist until the next capture. Clear the managed flag first so
+            # ConfigureRingBuffer is allowed to shrink the ring, then drop the pooled arrays.
+            [PktMonApi]::SetCaptureActive($false)
+            try { [void][PktMonApi]::ConfigureRingBuffer(1024) } catch { }
+            [PacketBytePool]::Clear()
 
             # Reset the SPSC ring buffer dropped counter for a clean next session.
             [PktMonApi]::ResetDroppedCount()

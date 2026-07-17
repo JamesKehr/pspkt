@@ -290,6 +290,21 @@ public static class PacketBytePool
         _buckets[idx].TryPush(array);
     }
 
+    /// <summary>
+    /// Drops every pooled byte[] and lease box so the pool's retained memory can be reclaimed by
+    /// the GC. Call on capture teardown (not on the hot path) — under a very large -BufferLevel
+    /// the pool can retain hundreds of MB of packet buffers that would otherwise persist until the
+    /// next capture reuses or replaces them.
+    /// </summary>
+    public static void Clear()
+    {
+        for (int i = 0; i < _buckets.Length; i++)
+        {
+            while (_buckets[i].TryPop() != null) { }
+        }
+        while (_leaseBoxes.TryPop() != null) { }
+    }
+
     public static long RentCount { get { return Interlocked.Read(ref _rentCount); } }
     public static long ReturnCount { get { return Interlocked.Read(ref _returnCount); } }
     public static long MissCount { get { return Interlocked.Read(ref _missCount); } }
