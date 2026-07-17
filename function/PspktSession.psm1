@@ -2271,6 +2271,11 @@ Effective ring capacity is clamped to a 64M-entry maximum.
 Relative buffer sizing that scales the effective -BufferSizeMultiplier by a friendly level instead of a raw
 number: VerySmall (25%), Small (50%), Default (100%, the currently defined size), Large (150%), Huge (200%),
 Massive (400%). The scaled multiplier is clamped to the valid 1-65535 range. Default is Default.
+The user-mode SPSC ring is allocated up front at 1,048,576 x effective-multiplier entries (rounded up to a
+power of two), at 56 bytes/entry. With the default -BufferSizeMultiplier 4 that is roughly: VerySmall 56 MB,
+Small 112 MB, Default 224 MB, Large 448 MB, Huge 448 MB (Large and Huge coincide because 6M entries round up
+to 8M), Massive 896 MB. The same multiplier also scales the kernel-side pktmon buffer (additional,
+OS-managed). See the "Buffer sizing and memory" section of the Start-Pspkt wiki page.
 
 .PARAMETER AutoSave
 Analysis mode only. Automatically save the retained packet buffer to a uniquely-named pcapng file on exit,

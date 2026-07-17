@@ -72,7 +72,7 @@ Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `-BufferSizeMultiplier` | `uint16` | `4` | Scales both the pktmon driver buffer **and** the user-mode SPSC ring (base 1,048,576 entries). Range 1-65535. Effective ring capacity is capped at 64M entries. |
-| `-BufferLevel` | `PspktBufferLevel` | `Default` | Scales the effective `-BufferSizeMultiplier` by a friendly level: `VerySmall` (25%), `Small` (50%), `Default` (100%), `Large` (150%), `Huge` (200%), `Massive` (400%). The result is clamped to 1-65535. |
+| `-BufferLevel` | `PspktBufferLevel` | `Default` | Scales the effective `-BufferSizeMultiplier` by a friendly level: `VerySmall` (25%), `Small` (50%), `Default` (100%), `Large` (150%), `Huge` (200%), `Massive` (400%). The result is clamped to 1-65535. See [Buffer sizing and memory](#buffer-sizing-and-memory) for the per-level memory cost (≈ 56 MB to ≈ 896 MB at the default multiplier). |
 | `-TruncationSize` | `uint16` | `0` | Stream-level packet truncation in bytes. 0 means derive from `-PacketSize`. |
 | `-PollingIntervalMs` | `int` | `50` | Upper bound (ms) on the consumer wait when no packets are available. Range 10-5000. With AutoResetEvent signaling, the consumer wakes immediately on the first packet — this value is now a timeout safety net, not the steady-state interval. |
 
@@ -168,6 +168,49 @@ See [Drop Triggers](./Drop-Triggers.md) for full details.
 | `-FlushDisk` | `-fd` | `switch` | — | Flushes the BinaryWriter after every drained batch (durability). Without this, flushes only at stop (throughput). |
 | `-NumFiles` | — | `int` | `2` | Number of files in circular rotation: `foo.001.pcapng` → `foo.002.pcapng` → ... → `foo.NNN.pcapng` → wrap. Range 2-100. |
 | `-WriteEtl` | `-etl` | `string` | — | Path to an ETL file via pktmon CLI native writer. Mutually exclusive with `-WriteFile` and `-RealTime`. |
+
+## Buffer sizing and memory
+
+The **user-mode SPSC ring buffer** absorbs bursts between the native pktmon callback (producer)
+and the console/file consumer. It is a `PSPacketData[]` allocated **up front** at
+`1,048,576 × effective-multiplier` entries, rounded **up to the next power of two**, and capped
+at 64M entries. Each entry is **56 bytes**, so the ring's process memory is
+`ring-entries × 56 bytes`.
+
+`-BufferLevel` scales the effective multiplier off `-BufferSizeMultiplier` (default **4**):
+`effective = round(BufferSizeMultiplier × factor)`, clamped to 1-65535. With the default
+`-BufferSizeMultiplier 4`:
+
+| `-BufferLevel` | Factor | Effective multiplier | Ring entries (rounded to 2ⁿ) | Ring memory |
+|---|---|---|---|---|
+| `VerySmall` | 0.25 | 1 | 1,048,576 | **≈ 56 MB** |
+| `Small` | 0.50 | 2 | 2,097,152 | **≈ 112 MB** |
+| `Default` | 1.00 | 4 | 4,194,304 | **≈ 224 MB** |
+| `Large` | 1.50 | 6 | 8,388,608 | **≈ 448 MB** |
+| `Huge` | 2.00 | 8 | 8,388,608 | **≈ 448 MB** |
+| `Massive` | 4.00 | 16 | 16,777,216 | **≈ 896 MB** |
+
+> **Note:** `Large` and `Huge` use the **same** memory at the default multiplier — 6M entries
+> rounds up to the next power of two (8M), which is exactly what `Huge` requests. They diverge
+> only at larger `-BufferSizeMultiplier` values. Because both the multiplier (rounded to an
+> integer) and the ring size (rounded to a power of two) are quantized, adjacent levels can
+> coincide; use `-Verbose` to see the applied ring capacity.
+
+For a custom base, compute:
+`ring-memory = nextPow2(1,048,576 × round(BufferSizeMultiplier × factor)) × 56 bytes`.
+
+**Additional memory not shown above:**
+
+- **Kernel pktmon buffer** — the same effective multiplier is passed to the pktmon driver
+  (`PACKETMONITOR_REALTIME_STREAM_CONFIGURATION.BufferSizeMultiplier`); this is OS-managed
+  kernel memory, additional to the process figures above and not precisely quantifiable here.
+- **Packet payload pool** — captured `byte[]` payloads are pooled and demand-driven (bounded by
+  in-flight traffic), shared across captures, and independent of `-BufferLevel`.
+- **Analysis retention** — `-ParsingLevel Analysis` additionally retains up to the most recent
+  **50,000** packets' bytes for the Details tree / Save, independent of `-BufferLevel`.
+
+Pick the smallest level that avoids `BufferOverflow` drops for your traffic; larger levels only
+help when the consumer can't keep up with sustained bursts.
 
 ## Output
 
@@ -285,6 +328,36 @@ pspkt -IcmpType EchoRequest -Icmpv6Type EchoRequest
 # NDP target lookup: every Neighbor Solicitation / Advertisement for a specific
 # link-local address.
 pspkt -Icmpv6NdpTarget '^fe80::a1b2'
+```
+
+```powershell
+# Analysis mode: on exit you're asked "Save packets to file?" (Yes reuses the 'w'
+# save prompt). Press 'w' any time during capture to save without stopping.
+pspkt -DNS -pl Analysis
+```
+
+```powershell
+# Analysis mode, auto-save on exit with no prompt. Writes a unique file like
+# pspkt-DNS-Ping-20260101-120000.pcapng to the current directory (a -N suffix is
+# added if that exact name already exists).
+pspkt -DNS -Ping -pl Analysis -AutoSave
+```
+
+```powershell
+# Analysis mode without the exit save prompt (the 'w' hotkey still works).
+pspkt -SMB -pl Analysis -NoSave
+```
+
+```powershell
+# Larger ring buffer for a high-rate capture that was dropping (BufferOverflow).
+# Massive ≈ 896 MB ring at the default -BufferSizeMultiplier; use -Verbose to see
+# the applied ring capacity. See "Buffer sizing and memory" for the full table.
+pspkt -HTTPS -BufferLevel Huge -Verbose
+```
+
+```powershell
+# Smaller footprint on a memory-constrained host (VerySmall ≈ 56 MB ring).
+pspkt -DNS -BufferLevel VerySmall
 ```
 
 ```powershell
