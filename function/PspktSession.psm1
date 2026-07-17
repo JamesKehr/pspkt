@@ -1673,10 +1673,16 @@ function Invoke-PspktAnalysisLoop {
     # Focus layout: Text Box (~40%, min 5 content lines) + Details Box (~60%). The Text box's
     # bottom menu bar (Mid caps ╞══╡) doubles as the shared divider; the Details box omits
     # its own top border and sits flush beneath it so the two boxes merge on one line.
+    # Split the box area so the two focus boxes ALWAYS sum to exactly $areaHeight (the diff
+    # buffer covers $areaHeight rows; a layout taller than that would drop the bottom rows).
+    # usable = content rows for both boxes = areaHeight - (text top border + shared divider +
+    # details menu) = areaHeight - 3. Prefer >= 5 text content rows, but never at the expense of
+    # the details box (leave >= 1) or the row-sum invariant.
     $usable = $areaHeight - 3
-    if ($usable -lt 6) { $usable = 6 }
-    $textContent = [Math]::Max(5, [int][Math]::Round($usable * 0.40))
+    $textContent = [int][Math]::Round($usable * 0.40)
+    if ($textContent -lt 5) { $textContent = 5 }
     if ($textContent -gt $usable - 1) { $textContent = $usable - 1 }
+    if ($textContent -lt 1) { $textContent = 1 }
     $detailContent = $usable - $textContent
     $textFocusHeight = $textContent + 2    # top border + content + menu (divider)
     $detailsHeight   = $detailContent + 1  # content + menu (no top border)
@@ -1688,6 +1694,12 @@ function Invoke-PspktAnalysisLoop {
     $detailsBox = [BoxyBox.DetailsBox]::new($boxWidth, $detailsHeight, $false)   # no top border
     $detailsBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($detailsMenuDef, $boxWidth)
     $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
+
+    # Row-diffing buffer for the whole box area (rows $areaTop..). Each repaint only re-emits
+    # the base rows that actually changed, so static borders/menus and (in Focus) the frozen
+    # text/details rows are not re-sent every frame. Overlays are drawn on top and reclaim their
+    # rows via InvalidateRows; a full-screen clear / resize forces a full repaint via Invalidate.
+    $frameBuffer = [BoxyBox.FrameBuffer]::new($areaTop, 1, $boxWidth, $areaHeight)
 
     # JIT detail store: retain the last 50,000 packets' raw bytes for on-demand parsing.
     $detailStore = [PacketDetailStore]::new(50000)
@@ -1750,12 +1762,16 @@ function Invoke-PspktAnalysisLoop {
             [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $animRegion.BuildFrame($animBox.Render($null)) + [BoxyBox.ScreenRegion]::EndSyncOutput())
             Start-Sleep -Milliseconds 12
         }
+        # The animation drew directly over the box area (bypassing the diff buffer) and the
+        # layout is now the focus split, so force a full base repaint on the next frame.
+        $frameBuffer.Invalidate()
         $dirty = $true
     }
 
     # --- Transient notification overlay state (e.g. "Copied to clipboard") ---
     $notifyText = $null
     $notifyUntil = [DateTime]::MinValue
+    $notifyDrawn = $false
 
     # --- Runtime warning panel state ---
     # A warning emitted while the TUI owns the screen can't go to the console without
@@ -1918,10 +1934,12 @@ function Invoke-PspktAnalysisLoop {
                 $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
 
                 # Focus layout: ~40% Text / ~60% Details with the shared divider (see startup).
+                # Keep textFocusHeight + detailsHeight == areaHeight so the diff buffer covers all rows.
                 $usable = $areaHeight - 3
-                if ($usable -lt 6) { $usable = 6 }
-                $textContent = [Math]::Max(5, [int][Math]::Round($usable * 0.40))
+                $textContent = [int][Math]::Round($usable * 0.40)
+                if ($textContent -lt 5) { $textContent = 5 }
                 if ($textContent -gt $usable - 1) { $textContent = $usable - 1 }
+                if ($textContent -lt 1) { $textContent = 1 }
                 $detailContent = $usable - $textContent
                 $textFocusHeight = $textContent + 2
                 $detailsHeight   = $detailContent + 1
@@ -1933,7 +1951,9 @@ function Invoke-PspktAnalysisLoop {
                 $detailsRegion = [BoxyBox.ScreenRegion]::new($areaTop + $textFocusHeight, 1, $boxWidth, $detailsHeight)
 
                 # Clear stale content so shrinking the window leaves no residue, then repaint.
+                # A fresh FrameBuffer at the new size forces a full repaint on the next frame.
                 [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
+                $frameBuffer = [BoxyBox.FrameBuffer]::new($areaTop, 1, $boxWidth, $areaHeight)
                 $dirty = $true
             }
 
@@ -1972,7 +1992,9 @@ function Invoke-PspktAnalysisLoop {
                 if ($ch -eq 'w') {
                     $notifyText = & $saveToFile
                     $notifyUntil = [DateTime]::UtcNow.AddSeconds(3)
-                    [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
+                    # The prompt overlay covered part of the box area; force a full base repaint
+                    # to reclaim it (no full-screen clear flash).
+                    $frameBuffer.Invalidate()
                     $dirty = $true
                     continue
                 }
@@ -1998,8 +2020,9 @@ function Invoke-PspktAnalysisLoop {
                     if ($ch -eq 'r') {
                         $focused = $false
                         $paused = $false        # Resume also clears a pause and restarts collection.
-                        # Clear the whole area so the details box leaves no residue.
-                        [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
+                        # Force a full base repaint so the single live box cleanly replaces the
+                        # focus text+details layout (no full-screen clear flash / residue).
+                        $frameBuffer.Invalidate()
                         $dirty = $true
                     }
                     elseif ($key.Key -eq [ConsoleKey]::Tab) {
@@ -2103,6 +2126,11 @@ function Invoke-PspktAnalysisLoop {
             $warnShouldShow = ($null -ne $warnState.Text) -and ([DateTime]::UtcNow -lt $warnState.Until)
             if ($warnShouldShow -ne $warnDrawn) { $dirty = $true }
 
+            # Same for the transient notification overlay: force one repaint when it should appear
+            # or disappear, so an expired notification is reclaimed even during idle/paused capture.
+            $notifyShouldShow = ($null -ne $notifyText) -and ([DateTime]::UtcNow -lt $notifyUntil)
+            if ($notifyShouldShow -ne $notifyDrawn) { $dirty = $true }
+
             # --- Throttled render ---
             if ($dirty -and $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs) {
                 if ($focused) {
@@ -2127,12 +2155,17 @@ function Invoke-PspktAnalysisLoop {
                     $textFrameLines = $textFocusBox.Render($textWindow, $selRow, $textHlOn, $hlOff)
                     $detailsFrameLines = $detailsBox.Render($detailsHlOn, $hlOff)
 
-                    $frame = $textFocusRegion.BuildFrame($textFrameLines) + $detailsRegion.BuildFrame($detailsFrameLines)
+                    # Combine the two focus regions into one contiguous base-row list for the diff
+                    # buffer (textFocusHeight + detailsHeight == areaHeight).
+                    $baseLines = [string[]]($textFrameLines + $detailsFrameLines)
                 } else {
                     $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (F)ocus (P)ause (S)top"
                     $liveWindow = $textBox.GetTailWindow($liveBox.ContentRows)
-                    $frame = $liveRegion.BuildFrame($liveBox.Render($liveWindow))
+                    $baseLines = $liveBox.Render($liveWindow)
                 }
+                # Diff the base box area: only rows that changed since the last frame are emitted
+                # (static borders/menus and, in Focus, frozen rows are skipped).
+                $frame = $frameBuffer.Diff($baseLines)
                 if ($status.Length -gt $boxWidth) { $status = $status.Substring(0, $boxWidth) }
                 # Pad the status row to the box width and overwrite it in place (no CSI 2K erase),
                 # matching BuildFrame's flicker-free overwrite strategy.
@@ -2145,7 +2178,7 @@ function Invoke-PspktAnalysisLoop {
                 $composed = $statusLine + $frame
 
                 # Transient notification overlay (copy/save results) on top of the frame.
-                if ($null -ne $notifyText -and [DateTime]::UtcNow -lt $notifyUntil) {
+                if ($notifyShouldShow) {
                     $nbody = [System.Collections.Generic.List[string]]::new()
                     $null = $nbody.Add('')
                     $null = $nbody.Add(' ' + $notifyText)
@@ -2159,6 +2192,14 @@ function Invoke-PspktAnalysisLoop {
                     $nActualW = [BoxyBox.AnsiText]::VisibleLength($nLines[0])
                     $nRegion = [BoxyBox.ScreenRegion]::new($nTop, $nLeft, $nActualW, $nLines.Count)
                     $composed += $nRegion.BuildFrame($nLines)
+                    # The overlay overdrew these base rows; mark them so the next base Diff
+                    # re-emits (reclaims) them when the notification moves or expires.
+                    $frameBuffer.InvalidateRows($nTop, $nLines.Count)
+                    $notifyDrawn = $true
+                } elseif ($notifyDrawn) {
+                    # Expired: the base Diff above reclaimed the rows invalidated last frame.
+                    $notifyDrawn = $false
+                    $notifyText = $null
                 }
 
                 # Runtime warning panel: a bottom box expanded just enough to fit the (yellow)
@@ -2186,6 +2227,8 @@ function Invoke-PspktAnalysisLoop {
                     foreach ($bl in $warnBox.Render($warnLines)) { $null = $panelFrame.Add($bl) }
                     $warnRegion = [BoxyBox.ScreenRegion]::new($panelTop, 1, $boxWidth, $panelHeight)
                     $composed += $warnRegion.BuildFrame($panelFrame)
+                    # Mark the panel's rows so the next base Diff reclaims them on collapse.
+                    $frameBuffer.InvalidateRows($panelTop, $panelHeight)
                     $warnDrawn = $true
                 } elseif ($warnDrawn) {
                     # Expired: the base frame above already repainted over the panel region.
@@ -2198,8 +2241,10 @@ function Invoke-PspktAnalysisLoop {
 
                 $frameWatch.Restart()
                 $dirty = $false
-                # Keep refreshing while a notification or warning panel is visible, even when idle.
-                if ($null -ne $notifyText -and [DateTime]::UtcNow -lt $notifyUntil) { $dirty = $true }
+                # The notification/warning appear+disappear is handled by the $notifyShouldShow /
+                # $warnShouldShow transition checks above (which force a reclaim frame on collapse),
+                # so no idle re-arm is needed for the notification. The warning panel keeps its
+                # existing re-arm.
                 if ($warnActive) { $dirty = $true }
             }
         }
