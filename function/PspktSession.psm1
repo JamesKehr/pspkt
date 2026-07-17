@@ -2294,12 +2294,26 @@ function Invoke-PspktAnalysisLoop {
         break
         }  # end outer resume loop
 
-        # Final clean repaint: draw the live text view over any exit/save prompt overlay so the
-        # parsed capture text stays visible on close for the user to reference.
+        # Final clean repaint: draw the parsed capture over any exit/save prompt overlay so it
+        # stays visible on close for reference. Preserve the Focus split (Details box) if the user
+        # was in Focus/Paused when they stopped; otherwise show the live text view.
         try {
             $frameBuffer.Invalidate()
-            $finalWindow = $textBox.GetTailWindow($liveBox.ContentRows)
-            $finalFrame = $frameBuffer.Diff($liveBox.Render($finalWindow))
+            if ($focused) {
+                $selectedSeq = $textBox.ClampSeq($selectedSeq)
+                if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
+                elseif ($selectedSeq -gt $topSeq + $textFocusBox.ContentRows - 1) { $topSeq = $selectedSeq - $textFocusBox.ContentRows + 1 }
+                $textWindow = $textBox.GetWindow($topSeq, $textFocusBox.ContentRows)
+                $selRow = [int]($selectedSeq - $topSeq)
+                if ($selRow -lt 0 -or $selRow -ge $textFocusBox.ContentRows) { $selRow = -1 }
+                $textHlOn    = if ($activeBox -eq 'text')    { $hlOn } else { $hlDim }
+                $detailsHlOn = if ($activeBox -eq 'details') { $hlOn } else { $hlDim }
+                $finalBase = [string[]]($textFocusBox.Render($textWindow, $selRow, $textHlOn, $hlOff) + $detailsBox.Render($detailsHlOn, $hlOff))
+            } else {
+                $finalBase = $liveBox.Render($textBox.GetTailWindow($liveBox.ContentRows))
+            }
+            $finalFrame = $frameBuffer.Diff($finalBase)
             $finalStatus = "  pspkt Analysis stopped  |  packets: $packetCount  drops: $droppedCount"
             if ($finalStatus.Length -gt $boxWidth) { $finalStatus = $finalStatus.Substring(0, $boxWidth) }
             $finalStatusLine = "$ESC[1;1H" + $finalStatus.PadRight($boxWidth)
