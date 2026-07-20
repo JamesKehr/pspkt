@@ -57,7 +57,7 @@ SMB2 <COMMAND> <Request|Response>[, <STATUS> (0x…)][, <command-specific detail
 
 The NT status is shown only on **responses** whose status isn't `STATUS_SUCCESS`. Compounded (chained) messages are each rendered and joined with ` | `.
 
-The parser maintains **per-capture TID→tree-name and FID→file-name tables**: a TreeConnect request's share path is correlated (by session + message id) to the TreeId assigned in its response, and a Create request's filename to the FileId in its response. Later commands that carry that FileId (Close, Read, Write, …) then display the resolved name plus the FileId's volatile-handle hex, e.g. `File: docs\report.docx (0x1a2b)`. When the establishing packet wasn't captured, the hex handle is shown alone (`File: 0x1a2b`). The tables reset at the start of every capture.
+The parser maintains **per-capture TID→tree-name and FID→file-name tables**: a TreeConnect request's share path is correlated (by session + message id) to the TreeId assigned in its response, and a Create request's filename to the FileId in its response. Later commands that carry that FileId (Close, Read, Write, …) then display the resolved name plus the FileId's volatile-handle hex, e.g. `File: docs\report.docx (0x1a2b)`. When the establishing packet wasn't captured, the FileId is rendered as a GUID string instead (e.g. `File: 00001a2b-0000-0000-…`); a body truncated by `-PacketSize` before the FileId shows `File: ?`. The tables reset at the start of every capture.
 
 | Command | Example line |
 |---|---|

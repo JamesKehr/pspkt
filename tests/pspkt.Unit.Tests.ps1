@@ -2096,13 +2096,14 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
                 Should -Be 'SMB2 CLOSE Request, File: docs\a.txt (0xbeef)'
         }
 
-        It 'falls back to the hex FileId when the name is unknown' {
+        It 'renders an unknown FileId as a GUID string' {
             $clb = [byte[]]::new(24); $clb[0]=24
             [Array]::Copy((script:U32le 0x3333), 0, $clb, 8, 4)
             [Array]::Copy((script:U32le 0xC0DE), 0, $clb, 16, 4)
+            $expected = [Guid]::new([byte[]]($clb[8..23])).ToString()
             $close = script:Frame-Smb2 (script:New-Smb2Msg -Command 6 -MsgId 5 -SessionId 1 -Body $clb)
             [Smb2Parser]::FormatSmb2Segment($close, 445, 12345) |
-                Should -Be 'SMB2 CLOSE Request, File: 0xc0de'
+                Should -Be "SMB2 CLOSE Request, File: $expected"
         }
 
         It 'formats a TREE_CONNECT request with the UNC path' {
@@ -2198,9 +2199,10 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $clb = [byte[]]::new(24); $clb[0]=24
             [Array]::Copy((script:U32le 0x40), 0, $clb, 8, 4)
             [Array]::Copy((script:U32le 0x41), 0, $clb, 16, 4)
+            $expected = [Guid]::new([byte[]]($clb[8..23])).ToString()
             $close = script:Frame-Smb2 (script:New-Smb2Msg -Command 6 -MsgId 11 -SessionId 99 -Body $clb)
             [Smb2Parser]::FormatSmb2Segment($close, 445, 12345) |
-                Should -Be 'SMB2 CLOSE Request, File: 0x41'
+                Should -Be "SMB2 CLOSE Request, File: $expected"
         }
 
         It 'does not crash or hang on a malformed NextCommand' {

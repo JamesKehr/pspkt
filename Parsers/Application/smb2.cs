@@ -682,10 +682,7 @@ public static class Smb2Parser
         ulong fidP = ReadUInt64LE(data, off + 64);
         ulong fidV = ReadUInt64LE(data, off + 72);
         ResolveFile(sessionId, messageId, fidP, fidV);
-        string name = LookupFile(fidP, fidV);
-        sb.Append(", File: ");
-        if (name != null && name.Length > 0) sb.Append(name).Append(" (0x").Append(fidV.ToString("x")).Append(")");
-        else sb.Append("0x").Append(fidV.ToString("x"));
+        sb.Append(", File: ").Append(FileIdDisplay(data, off + 64, fidP, fidV));
         sb.Append("; Action: ").Append(action < (uint)CreateActions.Length
             ? CreateActions[action] : "0x" + action.ToString("X"));
     }
@@ -780,12 +777,13 @@ public static class Smb2Parser
             // Oplock break notification / acknowledgment / response.
             if (bodyLen < 24) return;
             byte level = data[off + 2];
+            ulong fidP = ReadUInt64LE(data, off + 8);
             ulong fidV = ReadUInt64LE(data, off + 16);
             string levelName;
             if (!OplockLevelNames.TryGetValue(level, out levelName)) levelName = "0x" + level.ToString("x2");
             sb.Append(", Oplock ").Append(isResponse ? "Response" : "Break");
             sb.Append(": Level ").Append(levelName).Append(" (0x").Append(level.ToString("x2")).Append(')');
-            sb.Append("; FileId: 0x").Append(fidV.ToString("x"));
+            sb.Append("; FileId: ").Append(FileIdDisplay(data, off + 8, fidP, fidV));
         }
         else if (structSize == 44 && bodyLen >= 32)
         {
@@ -818,12 +816,20 @@ public static class Smb2Parser
         if (bodyLen < fidOff + 16) { sb.Append("File: ?"); return; }
         ulong p = ReadUInt64LE(data, off + fidOff);
         ulong v = ReadUInt64LE(data, off + fidOff + 8);
-        string name = LookupFile(p, v);
-        string shown = (name != null && name.Length > 0)
-            ? name + " (0x" + v.ToString("x") + ")"
-            : "0x" + v.ToString("x");
+        string shown = FileIdDisplay(data, off + fidOff, p, v);
         sb.Append("File: ").Append(shown);
         if (stashEcho) RecordPending(sessionId, messageId, 3, shown);
+    }
+
+    // Builds the "File:" display value for a 16-byte FileId located at data[fidByteOffset..]:
+    // the resolved name plus the compact volatile handle when known, otherwise the full FileId
+    // rendered as a GUID string (so an unknown handle is still uniquely identifiable, e.g. to
+    // cross-reference with Wireshark).
+    private static string FileIdDisplay(byte[] data, int fidByteOffset, ulong persistent, ulong volatil)
+    {
+        string name = LookupFile(persistent, volatil);
+        if (name != null && name.Length > 0) return name + " (0x" + volatil.ToString("x") + ")";
+        return FormatGuid(data, fidByteOffset);
     }
 
     private static bool AppendRespFile(StringBuilder sb, uint status, ulong sessionId, ulong messageId)
