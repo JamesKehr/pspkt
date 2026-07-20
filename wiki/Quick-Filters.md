@@ -58,8 +58,9 @@ Some quick filters need more captured bytes per packet than the default 128 to p
 |---|---|
 | `-DHCP`, `-DHCPv6`, `-AA`, `-AAv4`, `-AAv6` | 590 |
 | `-DNS` | 512 |
+| `-SMB` | 1500 |
 
-If you don't set `-PacketSize` explicitly, `Start-Pspkt` auto-increases it to the larger of the existing value and the minimum required.
+If you don't set `-PacketSize` explicitly, `Start-Pspkt` auto-increases it to the larger of the existing value and the minimum required. The `-SMB` bump prints a `Write-Warning` (SMB2 Create filenames / TreeConnect paths and compounded commands can push parsed fields well past the 128-byte default); silence it with `-NoWarning`.
 
 ## Combining patterns
 

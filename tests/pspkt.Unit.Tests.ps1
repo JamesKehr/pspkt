@@ -2044,6 +2044,14 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
                 return ,([byte[]](0x00, (($t -shr 16) -band 0xff), (($t -shr 8) -band 0xff), ($t -band 0xff)) + $Msg)
             }
             function script:U32le { param([uint32]$v) [byte[]](($v -band 0xff), (($v -shr 8) -band 0xff), (($v -shr 16) -band 0xff), (($v -shr 24) -band 0xff)) }
+            # Expected GUID string for a FileId whose persistent/volatile low dwords are P/V.
+            function script:FidGuid {
+                param([uint32]$P, [uint32]$V)
+                $b = [byte[]]::new(16)
+                [Array]::Copy((script:U32le $P), 0, $b, 0, 4)
+                [Array]::Copy((script:U32le $V), 0, $b, 8, 4)
+                return [Guid]::new($b).ToString()
+            }
 
             # Create request body (StructSize 57): filename at header+120, disposition@36.
             function script:New-Smb2CreateReq {
@@ -2080,7 +2088,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $resp = script:New-Smb2CreateResp -Action 2 -FidP 0x1111 -FidV 0xABCD -MsgId 10 -SessionId 99
             $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
             [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445) |
-                Should -Be 'SMB2 CREATE Response, File: share\file.txt (0xabcd); Action: FILE_CREATED'
+                Should -Be "SMB2 CREATE Response, File: share\file.txt ($(script:FidGuid 0x1111 0xABCD)); Action: FILE_CREATED"
         }
 
         It 'resolves a FileId to its name on a later CLOSE request' {
@@ -2093,7 +2101,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             [Array]::Copy((script:U32le 0xBEEF), 0, $clb, 16, 4)
             $close = script:Frame-Smb2 (script:New-Smb2Msg -Command 6 -MsgId 11 -SessionId 99 -Body $clb)
             [Smb2Parser]::FormatSmb2Segment($close, 445, 12345) |
-                Should -Be 'SMB2 CLOSE Request, File: docs\a.txt (0xbeef)'
+                Should -Be "SMB2 CLOSE Request, File: docs\a.txt ($(script:FidGuid 0x2222 0xBEEF))"
         }
 
         It 'renders an unknown FileId as a GUID string' {
@@ -2127,12 +2135,12 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             [Array]::Copy((script:U32le 0x20), 0, $rb, 24, 4)
             $read = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -MsgId 12 -SessionId 7 -Body $rb)
             [Smb2Parser]::FormatSmb2Segment($read, 445, 12345) |
-                Should -Be 'SMB2 READ Request, Len: 4096; Off: 0; File: big.bin (0x20)'
+                Should -Be "SMB2 READ Request, Len: 4096; Off: 0; File: big.bin ($(script:FidGuid 0x10 0x20))"
             $rrb = [byte[]]::new(16); $rrb[0]=17
             [Array]::Copy((script:U32le 4096), 0, $rrb, 4, 4)
             $readResp = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -Flags 1 -MsgId 12 -SessionId 7 -Body $rrb)
             [Smb2Parser]::FormatSmb2Segment($readResp, 12345, 445) |
-                Should -Be 'SMB2 READ Response, File: big.bin (0x20); Len: 4096'
+                Should -Be "SMB2 READ Response, File: big.bin ($(script:FidGuid 0x10 0x20)); Len: 4096"
         }
 
         It 'shows the NT status on an error response with no fabricated CREATE fields' {
@@ -2151,7 +2159,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             # Final success response still resolves the filename.
             $fin = script:New-Smb2CreateResp -Action 2 -FidP 0x50 -FidV 0x51 -MsgId 30 -SessionId 4
             [Smb2Parser]::FormatSmb2Segment($fin, 12345, 445) |
-                Should -Be 'SMB2 CREATE Response, File: async.dat (0x51); Action: FILE_CREATED'
+                Should -Be "SMB2 CREATE Response, File: async.dat ($(script:FidGuid 0x50 0x51)); Action: FILE_CREATED"
         }
 
         It 'formats an encrypted (Transform header) packet' {
@@ -2228,12 +2236,12 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             # Interim STATUS_PENDING response must peek (not consume) the stashed name.
             $prb = [byte[]]::new(16); $prb[0]=17
             $pend = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -Flags 1 -Status 0x103 -MsgId 20 -SessionId 3 -Body $prb)
-            [Smb2Parser]::FormatSmb2Segment($pend, 12345, 445) | Should -Match 'File: pending\.dat \(0x8\)'
+            [Smb2Parser]::FormatSmb2Segment($pend, 12345, 445) | Should -Match "File: pending\.dat \($([regex]::Escape((script:FidGuid 0x7 0x8)))\)"
             # Final (success) response still resolves the name.
             $frb = [byte[]]::new(16); $frb[0]=17
             [Array]::Copy((script:U32le 1024), 0, $frb, 4, 4)
             $fin = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -Flags 1 -MsgId 20 -SessionId 3 -Body $frb)
-            [Smb2Parser]::FormatSmb2Segment($fin, 12345, 445) | Should -Match 'File: pending\.dat \(0x8\); Len: 1024'
+            [Smb2Parser]::FormatSmb2Segment($fin, 12345, 445) | Should -Match "File: pending\.dat \($([regex]::Escape((script:FidGuid 0x7 0x8)))\); Len: 1024"
         }
 
         It 'does not record a tree name for a failed TREE_CONNECT response' {

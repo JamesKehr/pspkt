@@ -822,14 +822,15 @@ public static class Smb2Parser
     }
 
     // Builds the "File:" display value for a 16-byte FileId located at data[fidByteOffset..]:
-    // the resolved name plus the compact volatile handle when known, otherwise the full FileId
-    // rendered as a GUID string (so an unknown handle is still uniquely identifiable, e.g. to
-    // cross-reference with Wireshark).
+    // the resolved name (when known) plus the FileId rendered as a GUID string. An unknown
+    // handle shows just the GUID, so it's still uniquely identifiable (e.g. to cross-reference
+    // with Wireshark).
     private static string FileIdDisplay(byte[] data, int fidByteOffset, ulong persistent, ulong volatil)
     {
+        string guid = FormatGuid(data, fidByteOffset);
         string name = LookupFile(persistent, volatil);
-        if (name != null && name.Length > 0) return name + " (0x" + volatil.ToString("x") + ")";
-        return FormatGuid(data, fidByteOffset);
+        if (name != null && name.Length > 0) return name + " (" + guid + ")";
+        return guid;
     }
 
     private static bool AppendRespFile(StringBuilder sb, uint status, ulong sessionId, ulong messageId)
