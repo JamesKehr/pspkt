@@ -41,11 +41,45 @@ Status filters apply to both requests and responses, but requests almost always 
 
 ## v1 limitations
 
-- **First chained message only.** SMB2 supports compounded requests (multiple messages in one packet linked by `NextCommand`). The predicate evaluates only the first chained message. Documented; matches the existing legacy formatter behavior.
+- **First chained message only.** SMB2 supports compounded requests (multiple messages in one packet linked by `NextCommand`). The predicate evaluates only the first chained message, even though the display formatter renders every chained message (see [Display output](#display-output)).
 - **Encrypted (Transform) packets carry no per-command fields.** When any content-bearing filter (`-SmbCommand`, `-SmbStatus`, `-SmbFilename`, `-SmbTreePath`) is set, encrypted packets are rejected. Use `-SmbMatchEncrypted` to let them through anyway — typically only useful alongside `-SmbDirection` alone or no other filter.
 - **Mid-stream TCP segments don't parse.** SMB2 messages can span multiple TCP packets; only the first segment carries the SMB2 magic. Subsequent segments without the magic are rejected (use `-SmbMatchTruncated` to keep them).
 - **SMB1/CIFS not parsed.** The parser only recognises SMB2/SMB3 magic; SMB1 traffic doesn't match any predicate.
 - **No Dialect filter.** SMB dialect is only emitted on Negotiate responses, so a dedicated parameter would be very narrow. Filter on `-SmbCommand Negotiate` and read the dialect from the display output instead.
+
+## Display output
+
+At `Default`, `Detailed`, and `Analysis` levels each SMB2 message renders as a one-line summary:
+
+```
+SMB2 <COMMAND> <Request|Response>[, <STATUS> (0x…)][, <command-specific detail>]
+```
+
+The NT status is shown only on **responses** whose status isn't `STATUS_SUCCESS`. Compounded (chained) messages are each rendered and joined with ` | `.
+
+The parser maintains **per-capture TID→tree-name and FID→file-name tables**: a TreeConnect request's share path is correlated (by session + message id) to the TreeId assigned in its response, and a Create request's filename to the FileId in its response. Later commands that carry that FileId (Close, Read, Write, …) then display the resolved name plus the FileId's volatile-handle hex, e.g. `File: docs\report.docx (0x1a2b)`. When the establishing packet wasn't captured, the hex handle is shown alone (`File: 0x1a2b`). The tables reset at the start of every capture.
+
+| Command | Example line |
+|---|---|
+| NEGOTIATE (req) | `SMB2 NEGOTIATE Request, Requested Dialects 2.0.2, 3.1.1; DFS, LARGE_MTU` |
+| NEGOTIATE (resp) | `SMB2 NEGOTIATE Response, Dialect 3.1.1; 8388608\8388608\8388608; LARGE_MTU, ENCRYPTION` |
+| SESSION_SETUP (req) | `SMB2 SESSION_SETUP Request, Signing enabled` |
+| TREE_CONNECT (req) | `SMB2 TREE_CONNECT Request, \\server\share` |
+| CREATE (req) | `SMB2 CREATE Request, File: docs\report.docx; Disposition: FILE_OPEN` |
+| CREATE (resp) | `SMB2 CREATE Response, File: docs\report.docx (0x1a2b); Action: FILE_OPENED` |
+| CLOSE (req) | `SMB2 CLOSE Request, File: docs\report.docx (0x1a2b)` |
+| READ (req) | `SMB2 READ Request, Len: 65536; Off: 0; File: docs\report.docx (0x1a2b)` |
+| WRITE (resp) | `SMB2 WRITE Response, File: docs\report.docx (0x1a2b); Len: 65536` |
+| IOCTL | `SMB2 IOCTL Request, FSCTL_PIPE_TRANSCEIVE (0x0011c017)` |
+| QUERY_DIRECTORY (req) | `SMB2 QUERY_DIRECTORY Request, File: … (0x…); FileIdBothDirectoryInformation (0x25), Pattern: *` |
+| QUERY_INFO (req) | `SMB2 QUERY_INFO Request, INFO_FILE\FileAllInformation, File: … (0x…)` |
+| CHANGE_NOTIFY (req) | `SMB2 CHANGE_NOTIFY Request, File: … (0x…); Completion Filter: 0x00000017, FILE_NAME, DIR_NAME, ATTRIBUTES, LAST_WRITE` |
+| OPLOCK_BREAK (lease) | `SMB2 OPLOCK_BREAK Request, Lease Break: RH -> R; LeaseKey: …` |
+| Encrypted | `SMB2 Encrypted, SessId 0x…, len …` |
+
+`LOGOFF`, `TREE_DISCONNECT`, `CANCEL`, and `ECHO` render as the header line only (no command-specific detail).
+
+**Name-resolution limitations.** File/tree names resolve only when both the establishing request and its response were captured (raise `-PacketSize` if Create/TreeConnect bodies are truncated). The name tables are keyed by SMB `SessionId` + `MessageId` (not the TCP 4-tuple), so on the rare occasion that two connections to *different* servers reuse the same session and message ids concurrently, a name could be mis-attributed. Compounded messages that use `SMB2_FLAGS_RELATED_OPERATIONS` (inheriting the FileId/TreeId of the previous message in the chain) show the inherited sentinel handle rather than the resolved name. These are display-only aids; the captured pcapng is always exact.
 
 ## Examples
 

@@ -4023,6 +4023,9 @@ function Start-Pspkt {
         # Always clear first so a predicate left over from a prior capture in the
         # same PS session can't silently filter this one.
         [PacketLineFormatter]::ClearAppPredicates()
+        # Clear the SMB2 TID/FID name tables so discovered tree/file names from a prior
+        # capture in the same PS session never leak into this one.
+        [Smb2Parser]::ResetState()
         if ($dnsPredicateActive) {
             $dnsPredicate = [DnsAppPredicate]::new()
 
@@ -4640,6 +4643,8 @@ function Start-Pspkt {
 
             # Clear any application-layer predicate so it can't leak into a later capture.
             [PacketLineFormatter]::ClearAppPredicates()
+            # Free the SMB2 TID/FID name tables (can grow large on long captures).
+            [Smb2Parser]::ResetState()
 
             # Mark capture inactive (wakes any consumer/writer waiters).
             [PktMonApi]::SetCaptureActive($false)
