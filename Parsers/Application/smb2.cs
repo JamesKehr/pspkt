@@ -56,6 +56,9 @@ public static class Smb2Parser
     // SMB2 Transform header magic: 0xFD 'S' 'M' 'B'
     private const uint SMB2_TRANSFORM_MAGIC = 0x424D53FD;
 
+    // SMB1 header magic: 0xFF 'S' 'M' 'B' (only the Negotiate Protocol request is parsed).
+    private const uint SMB1_MAGIC = 0x424D53FF;
+
     // NT STATUS_PENDING: an interim response that must not consume request-correlation state.
     private const uint STATUS_PENDING = 0x00000103;
 
@@ -404,6 +407,15 @@ public static class Smb2Parser
         {
             string name;
             return _fileNames.TryGetValue(new U64Pair(fidPersistent, fidVolatile), out name) ? name : null;
+        }
+    }
+
+    private static string LookupTree(ulong sessionId, uint treeId)
+    {
+        lock (_stateLock)
+        {
+            string name;
+            return _treeNames.TryGetValue(new U64Pair(sessionId, treeId), out name) ? name : null;
         }
     }
 
@@ -975,6 +987,238 @@ public static class Smb2Parser
     public static string FormatSmb2Detailed(byte[] data, int dataLen, int srcPort, int dstPort)
     {
         return FormatSmb2Segment(data, dataLen, srcPort, dstPort);
+    }
+
+    // =======================================================================
+    // Analysis "Details" tree (Phase 2a: collapsed header + expanded SMB header).
+    // Builds a Wireshark-style hierarchical view on demand for a selected packet.
+    // Per-command body subtrees (2b) and FileInfo result parsing (2c) follow.
+    // =======================================================================
+
+    /// <summary>
+    /// Builds the Analysis Details tree for an SMB2 packet: one root node per message in the
+    /// (possibly compounded) chain. Each root's collapsed text is
+    /// "SMB2 &lt;Command&gt; - &lt;tree&gt;[; Status: ...]" and expands to the SMB header subtree.
+    /// Transform (encrypted) and SMB1 Negotiate headers get their own single-root form.
+    /// </summary>
+    public static List<BoxyBox.TreeNode> BuildSmb2DetailTree(byte[] data, int len, int srcPort, int dstPort)
+    {
+        var roots = new List<BoxyBox.TreeNode>();
+        if (data == null) return roots;
+        if (len > data.Length) len = data.Length;
+        if (len < 4) return roots;
+
+        int offset = 0;
+        if (len >= 8 && data[0] == 0x00)
+        {
+            uint probe = (uint)(data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24));
+            if (probe == SMB2_MAGIC || probe == SMB2_TRANSFORM_MAGIC || probe == SMB1_MAGIC) offset = 4;
+        }
+        if (len < offset + 4) return roots;
+        uint magic = (uint)(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24));
+
+        if (magic == SMB2_TRANSFORM_MAGIC) { roots.Add(BuildTransformNode(data, len, offset)); return roots; }
+        if (magic == SMB1_MAGIC)           { roots.Add(BuildSmb1NegotiateNode(data, len, offset)); return roots; }
+        if (magic != SMB2_MAGIC)           return roots;
+
+        int cmdOffset = offset;
+        int guard = 0;
+        while (cmdOffset + 64 <= len && guard++ < 64)
+        {
+            uint m = (uint)(data[cmdOffset] | (data[cmdOffset + 1] << 8) | (data[cmdOffset + 2] << 16) | (data[cmdOffset + 3] << 24));
+            if (m != SMB2_MAGIC) break;
+            if (ReadUInt16LE(data, cmdOffset + 4) != 64) break;
+            uint nextCommand = ReadUInt32LE(data, cmdOffset + 20);
+            roots.Add(BuildSmb2CommandNode(data, len, cmdOffset));
+            if (nextCommand == 0 || nextCommand < 64 || nextCommand > (uint)(len - cmdOffset)) break;
+            cmdOffset += (int)nextCommand;
+        }
+        return roots;
+    }
+
+    private static BoxyBox.TreeNode BuildSmb2CommandNode(byte[] data, int len, int hdr)
+    {
+        uint status     = ReadUInt32LE(data, hdr + 8);
+        ushort command  = ReadUInt16LE(data, hdr + 12);
+        uint flags      = ReadUInt32LE(data, hdr + 16);
+        uint treeId     = ReadUInt32LE(data, hdr + 36);
+        ulong sessionId = ReadUInt64LE(data, hdr + 40);
+        bool isResponse = (flags & 0x00000001) != 0;
+        bool isAsync    = (flags & 0x00000002) != 0;
+        string cmdName  = command < CommandNames.Length ? CommandNames[command] : "CMD_0x" + command.ToString("X4");
+
+        // Collapsed root text: "SMB2 <cmd> - <tree>[; Status: ...]".
+        string tree;
+        if (isAsync) tree = "(async)";
+        else { string t = LookupTree(sessionId, treeId); tree = t != null ? t : "TID 0x" + treeId.ToString("x"); }
+        var sb = new StringBuilder(96);
+        sb.Append("SMB2 ").Append(cmdName).Append(" - ").Append(tree);
+        if (isResponse && status != 0)
+            sb.Append("; Status: ").Append(StatusName(status)).Append(" (0x").Append(status.ToString("X8")).Append(")");
+
+        var root = new BoxyBox.TreeNode(sb.ToString(), "SMB2", true);
+        root.Add(BuildSmb2HeaderNode(data, len, hdr, command, cmdName, flags, status, isResponse, isAsync, treeId, sessionId));
+        return root;
+    }
+
+    private static BoxyBox.TreeNode BuildSmb2HeaderNode(byte[] data, int len, int hdr, ushort command, string cmdName,
+        uint flags, uint status, bool isResponse, bool isAsync, uint treeId, ulong sessionId)
+    {
+        var h = new BoxyBox.TreeNode("SMB2 Header", "SMB2.Header", true);
+        h.AddLeaf("ProtocolId: 0x" + HexBytes(data, hdr, 4, len));
+        h.AddLeaf("Header Length: " + ReadUInt16LE(data, hdr + 4));
+        h.AddLeaf("Credit Charge: " + ReadUInt16LE(data, hdr + 6));
+        if (isResponse)
+        {
+            h.AddLeaf("NT Status: " + StatusName(status) + " (0x" + status.ToString("X8") + ")");
+        }
+        else
+        {
+            h.AddLeaf("Channel Sequence: " + ReadUInt16LE(data, hdr + 8));
+            h.AddLeaf("Reserved: " + HexBytes(data, hdr + 10, 2, len));
+        }
+        h.AddLeaf("Command: " + cmdName + " (" + command + ")");
+        h.AddLeaf((isResponse ? "Credits granted: " : "Credits requested: ") + ReadUInt16LE(data, hdr + 14));
+        h.Add(BuildSmb2FlagsNode(flags, isResponse));
+        h.AddLeaf("Chain Offset: 0x" + ReadUInt32LE(data, hdr + 20).ToString("x"));
+        h.AddLeaf("Message ID: " + ReadUInt64LE(data, hdr + 24));
+        if (isAsync)
+        {
+            h.AddLeaf("Async Id: 0x" + ReadUInt64LE(data, hdr + 32).ToString("x"));
+        }
+        else
+        {
+            h.AddLeaf("Reserved: 0x" + ReadUInt32LE(data, hdr + 32).ToString("x"));
+            string t = LookupTree(sessionId, treeId);
+            string treeLine = "Tree Id: 0x" + treeId.ToString("x");
+            if (t != null) treeLine += "  " + t;
+            h.AddLeaf(treeLine);
+        }
+        h.AddLeaf("Session Id: 0x" + ReadUInt64LE(data, hdr + 40).ToString("x"));
+        h.AddLeaf("Signature: " + HexBytes(data, hdr + 48, 16, len));
+        return h;
+    }
+
+    private static BoxyBox.TreeNode BuildSmb2FlagsNode(uint flags, bool isResponse)
+    {
+        var f = new BoxyBox.TreeNode("Flags: 0x" + flags.ToString("x8") + Smb2FlagSummary(flags), "SMB2.Flags", false);
+        f.AddLeaf(RenderFlagBits(flags, ".... .... .... .... .... .... .... ...B", 32) + " = Response: This is a " + (isResponse ? "RESPONSE" : "REQUEST"));
+        f.AddLeaf(RenderFlagBits(flags, ".... .... .... .... .... .... .... ..B.", 32) + " = Async command: This is a " + ((flags & 0x2) != 0 ? "ASYNC" : "SYNC") + " command");
+        f.AddLeaf(RenderFlagBits(flags, ".... .... .... .... .... .... .... .B..", 32) + " = Chained: This pdu " + ((flags & 0x4) != 0 ? "is" : "is NOT") + " a chained command");
+        f.AddLeaf(RenderFlagBits(flags, ".... .... .... .... .... .... .... B...", 32) + " = Signing: This pdu " + ((flags & 0x8) != 0 ? "is" : "is NOT") + " SIGNED");
+        f.AddLeaf(RenderFlagBits(flags, ".... .... .... .... .... .... .BBB ....", 32) + " = Priority: This pdu contains a PRIORITY (" + ((flags >> 4) & 0x7) + ")");
+        f.AddLeaf(RenderFlagBits(flags, "...B .... .... .... .... .... .... ....", 32) + " = DFS operation: This is a " + ((flags & 0x10000000) != 0 ? "DFS" : "normal") + " operation");
+        f.AddLeaf(RenderFlagBits(flags, "..B. .... .... .... .... .... .... ....", 32) + " = Replay operation: This " + ((flags & 0x20000000) != 0 ? "is" : "is NOT") + " a replay operation");
+        return f;
+    }
+
+    private static string Smb2FlagSummary(uint flags)
+    {
+        var parts = new List<string>(6);
+        if ((flags & 0x1) != 0) parts.Add("RESPONSE");
+        if ((flags & 0x2) != 0) parts.Add("ASYNC");
+        if ((flags & 0x4) != 0) parts.Add("CHAINED");
+        if ((flags & 0x8) != 0) parts.Add("SIGNED");
+        if ((flags & 0x10000000) != 0) parts.Add("DFS");
+        if ((flags & 0x20000000) != 0) parts.Add("REPLAY");
+        return parts.Count > 0 ? ", " + string.Join(", ", parts) : "";
+    }
+
+    private static BoxyBox.TreeNode BuildTransformNode(byte[] data, int len, int off)
+    {
+        uint msgSize = (len >= off + 40) ? ReadUInt32LE(data, off + 36) : 0;
+        ulong sessId = (len >= off + 52) ? ReadUInt64LE(data, off + 44) : 0;
+        var root = new BoxyBox.TreeNode("SMB2 Encrypted - SessId 0x" + sessId.ToString("x") + ", len " + msgSize, "SMB2", true);
+        var h = new BoxyBox.TreeNode("SMB2 Transform Header", "SMB2.Header", true);
+        h.AddLeaf("ProtocolId: 0x" + HexBytes(data, off, 4, len));
+        h.AddLeaf("Signature: " + HexBytes(data, off + 4, 16, len));
+        h.AddLeaf("Nonce: " + HexBytes(data, off + 20, 16, len));
+        h.AddLeaf("Original Message Size: " + msgSize);
+        if (len >= off + 44) h.AddLeaf("Flags/EncryptionAlgorithm: 0x" + ReadUInt16LE(data, off + 42).ToString("x4"));
+        h.AddLeaf("Session Id: 0x" + sessId.ToString("x"));
+        root.Add(h);
+        return root;
+    }
+
+    private static BoxyBox.TreeNode BuildSmb1NegotiateNode(byte[] data, int len, int off)
+    {
+        var root = new BoxyBox.TreeNode("SMB1 Negotiate Protocol Request", "SMB2", true);
+        var h = new BoxyBox.TreeNode("SMB Header", "SMB2.Header", true);
+        h.AddLeaf("Server Component: SMB");
+        byte cmd = (len > off + 4) ? data[off + 4] : (byte)0;
+        h.AddLeaf("SMB Command: Negotiate Protocol (0x" + cmd.ToString("x2") + ")");
+        uint status = (len >= off + 9) ? ReadUInt32LE(data, off + 5) : 0;
+        h.AddLeaf("NT Status: " + StatusName(status) + " (0x" + status.ToString("X8") + ")");
+        byte flags = (len > off + 9) ? data[off + 9] : (byte)0;
+        h.Add(BuildSmb1FlagsNode(flags));
+        ushort flags2 = (len >= off + 12) ? ReadUInt16LE(data, off + 10) : (ushort)0;
+        h.Add(BuildSmb1Flags2Node(flags2));
+        h.AddLeaf("Process ID High: " + ((len >= off + 14) ? ReadUInt16LE(data, off + 12) : 0));
+        h.AddLeaf("Signature: " + HexBytes(data, off + 14, 8, len));
+        h.AddLeaf("Reserved: " + HexBytes(data, off + 22, 2, len));
+        h.AddLeaf("Tree ID: " + ((len >= off + 26) ? ReadUInt16LE(data, off + 24) : 0));
+        h.AddLeaf("Process ID: " + ((len >= off + 28) ? ReadUInt16LE(data, off + 26) : 0));
+        h.AddLeaf("User ID: " + ((len >= off + 30) ? ReadUInt16LE(data, off + 28) : 0));
+        h.AddLeaf("Multiplex ID: " + ((len >= off + 32) ? ReadUInt16LE(data, off + 30) : 0));
+        root.Add(h);
+        return root;
+    }
+
+    private static BoxyBox.TreeNode BuildSmb1FlagsNode(byte flags)
+    {
+        var f = new BoxyBox.TreeNode("Flags: 0x" + flags.ToString("x2"), "SMB1.Flags", false);
+        f.AddLeaf(RenderFlagBits(flags, "0... ....", 8) + " = Request/Response: Message is a request to the server");
+        f.AddLeaf(RenderFlagBits(flags, ".0.. ....", 8) + " = Notify: Notify client only on open");
+        f.AddLeaf(RenderFlagBits(flags, "..0. ....", 8) + " = Oplocks: OpLock not requested/granted");
+        f.AddLeaf(RenderFlagBits(flags, "...B ....", 8) + " = Canonicalized Pathnames: Pathnames " + ((flags & 0x10) != 0 ? "are" : "are not") + " canonicalized");
+        f.AddLeaf(RenderFlagBits(flags, ".... B...", 8) + " = Case Sensitivity: Path names " + ((flags & 0x08) != 0 ? "are" : "are not") + " caseless");
+        f.AddLeaf(RenderFlagBits(flags, ".... ..B.", 8) + " = Receive Buffer Posted: Receive buffer " + ((flags & 0x02) != 0 ? "has" : "has not") + " been posted");
+        f.AddLeaf(RenderFlagBits(flags, ".... ...B", 8) + " = Lock and Read: Lock&Read, Write&Unlock " + ((flags & 0x01) != 0 ? "are" : "are not") + " supported");
+        return f;
+    }
+
+    private static BoxyBox.TreeNode BuildSmb1Flags2Node(ushort flags2)
+    {
+        var f = new BoxyBox.TreeNode("Flags2: 0x" + flags2.ToString("x4"), "SMB1.Flags2", false);
+        f.AddLeaf(RenderFlagBits(flags2, "B... .... .... ....", 16) + " = Unicode Strings: Strings " + ((flags2 & 0x8000) != 0 ? "are" : "are not") + " Unicode");
+        f.AddLeaf(RenderFlagBits(flags2, ".B.. .... .... ....", 16) + " = Error Code Type: Error codes " + ((flags2 & 0x4000) != 0 ? "are" : "are not") + " NT error codes");
+        f.AddLeaf(RenderFlagBits(flags2, "..B. .... .... ....", 16) + " = Execute-only Reads: " + ((flags2 & 0x2000) != 0 ? "Do" : "Don't") + " permit reads if execute-only");
+        f.AddLeaf(RenderFlagBits(flags2, "...B .... .... ....", 16) + " = Dfs: " + ((flags2 & 0x1000) != 0 ? "Do" : "Don't") + " resolve pathnames with Dfs");
+        f.AddLeaf(RenderFlagBits(flags2, ".... B... .... ....", 16) + " = Extended Security Negotiation: Extended security negotiation is " + ((flags2 & 0x0800) != 0 ? "supported" : "not supported"));
+        f.AddLeaf(RenderFlagBits(flags2, ".... .B.. .... ....", 16) + " = Reparse Path: The request " + ((flags2 & 0x0400) != 0 ? "does" : "does not") + " use a @GMT reparse path");
+        f.AddLeaf(RenderFlagBits(flags2, ".... .... .B.. ....", 16) + " = Long Names Used: Path names in request " + ((flags2 & 0x0040) != 0 ? "are" : "are not") + " long file names");
+        f.AddLeaf(RenderFlagBits(flags2, ".... .... ...B ....", 16) + " = Security Signatures Required: Security signatures " + ((flags2 & 0x0010) != 0 ? "are" : "are not") + " required");
+        f.AddLeaf(RenderFlagBits(flags2, ".... .... .... B...", 16) + " = Compressed: Compression " + ((flags2 & 0x0008) != 0 ? "is" : "is not") + " requested");
+        f.AddLeaf(RenderFlagBits(flags2, ".... .... .... .B..", 16) + " = Security Signatures: Security signatures " + ((flags2 & 0x0004) != 0 ? "are" : "are not") + " supported");
+        f.AddLeaf(RenderFlagBits(flags2, ".... .... .... ..B.", 16) + " = Extended Attributes: Extended attributes " + ((flags2 & 0x0002) != 0 ? "are" : "are not") + " supported");
+        f.AddLeaf(RenderFlagBits(flags2, ".... .... .... ...B", 16) + " = Long Names Allowed: Long file names " + ((flags2 & 0x0001) != 0 ? "are" : "are not") + " allowed in the response");
+        return f;
+    }
+
+    // Renders a Wireshark-style flag bit line: 'B' -> the actual bit (MSB first over <width>
+    // bits), space -> space, any other char (. 0 1) copied verbatim.
+    private static string RenderFlagBits(uint flags, string template, int width)
+    {
+        var sb = new StringBuilder(template.Length);
+        int bitIndex = 0;
+        for (int i = 0; i < template.Length; i++)
+        {
+            char c = template[i];
+            if (c == ' ') { sb.Append(' '); continue; }
+            if (c == 'B') { int bit = (width - 1) - bitIndex; sb.Append(((flags >> bit) & 1) == 1 ? '1' : '0'); }
+            else sb.Append(c);
+            bitIndex++;
+        }
+        return sb.ToString();
+    }
+
+    private static string HexBytes(byte[] data, int off, int count, int len)
+    {
+        if (off + count > len) count = Math.Max(0, len - off);
+        if (count <= 0) return "";
+        var sb = new StringBuilder(count * 2);
+        for (int i = 0; i < count; i++) sb.Append(data[off + i].ToString("x2"));
+        return sb.ToString();
     }
 
     // Fast little-endian readers

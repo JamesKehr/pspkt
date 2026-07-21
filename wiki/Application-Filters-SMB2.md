@@ -79,6 +79,10 @@ The parser maintains **per-capture TID→tree-name and FID→file-name tables**:
 
 `LOGOFF`, `TREE_DISCONNECT`, `CANCEL`, and `ECHO` render as the header line only (no command-specific detail).
 
+### Analysis Details tree
+
+In [Analysis mode](./Analysis-Mode.md) (`-pl Analysis`), selecting an SMB2 packet renders a Wireshark-style detail tree: one collapsible node per message in the (possibly compounded) chain — `SMB2 <Command> - <tree>[; Status: …]` — expanding to the full **SMB2 Header** (fields plus `Flags` bit-decode). SYNC and ASYNC headers, the encrypted Transform header, and the legacy SMB1 Negotiate header (with `Flags`/`Flags2`) are each rendered. Per-command body subtrees and file/directory info results are added in later updates.
+
 **Name-resolution limitations.** File/tree names resolve only when both the establishing request and its response were captured (raise `-PacketSize` if Create/TreeConnect bodies are truncated). The name tables are keyed by SMB `SessionId` + `MessageId` (not the TCP 4-tuple), so on the rare occasion that two connections to *different* servers reuse the same session and message ids concurrently, a name could be mis-attributed. Compounded messages that use `SMB2_FLAGS_RELATED_OPERATIONS` (inheriting the FileId/TreeId of the previous message in the chain) show the inherited sentinel handle rather than the resolved name. These are display-only aids; the captured pcapng is always exact.
 
 ## Examples

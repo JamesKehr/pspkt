@@ -2257,6 +2257,154 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         }
     }
 
+    Context 'SMB2 Analysis detail tree (Phase 2a)' {
+        BeforeAll {
+            # Self-contained packet builders (the formatter context's helpers aren't defined
+            # when this context runs in isolation).
+            function script:New-Smb2Msg2 {
+                param(
+                    [int]$Command, [byte]$Flags = 0, [uint32]$Status = 0,
+                    [uint64]$MsgId = 0, [uint64]$SessionId = 0, [uint32]$TreeId = 0,
+                    [uint32]$NextCommand = 0, [byte[]]$Body = [byte[]]::new(0)
+                )
+                $hdr = [byte[]]::new(64)
+                $hdr[0]=0xfe; $hdr[1]=0x53; $hdr[2]=0x4d; $hdr[3]=0x42; $hdr[4]=64
+                $hdr[8]=$Status -band 0xff; $hdr[9]=($Status -shr 8) -band 0xff
+                $hdr[10]=($Status -shr 16) -band 0xff; $hdr[11]=($Status -shr 24) -band 0xff
+                $hdr[12]=$Command -band 0xff; $hdr[16]=$Flags
+                for ($i=0; $i -lt 4; $i++) { $hdr[20+$i]=[byte](($NextCommand -shr (8*$i)) -band 0xff) }
+                for ($i=0; $i -lt 8; $i++) { $hdr[24+$i]=[byte](($MsgId -shr (8*$i)) -band 0xff) }
+                for ($i=0; $i -lt 4; $i++) { $hdr[36+$i]=[byte](($TreeId -shr (8*$i)) -band 0xff) }
+                for ($i=0; $i -lt 8; $i++) { $hdr[40+$i]=[byte](($SessionId -shr (8*$i)) -band 0xff) }
+                return ,($hdr + $Body)
+            }
+            function script:Frame2 {
+                param([byte[]]$Msg)
+                $t = $Msg.Length
+                return ,([byte[]](0x00, (($t -shr 16) -band 0xff), (($t -shr 8) -band 0xff), ($t -band 0xff)) + $Msg)
+            }
+            function script:U32le2 { param([uint32]$v) [byte[]](($v -band 0xff), (($v -shr 8) -band 0xff), (($v -shr 16) -band 0xff), (($v -shr 24) -band 0xff)) }
+
+            # Flattens a List<BoxyBox.TreeNode> into newline-joined, ANSI-stripped text.
+            function script:Smb2TreeText {
+                param($Roots)
+                $acc = [System.Collections.Generic.List[string]]::new()
+                function script:_smb2walk($n, $a) {
+                    $a.Add([BoxyBox.AnsiText]::StripAnsi($n.Text))
+                    foreach ($c in $n.Children) { script:_smb2walk $c $a }
+                }
+                foreach ($r in $Roots) { script:_smb2walk $r $acc }
+                return ($acc -join "`n")
+            }
+        }
+
+        BeforeEach { [Smb2Parser]::ResetState() }
+
+        It 'builds a collapsed header and expanded SMB2 header for a sync request' {
+            $cb = [byte[]]::new(56); $cb[0]=57
+            $h = script:New-Smb2Msg2 -Command 5 -Flags 0x08 -MsgId 42 -SessionId 0x99 -TreeId 5 -Body $cb
+            # Set CreditCharge (header+6) for the field check.
+            $h[6] = 1
+            $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 445, 12345)
+            $roots.Count | Should -Be 1
+            $roots[0].Key | Should -Be 'SMB2'
+            [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB2 CREATE - TID 0x5'
+            $txt = script:Smb2TreeText $roots
+            $txt | Should -Match 'SMB2 Header'
+            $txt | Should -Match 'ProtocolId: 0xfe534d42'
+            $txt | Should -Match 'Command: CREATE \(5\)'
+            $txt | Should -Match 'Channel Sequence: 0'
+            $txt | Should -Match 'Credits requested: 0'
+            $txt | Should -Match 'Message ID: 42'
+            $txt | Should -Match 'Tree Id: 0x5'
+            $txt | Should -Match 'Session Id: 0x99'
+            # SIGNED flag bit rendered as 1.
+            $txt | Should -Match '1\.\.\. = Signing: This pdu is SIGNED'
+            $txt | Should -Match 'Flags: 0x00000008, SIGNED'
+        }
+
+        It 'shows NT Status on a response header and in the collapsed text' {
+            $b = [byte[]]::new(16)
+            $h = script:New-Smb2Msg2 -Command 5 -Flags 1 -Status ([uint32]3221225506) -MsgId 7 -SessionId 3 -TreeId 9 -Body $b
+            $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445)
+            [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB2 CREATE - TID 0x9; Status: STATUS_ACCESS_DENIED (0xC0000022)'
+            $txt = script:Smb2TreeText $roots
+            $txt | Should -Match 'NT Status: STATUS_ACCESS_DENIED \(0xC0000022\)'
+            $txt | Should -Match 'Response: This is a RESPONSE'
+        }
+
+        It 'renders an async command with an Async Id field' {
+            $b = [byte[]]::new(16)
+            $h = script:New-Smb2Msg2 -Command 8 -Flags 3 -MsgId 5 -Body $b   # response(1)+async(2)
+            $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445)
+            [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Match '^SMB2 READ - \(async\)'
+            $txt = script:Smb2TreeText $roots
+            $txt | Should -Match 'Async Id: 0x'
+            $txt | Should -Not -Match 'Tree Id:'
+            $txt | Should -Match 'Async command: This is a ASYNC command'
+        }
+
+        It 'resolves the tree to a UNC path in the collapsed header once known' {
+            $path = [System.Text.Encoding]::Unicode.GetBytes('\\server\share')
+            $tb = [byte[]]::new(8); $tb[0]=9; $po=72
+            $tb[4]=$po -band 0xff; $tb[6]=$path.Length -band 0xff; $tb[7]=($path.Length -shr 8) -band 0xff
+            $tc = script:Frame2 (script:New-Smb2Msg2 -Command 3 -MsgId 1 -SessionId 42 -Body ($tb + $path))
+            $null = [Smb2Parser]::FormatSmb2Segment($tc, 445, 12345)
+            # Response assigns TreeId 7 to session 42.
+            $trb = [byte[]]::new(16); $trb[0]=16
+            $resp = script:Frame2 (script:New-Smb2Msg2 -Command 3 -Flags 1 -MsgId 1 -SessionId 42 -TreeId 7 -Body $trb)
+            $null = [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445)
+            # A later command on (session 42, tree 7) resolves the UNC.
+            $cb = [byte[]]::new(56); $cb[0]=57
+            $create = script:New-Smb2Msg2 -Command 5 -MsgId 2 -SessionId 42 -TreeId 7 -Body $cb
+            $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $create), ($create.Length + 4), 445, 12345)
+            [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB2 CREATE - \\server\share'
+            (script:Smb2TreeText $roots) | Should -Match 'Tree Id: 0x7  \\\\server\\share'
+        }
+
+        It 'builds a transform (encrypted) header node' {
+            $tf = [byte[]]::new(52); $tf[0]=0xfd; $tf[1]=0x53; $tf[2]=0x4d; $tf[3]=0x42
+            [Array]::Copy((script:U32le2 200), 0, $tf, 36, 4)
+            [Array]::Copy((script:U32le2 0x777), 0, $tf, 44, 4)
+            $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $tf), ($tf.Length + 4), 445, 12345)
+            [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB2 Encrypted - SessId 0x777, len 200'
+            $txt = script:Smb2TreeText $roots
+            $txt | Should -Match 'SMB2 Transform Header'
+            $txt | Should -Match 'Original Message Size: 200'
+            $txt | Should -Match 'Session Id: 0x777'
+        }
+
+        It 'builds an SMB1 Negotiate header node with Flags and Flags2 subtrees' {
+            $s = [byte[]]::new(35)
+            $s[0]=0xff; $s[1]=0x53; $s[2]=0x4d; $s[3]=0x42     # 0xFF SMB
+            $s[4]=0x72                                          # Negotiate Protocol
+            $s[9]=0x18                                          # Flags
+            $s[10]=0x01; $s[11]=0xc8                            # Flags2 = 0xc801
+            $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $s), ($s.Length + 4), 12345, 445)
+            [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB1 Negotiate Protocol Request'
+            $txt = script:Smb2TreeText $roots
+            $txt | Should -Match 'Server Component: SMB'
+            $txt | Should -Match 'SMB Command: Negotiate Protocol \(0x72\)'
+            $txt | Should -Match 'Flags2: 0xc801'
+            $txt | Should -Match 'Unicode Strings: Strings are Unicode'
+        }
+
+        It 'emits one root per command for a compounded packet' {
+            $b1 = [byte[]]::new(24); $b1[0]=24
+            $m1 = script:New-Smb2Msg2 -Command 6 -MsgId 1 -SessionId 5 -Body $b1
+            $pad = (8 - ($m1.Length % 8)) % 8
+            $m1 = $m1 + [byte[]]::new($pad)
+            $next = $m1.Length
+            for ($i=0; $i -lt 4; $i++) { $m1[20+$i]=[byte](($next -shr (8*$i)) -band 0xff) }
+            $b2 = [byte[]]::new(24); $b2[0]=24
+            $m2 = script:New-Smb2Msg2 -Command 4 -MsgId 2 -SessionId 5 -Body $b2
+            $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 ($m1 + $m2)), ($m1.Length + $m2.Length + 4), 445, 12345)
+            $roots.Count | Should -Be 2
+            [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Match '^SMB2 CLOSE'
+            [BoxyBox.AnsiText]::StripAnsi($roots[1].Text) | Should -Match '^SMB2 TREE_DISCONNECT'
+        }
+    }
+
     Context 'ICMP / ICMPv6 / NDP application-layer predicate' {
         BeforeAll {
             $script:icmpStartCmd = Get-Command -Name Start-Pspkt -ErrorAction Stop

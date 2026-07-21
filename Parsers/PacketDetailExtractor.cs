@@ -253,7 +253,8 @@ public static class PacketDetailExtractor
             case "DNS":
             case "mDNS":
             case "DHCP":
-            case "HTTP":      return 4; // LAYER_APPLICATION
+            case "HTTP":
+            case "SMB2":       return 4; // LAYER_APPLICATION
             default:          return -1;
         }
     }
@@ -672,6 +673,11 @@ public static class PacketDetailExtractor
         {
             List<BoxyBox.TreeNode> httpRoots = HttpParser.BuildHttpDetailTree(payload, HttpParser.BuildConnKey(src, sp, dst, dp));
             for (int i = 0; i < httpRoots.Count; i++) roots.Add(httpRoots[i]);
+        }
+        else if (!udp && (sp == 445 || dp == 445))
+        {
+            List<BoxyBox.TreeNode> smbRoots = Smb2Parser.BuildSmb2DetailTree(payload, len, sp, dp);
+            for (int i = 0; i < smbRoots.Count; i++) roots.Add(smbRoots[i]);
         }
     }
 
