@@ -2198,6 +2198,18 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
                 Should -Be 'SMB2 NEGOTIATE Request, Requested Dialects 2.0.2, 3.1.1; DFS, LARGE_MTU'
         }
 
+        It 'formats a NEGOTIATE response with the correct max sizes and capabilities' {
+            # Response layout: DialectRevision@4, ServerGuid@8, Capabilities@24, Max*@28/32/36.
+            $nb = [byte[]]::new(64); $nb[0]=65; $nb[4]=0x11; $nb[5]=0x03   # StructSize 65, dialect 3.1.1
+            [Array]::Copy([byte[]](0x2f,0,0,0), 0, $nb, 24, 4)             # caps 0x2f
+            [Array]::Copy([BitConverter]::GetBytes([uint32]8388608), 0, $nb, 28, 4)  # MaxTransact
+            [Array]::Copy([BitConverter]::GetBytes([uint32]8388608), 0, $nb, 32, 4)  # MaxRead
+            [Array]::Copy([BitConverter]::GetBytes([uint32]8388608), 0, $nb, 36, 4)  # MaxWrite
+            $neg = script:Frame-Smb2 (script:New-Smb2Msg -Command 0 -Flags 1 -MsgId 0 -Body $nb)
+            [Smb2Parser]::FormatSmb2Segment($neg, 12345, 445) |
+                Should -Be 'SMB2 NEGOTIATE Response, Dialect 3.1.1; 8388608\8388608\8388608; DFS, LEASING, LARGE_MTU, MULTI_CHANNEL, DIRECTORY_LEASING'
+        }
+
         It 'ResetState clears the name tables so a later capture starts clean' {
             $req  = script:New-Smb2CreateReq  -Name 'leak.txt' -MsgId 10 -SessionId 99
             $resp = script:New-Smb2CreateResp -Action 1 -FidP 0x40 -FidV 0x41 -MsgId 10 -SessionId 99

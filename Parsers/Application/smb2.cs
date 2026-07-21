@@ -602,12 +602,14 @@ public static class Smb2Parser
     {
         if (isResponse)
         {
-            if (bodyLen < 24) return;
+            // Response layout: SecurityMode@2, DialectRevision@4, NegotiateContextCount@6,
+            // ServerGuid@8 (16), Capabilities@24, MaxTransact@28, MaxRead@32, MaxWrite@36.
+            if (bodyLen < 40) return;
             ushort dialect = ReadUInt16LE(data, off + 4);
-            uint caps       = ReadUInt32LE(data, off + 8);
-            uint maxTransact = ReadUInt32LE(data, off + 12);
-            uint maxRead     = ReadUInt32LE(data, off + 16);
-            uint maxWrite    = ReadUInt32LE(data, off + 20);
+            uint caps        = ReadUInt32LE(data, off + 24);
+            uint maxTransact = ReadUInt32LE(data, off + 28);
+            uint maxRead     = ReadUInt32LE(data, off + 32);
+            uint maxWrite    = ReadUInt32LE(data, off + 36);
             sb.Append(", Dialect ").Append(DialectName(dialect));
             sb.Append("; ").Append(maxTransact).Append('\\').Append(maxRead).Append('\\').Append(maxWrite);
             AppendCaps(sb, caps);
