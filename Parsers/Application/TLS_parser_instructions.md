@@ -51,6 +51,13 @@ Fields decoded:
 - **Encrypted traffic is not decrypted.** Only the cleartext record framing and the
   ClientHello / ServerHello handshakes (which precede key establishment) are parsed;
   ApplicationData records show length only.
+- **Payload-less segments render as plain TCP.** Because TLS is content-detected, a TCP
+  segment on a TLS-wrapped port (443, 8443, 993, 995, 465, 636, 853, 5986) that carries no TLS
+  record — an ACK, FIN, or bare handshake segment (`len 0`) — is a pure transport event and
+  renders as a normal `TCP [flags] ...` segment, not `HTTPS: TCP ...` / `IMAPS: TCP ...`. The
+  port number already identifies the tunneled service. (Same convention as HTTP, SMB2, and
+  DNS-over-TCP, whose ports are likewise not hinted. WinRM on 5985 stays hinted because it is
+  cleartext HTTP, not TLS.)
 
 ## Tree indentation
 
@@ -64,7 +71,14 @@ indented two spaces under their parent.
 
 ## Minimal
 
-`TLS`
+Minimal shows only the packet framing, network/transport protocol, and addresses — **no
+application-layer marker**, the same as the other parsed TCP protocols (HTTP, SMB2,
+DNS-over-TCP). TLS is identified by the transport and the `.443` port (or whatever port the
+record was seen on):
+
+`Eth: IPv4.TCP: [src].[sport] > [dst].[dport]`
+
+(Content-based TLS identification — the `TLS ...` line — begins at the Default level.)
 
 ## Default
 

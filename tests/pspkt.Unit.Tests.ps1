@@ -1110,6 +1110,84 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $out | Should -Match 'IPv6 .+: TLS 1\.0 ClientHello'
         }
 
+        It 'renders a payload-less TCP ACK on port 443 as a plain transport segment (no HTTPS: hint)' {
+            # A len-0 ACK on TCP 443<->50875 carries no TLS record. Because TLS is a parsed
+            # protocol, it must render as a plain "TCP [.], ..." transport segment — NOT
+            # "HTTPS: TCP ..." with the transport details wrapped in the app layer.
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=0x01; $tcp[1]=0xbb      # src port 443
+            $tcp[2]=0xc6; $tcp[3]=0xbb      # dst port 50875
+            $tcp[12]=0x50; $tcp[13]=0x10    # data offset 5 (20 bytes), ACK only
+            $ipLen = 20 + $tcp.Length
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[12]=52;$ip[13]=123;$ip[14]=251;$ip[15]=17; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=72
+            $pkt = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'IPv4\.TCP 52\.123\.251\.17\.443 > 10\.24\.0\.72\.50875: TCP \[\.\],'
+            $out | Should -Not -Match 'HTTPS:'
+        }
+
+        It 'renders a payload-less ACK on TLS-wrapped port <port> (<svc>) as plain TCP' -ForEach @(
+            @{ port = 8443; svc = 'HTTPS-ALT' }
+            @{ port = 993;  svc = 'IMAPS' }
+            @{ port = 995;  svc = 'POP3S' }
+            @{ port = 465;  svc = 'SMTPS' }
+            @{ port = 636;  svc = 'LDAPS' }
+            @{ port = 853;  svc = 'DoT' }
+            @{ port = 5986; svc = 'WinRM-S' }
+        ) {
+            # Every TLS-wrapped port must render a payload-less segment as plain TCP, not
+            # "<svc>: TCP ..." — consistent with the HTTPS/443 fix.
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=[byte](($port -shr 8) -band 0xff); $tcp[1]=[byte]($port -band 0xff)
+            $tcp[2]=0xc6; $tcp[3]=0xbb      # dst port 50875
+            $tcp[12]=0x50; $tcp[13]=0x10    # ACK only
+            $ipLen = 20 + $tcp.Length
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $pkt = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match ("IPv4\.TCP 10\.0\.0\.1\.$port > 10\.0\.0\.2\.50875: TCP \[\.\],")
+            $out | Should -Not -Match ([regex]::Escape($svc) + ':')
+        }
+
+        It 'still shows the QUIC hint for UDP port 443 (not removed with the TLS TCP hints)' {
+            # QUIC (UDP 443) is not parsed, so its port hint must remain.
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $payload = [byte[]]::new(16)
+            $udpLen = 8 + $payload.Length
+            $udp = [byte[]](0x01,0xbb, 0xc6,0xbb, [byte](($udpLen -shr 8) -band 0xff), [byte]($udpLen -band 0xff), 0,0)   # src 443
+            $ipLen = 20 + $udpLen
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=17
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $pkt = $eth + $ip + $udp + $payload
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'QUIC'
+        }
+
         It 'continues past a zero-length TLS record to emit later records' {
             # A zero-length ChangeCipherSpec (14 03 03 00 00) followed by a ClientHello. Both must
             # be emitted — the record walk advances by the header size even when body length is 0.
