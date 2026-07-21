@@ -2547,6 +2547,99 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $ctxt | Should -Match 'Output Buffer Length: 16'
             $ctxt | Should -Not -Match 'Byte Count'
         }
+
+        # ---- Phase 2c: FileInfo result parsing ----
+
+        It 'parses QUERY_DIRECTORY response entries using the correlated info class' {
+            [Smb2Parser]::ResetState()
+            # Request records FileIdBothDirectoryInformation (0x25) for (session 9, msg 50).
+            $qb = [byte[]]::new(32); $qb[0]=33; $qb[2]=0x25
+            $null = [Smb2Parser]::FormatSmb2Segment((script:Frame2 (script:New-Smb2Msg2 -Command 14 -MsgId 50 -SessionId 9 -Body $qb)), 445, 12345)
+            # Two directory entries in the response output buffer.
+            function script:MkDirEntry([string]$Name, [uint64]$Eof, [uint32]$Attr, [uint32]$Next) {
+                $nb = [System.Text.Encoding]::Unicode.GetBytes($Name); $e = [byte[]]::new(104)
+                [Array]::Copy([BitConverter]::GetBytes([uint32]$Next), 0, $e, 0, 4)
+                [Array]::Copy([BitConverter]::GetBytes([uint64]$Eof), 0, $e, 40, 8)
+                [Array]::Copy([BitConverter]::GetBytes([uint32]$Attr), 0, $e, 56, 4)
+                [Array]::Copy([BitConverter]::GetBytes([uint32]$nb.Length), 0, $e, 60, 4)
+                return ,($e + $nb)
+            }
+            $e1 = script:MkDirEntry 'file1.txt' 1024 0x20 0
+            $pad = (8 - ($e1.Length % 8)) % 8; $e1 = $e1 + [byte[]]::new($pad)
+            for ($i=0; $i -lt 4; $i++) { $e1[$i] = [byte](($e1.Length -shr (8*$i)) -band 0xff) }   # NextEntryOffset
+            $e2 = script:MkDirEntry 'file2.txt' 2048 0x10 0
+            $buf = $e1 + $e2
+            $rb = [byte[]]::new(8); $rb[0]=9
+            [Array]::Copy([BitConverter]::GetBytes([uint16]72), 0, $rb, 2, 2)          # OutputBufferOffset (after 8-byte body)
+            [Array]::Copy([BitConverter]::GetBytes([uint32]$buf.Length), 0, $rb, 4, 4) # OutputBufferLength
+            $resp = script:Frame2 (script:New-Smb2Msg2 -Command 14 -Flags 1 -MsgId 50 -SessionId 9 -Body ($rb + $buf))
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree($resp, ($resp.Length), 12345, 445))
+            $txt | Should -Match 'Directory Entries \(2\)'
+            $txt | Should -Match '\[1\] file1\.txt'
+            $txt | Should -Match 'End of File: 1024'
+            $txt | Should -Match '\[2\] file2\.txt'
+            $txt | Should -Match 'File Attributes: 0x00000010 \(DIRECTORY\)'
+        }
+
+        It 'parses a QUERY_INFO response using the correlated FileStandardInformation class' {
+            [Smb2Parser]::ResetState()
+            $qib = [byte[]]::new(40); $qib[0]=41; $qib[2]=1; $qib[3]=0x05   # InfoType FILE, class Standard
+            $null = [Smb2Parser]::FormatSmb2Segment((script:Frame2 (script:New-Smb2Msg2 -Command 16 -MsgId 60 -SessionId 7 -Body $qib)), 445, 12345)
+            $std = [byte[]]::new(24)
+            [Array]::Copy([BitConverter]::GetBytes([uint64]4096), 0, $std, 0, 8)
+            [Array]::Copy([BitConverter]::GetBytes([uint64]4000), 0, $std, 8, 8)
+            [Array]::Copy([BitConverter]::GetBytes([uint32]1), 0, $std, 16, 4)
+            $rib = [byte[]]::new(8); $rib[0]=9
+            [Array]::Copy([BitConverter]::GetBytes([uint16]72), 0, $rib, 2, 2)
+            [Array]::Copy([BitConverter]::GetBytes([uint32]$std.Length), 0, $rib, 4, 4)
+            $resp = script:Frame2 (script:New-Smb2Msg2 -Command 16 -Flags 1 -MsgId 60 -SessionId 7 -Body ($rib + $std))
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree($resp, ($resp.Length), 12345, 445))
+            $txt | Should -Match 'INFO_FILE\\FileStandardInformation'
+            $txt | Should -Match 'Allocation Size: 4096'
+            $txt | Should -Match 'End of File: 4000'
+            $txt | Should -Match 'Number of Links: 1'
+        }
+
+        It 'notes an unknown info class when the QUERY_INFO request was not captured' {
+            [Smb2Parser]::ResetState()   # no request recorded
+            $std = [byte[]]::new(24)
+            $rib = [byte[]]::new(8); $rib[0]=9
+            [Array]::Copy([BitConverter]::GetBytes([uint16]72), 0, $rib, 2, 2)
+            [Array]::Copy([BitConverter]::GetBytes([uint32]$std.Length), 0, $rib, 4, 4)
+            $resp = script:Frame2 (script:New-Smb2Msg2 -Command 16 -Flags 1 -MsgId 99 -SessionId 7 -Body ($rib + $std))
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree($resp, ($resp.Length), 12345, 445))
+            $txt | Should -Match 'information class unknown'
+        }
+
+        It 'does not crash on a malformed directory NextEntryOffset' {
+            [Smb2Parser]::ResetState()
+            $qb = [byte[]]::new(32); $qb[0]=33; $qb[2]=0x01   # FileDirectoryInformation
+            $null = [Smb2Parser]::FormatSmb2Segment((script:Frame2 (script:New-Smb2Msg2 -Command 14 -MsgId 51 -SessionId 9 -Body $qb)), 445, 12345)
+            $ent = [byte[]]::new(80)
+            [Array]::Copy([BitConverter]::GetBytes([uint32]0x7FFFFFB3), 0, $ent, 0, 4)   # NextEntryOffset -> pos near Int32.MaxValue
+            [Array]::Copy([BitConverter]::GetBytes([uint32]8), 0, $ent, 60, 4)
+            $rb = [byte[]]::new(8); $rb[0]=9
+            [Array]::Copy([BitConverter]::GetBytes([uint16]72), 0, $rb, 2, 2)
+            [Array]::Copy([BitConverter]::GetBytes([uint32]$ent.Length), 0, $rb, 4, 4)
+            $resp = script:Frame2 (script:New-Smb2Msg2 -Command 14 -Flags 1 -MsgId 51 -SessionId 9 -Body ($rb + $ent))
+            { [Smb2Parser]::BuildSmb2DetailTree($resp, ($resp.Length), 12345, 445) } | Should -Not -Throw
+        }
+
+        It 'parses a SET_INFO request buffer (FileRenameInformation)' {
+            [Smb2Parser]::ResetState()
+            $newName = [System.Text.Encoding]::Unicode.GetBytes('renamed.txt')
+            $rn = [byte[]]::new(20); $rn[0]=1   # ReplaceIfExists
+            [Array]::Copy([BitConverter]::GetBytes([uint32]$newName.Length), 0, $rn, 16, 4)
+            $rn = $rn + $newName
+            $sb = [byte[]]::new(32); $sb[0]=33; $sb[2]=1; $sb[3]=0x0A   # InfoType FILE, class Rename
+            [Array]::Copy([BitConverter]::GetBytes([uint32]$rn.Length), 0, $sb, 4, 4)   # BufferLength
+            [Array]::Copy([BitConverter]::GetBytes([uint16]96), 0, $sb, 8, 2)           # BufferOffset (after 32-byte body)
+            $req = script:Frame2 (script:New-Smb2Msg2 -Command 17 -MsgId 70 -SessionId 7 -Body ($sb + $rn))
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree($req, ($req.Length), 445, 12345))
+            $txt | Should -Match 'INFO_FILE\\FileRenameInformation'
+            $txt | Should -Match 'Replace If Exists: True'
+            $txt | Should -Match 'New Name: renamed\.txt'
+        }
     }
 
     Context 'ICMP / ICMPv6 / NDP application-layer predicate' {
