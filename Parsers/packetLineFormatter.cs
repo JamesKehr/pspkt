@@ -1327,7 +1327,7 @@ public static class PacketLineFormatter
             {
                 if (Smb2Parser.IsSmb2Packet(udpData, srcPort, dstPort))
                 {
-                    suffix = Smb2Parser.FormatSmb2Segment(udpData, srcPort, dstPort);
+                    suffix = Smb2Parser.FormatSmb2Segment(udpData, udpData != null ? udpData.Length : 0, srcPort, dstPort, Smb2Parser.ConnKey(srcAddr, srcPort, dstAddr, dstPort));
                     if (suffix != null) appLayer = 4;
                 }
             }
@@ -1929,7 +1929,7 @@ public static class PacketLineFormatter
                     return FilteredByPredicate;
                 }
             }
-            return Smb2Parser.FormatSmb2Detailed(data, dataLen, srcPort, dstPort);
+            return Smb2Parser.FormatSmb2Detailed(data, dataLen, srcPort, dstPort, Smb2Parser.ConnKey(srcAddr, srcPort, dstAddr, dstPort));
         }
 
         if (HttpParser.LooksLikeHttp(data, dataLen))

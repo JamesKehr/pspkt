@@ -305,6 +305,64 @@ public static class Smb2Parser
     private static readonly object _stateLock = new object();
     private const int StateCap = 100000;
 
+    // Per-connection scoping key (order-independent hash of the IP 4-tuple), set at the start of
+    // each parse. Folded into every state-table key so two concurrent connections that happen to
+    // reuse the same SessionId / TreeId / FileId can't collide. ThreadStatic because the live
+    // one-liner (consumer thread) and the Analysis JIT detail parse (UI thread) run concurrently;
+    // each computes the same key for a given connection from the packet's addresses.
+    [ThreadStatic] private static ulong _connKey;
+
+    // The file name established by a CREATE earlier in the *current* compound chain. A related
+    // command (SMB2_FLAGS_RELATED_OPERATIONS) uses the all-ones sentinel FileId to mean "the
+    // FileId from the previous command", which isn't in the FID table yet on the request side —
+    // so we resolve it to this chain-local name. Reset at the start of each chain walk.
+    [ThreadStatic] private static string _chainFile;
+
+    // True while formatting a command that carries SMB2_FLAGS_RELATED_OPERATIONS. Only a related
+    // command's sentinel FileId should resolve to _chainFile; a non-related command carrying the
+    // sentinel (unusual/malformed) falls through to the GUID. Set per-command by both walkers.
+    [ThreadStatic] private static bool _currentRelated;
+
+    // SMB2 "use previous FileId" sentinel (all-ones persistent + volatile).
+    private const ulong FILEID_SENTINEL = 0xFFFFFFFFFFFFFFFFUL;
+    private static bool IsSentinelFid(ulong persistent, ulong volatil)
+    {
+        return persistent == FILEID_SENTINEL && volatil == FILEID_SENTINEL;
+    }
+
+    /// <summary>
+    /// Order-independent connection key from the IP 4-tuple, so a request (client-&gt;server) and
+    /// its response (server-&gt;client) map to the same key. Each endpoint (address+port) is hashed
+    /// as a unit so the address/port pairing is preserved (A:50000-B:445 differs from
+    /// A:445-B:50000); the two endpoint hashes are then XOR-combined for req/resp symmetry.
+    /// Returns 0 when addresses are absent.
+    /// </summary>
+    public static ulong ConnKey(string srcAddr, int srcPort, string dstAddr, int dstPort)
+    {
+        if (string.IsNullOrEmpty(srcAddr) || string.IsNullOrEmpty(dstAddr)) return 0;
+        return EndpointHash(srcAddr, srcPort) ^ EndpointHash(dstAddr, dstPort);
+    }
+
+    // FNV-1a over the address characters followed by the 2 port bytes, so port is paired with
+    // its address rather than XOR-folded (which would let a port/address swap collide).
+    private static ulong EndpointHash(string addr, int port)
+    {
+        ulong h = 14695981039346656037UL;
+        for (int i = 0; i < addr.Length; i++) { h ^= addr[i]; h *= 1099511628211UL; }
+        h ^= (byte)(port & 0xFF); h *= 1099511628211UL;
+        h ^= (byte)((port >> 8) & 0xFF); h *= 1099511628211UL;
+        return h;
+    }
+
+    private static ulong Mix(ulong a, ulong b) { return (a * 1099511628211UL) ^ b; }
+    // (mix(connKey, SessionId), MessageId). Folding SessionId in preserves the legacy per-session
+    // isolation when connKey is 0 (unknown addresses / the 2-3-arg overloads).
+    private static U64Pair MsgKey(ulong sessionId, ulong messageId) { return new U64Pair(Mix(_connKey, sessionId), messageId); }
+    // (mix(connKey, SessionId), TreeId).
+    private static U64Pair TreeKey(ulong sessionId, uint treeId) { return new U64Pair(Mix(_connKey, sessionId), treeId); }
+    // (FileId.persistent xor connKey, FileId.volatile).
+    private static U64Pair FileKey(ulong persistent, ulong volatil) { return new U64Pair(persistent ^ _connKey, volatil); }
+
     private struct U64Pair : IEquatable<U64Pair>
     {
         public ulong A;
@@ -359,7 +417,7 @@ public static class Smb2Parser
     {
         lock (_stateLock)
         {
-            U64Pair key = new U64Pair(sessionId, messageId);
+            U64Pair key = MsgKey(sessionId, messageId);
             if (_pendingInfo.Count >= StateCap && !_pendingInfo.ContainsKey(key)) return;
             _pendingInfo[key] = (infoType << 8) | infoClass;
         }
@@ -372,7 +430,7 @@ public static class Smb2Parser
         lock (_stateLock)
         {
             int packed;
-            if (!_pendingInfo.TryGetValue(new U64Pair(sessionId, messageId), out packed)) return false;
+            if (!_pendingInfo.TryGetValue(MsgKey(sessionId, messageId), out packed)) return false;
             infoType = (byte)((packed >> 8) & 0xFF);
             infoClass = (byte)(packed & 0xFF);
             return true;
@@ -384,7 +442,7 @@ public static class Smb2Parser
         if (name == null) return;
         lock (_stateLock)
         {
-            U64Pair key = new U64Pair(sessionId, messageId);
+            U64Pair key = MsgKey(sessionId, messageId);
             // Safety valve: _pending should stay small (entries are consumed by the matching
             // response), but if it ever fills — e.g. a flood of requests whose responses were
             // dropped — clear it rather than permanently rejecting all new correlations.
@@ -396,21 +454,21 @@ public static class Smb2Parser
 
     private static void DiscardPending(ulong sessionId, ulong messageId)
     {
-        lock (_stateLock) { _pending.Remove(new U64Pair(sessionId, messageId)); }
+        lock (_stateLock) { _pending.Remove(MsgKey(sessionId, messageId)); }
     }
 
     private static void ResolveTree(ulong sessionId, ulong messageId, uint treeId)
     {
         lock (_stateLock)
         {
-            U64Pair mkey = new U64Pair(sessionId, messageId);
+            U64Pair mkey = MsgKey(sessionId, messageId);
             PendingName p;
             if (_pending.TryGetValue(mkey, out p))
             {
                 _pending.Remove(mkey);
                 if (p.Kind == 1)
                 {
-                    U64Pair tkey = new U64Pair(sessionId, treeId);
+                    U64Pair tkey = TreeKey(sessionId, treeId);
                     // Allow updating an existing (reused) TreeId even at capacity; only block
                     // brand-new keys once full.
                     if (_treeNames.Count < StateCap || _treeNames.ContainsKey(tkey))
@@ -424,14 +482,14 @@ public static class Smb2Parser
     {
         lock (_stateLock)
         {
-            U64Pair mkey = new U64Pair(sessionId, messageId);
+            U64Pair mkey = MsgKey(sessionId, messageId);
             PendingName p;
             if (_pending.TryGetValue(mkey, out p))
             {
                 _pending.Remove(mkey);
                 if (p.Kind == 2)
                 {
-                    U64Pair fkey = new U64Pair(fidPersistent, fidVolatile);
+                    U64Pair fkey = FileKey(fidPersistent, fidVolatile);
                     if (_fileNames.Count < StateCap || _fileNames.ContainsKey(fkey))
                         _fileNames[fkey] = p.Name;
                 }
@@ -444,7 +502,7 @@ public static class Smb2Parser
         lock (_stateLock)
         {
             string name;
-            return _fileNames.TryGetValue(new U64Pair(fidPersistent, fidVolatile), out name) ? name : null;
+            return _fileNames.TryGetValue(FileKey(fidPersistent, fidVolatile), out name) ? name : null;
         }
     }
 
@@ -453,7 +511,7 @@ public static class Smb2Parser
         lock (_stateLock)
         {
             string name;
-            return _treeNames.TryGetValue(new U64Pair(sessionId, treeId), out name) ? name : null;
+            return _treeNames.TryGetValue(TreeKey(sessionId, treeId), out name) ? name : null;
         }
     }
 
@@ -496,11 +554,17 @@ public static class Smb2Parser
     /// </summary>
     public static string FormatSmb2Segment(byte[] data, int srcPort, int dstPort)
     {
-        return FormatSmb2Segment(data, data != null ? data.Length : 0, srcPort, dstPort);
+        return FormatSmb2Segment(data, data != null ? data.Length : 0, srcPort, dstPort, 0);
     }
 
     public static string FormatSmb2Segment(byte[] data, int dataLen, int srcPort, int dstPort)
     {
+        return FormatSmb2Segment(data, dataLen, srcPort, dstPort, 0);
+    }
+
+    public static string FormatSmb2Segment(byte[] data, int dataLen, int srcPort, int dstPort, ulong connKey)
+    {
+        _connKey = connKey;
         int len = dataLen;
         if (data == null) len = 0;
         else if (len > data.Length) len = data.Length;
@@ -533,6 +597,7 @@ public static class Smb2Parser
         // Walk the (possibly compounded) command chain, emitting one spec line per command
         // joined by " | ". State population (TID/FID name tables) is a side effect of the walk.
         StringBuilder sb = new StringBuilder(160);
+        _chainFile = null;   // reset the related-command file context for this chain
         int cmdOffset = offset;
         bool firstCmd = true;
         int guard = 0;
@@ -551,6 +616,7 @@ public static class Smb2Parser
             uint treeId      = ReadUInt32LE(data, cmdOffset + 36);
             ulong sessionId  = ReadUInt64LE(data, cmdOffset + 40);
             bool isResponse  = (flags & 0x00000001) != 0;
+            _currentRelated  = (flags & 0x00000004) != 0;   // SMB2_FLAGS_RELATED_OPERATIONS
 
             if (!firstCmd) sb.Append(" | ");
             firstCmd = false;
@@ -712,6 +778,7 @@ public static class Smb2Parser
             string name = ExtractName(data, hdr + nameOffset, nameLength, off, cmdEnd);
             if (name == null) name = "";
             RecordPending(sessionId, messageId, 2, name);
+            if (name.Length > 0) _chainFile = name;   // subsequent related commands inherit this file
             sb.Append(", Disposition: ").Append(disp < (uint)CreateDispositions.Length
                 ? CreateDispositions[disp] : "0x" + disp.ToString("X"));
             sb.Append("; File: ").Append(name.Length == 0 ? "<root>" : name);
@@ -885,6 +952,8 @@ public static class Smb2Parser
     {
         string name = LookupFile(persistent, volatil);
         if (name != null && name.Length > 0) return name;
+        // A related command's sentinel FileId refers to the file created earlier in this chain.
+        if (_currentRelated && IsSentinelFid(persistent, volatil) && !string.IsNullOrEmpty(_chainFile)) return _chainFile;
         return FormatGuid(data, fidByteOffset);
     }
 
@@ -902,7 +971,7 @@ public static class Smb2Parser
     {
         lock (_stateLock)
         {
-            U64Pair key = new U64Pair(sessionId, messageId);
+            U64Pair key = MsgKey(sessionId, messageId);
             PendingName pn;
             if (_pending.TryGetValue(key, out pn) && pn.Kind == 3)
             {
@@ -1036,12 +1105,17 @@ public static class Smb2Parser
     /// </summary>
     public static string FormatSmb2Detailed(byte[] data, int srcPort, int dstPort)
     {
-        return FormatSmb2Segment(data, data != null ? data.Length : 0, srcPort, dstPort);
+        return FormatSmb2Segment(data, data != null ? data.Length : 0, srcPort, dstPort, 0);
     }
 
     public static string FormatSmb2Detailed(byte[] data, int dataLen, int srcPort, int dstPort)
     {
-        return FormatSmb2Segment(data, dataLen, srcPort, dstPort);
+        return FormatSmb2Segment(data, dataLen, srcPort, dstPort, 0);
+    }
+
+    public static string FormatSmb2Detailed(byte[] data, int dataLen, int srcPort, int dstPort, ulong connKey)
+    {
+        return FormatSmb2Segment(data, dataLen, srcPort, dstPort, connKey);
     }
 
     // =======================================================================
@@ -1058,6 +1132,13 @@ public static class Smb2Parser
     /// </summary>
     public static List<BoxyBox.TreeNode> BuildSmb2DetailTree(byte[] data, int len, int srcPort, int dstPort)
     {
+        return BuildSmb2DetailTree(data, len, srcPort, dstPort, 0);
+    }
+
+    public static List<BoxyBox.TreeNode> BuildSmb2DetailTree(byte[] data, int len, int srcPort, int dstPort, ulong connKey)
+    {
+        _connKey = connKey;
+        _chainFile = null;   // reset the related-command file context for this chain
         var roots = new List<BoxyBox.TreeNode>();
         if (data == null) return roots;
         if (len > data.Length) len = data.Length;
@@ -1102,6 +1183,7 @@ public static class Smb2Parser
         ulong sessionId = ReadUInt64LE(data, hdr + 40);
         bool isResponse = (flags & 0x00000001) != 0;
         bool isAsync    = (flags & 0x00000002) != 0;
+        _currentRelated = (flags & 0x00000004) != 0;   // SMB2_FLAGS_RELATED_OPERATIONS
         string cmdName  = command < CommandNames.Length ? CommandNames[command] : "CMD_0x" + command.ToString("X4");
 
         // Collapsed root text: "SMB2 <cmd> - <tree>[; Status: ...]".
@@ -1312,6 +1394,7 @@ public static class Smb2Parser
             ushort no = ReadUInt16LE(data, off + 44);
             ushort nl = ReadUInt16LE(data, off + 46);
             string name = ExtractName(data, hdr + no, nl, off, cmdEnd);
+            if (!string.IsNullOrEmpty(name)) _chainFile = name;   // related commands inherit this file
             n.AddLeaf("Name: " + (string.IsNullOrEmpty(name) ? "<root>" : name));
         }
         else
@@ -1781,6 +1864,9 @@ public static class Smb2Parser
         if (fidOff + 16 > len) return "File Id: (truncated)";
         ulong p = ReadUInt64LE(data, fidOff);
         ulong v = ReadUInt64LE(data, fidOff + 8);
+        // A related command's sentinel FileId shows the file created earlier in this chain.
+        if (_currentRelated && IsSentinelFid(p, v) && !string.IsNullOrEmpty(_chainFile))
+            return "File Id: <related>  " + _chainFile;
         string name = LookupFile(p, v);
         string s = "File Id: " + FormatGuid(data, fidOff);
         if (name != null && name.Length > 0) s += "  " + name;

@@ -676,7 +676,7 @@ public static class PacketDetailExtractor
         }
         else if (!udp && (sp == 445 || dp == 445))
         {
-            List<BoxyBox.TreeNode> smbRoots = Smb2Parser.BuildSmb2DetailTree(payload, len, sp, dp);
+            List<BoxyBox.TreeNode> smbRoots = Smb2Parser.BuildSmb2DetailTree(payload, len, sp, dp, Smb2Parser.ConnKey(src, sp, dst, dp));
             for (int i = 0; i < smbRoots.Count; i++) roots.Add(smbRoots[i]);
         }
     }

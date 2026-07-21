@@ -2267,6 +2267,82 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $resp = script:Frame-Smb2 (script:New-Smb2Msg -Command 3 -Flags 1 -Status ([uint32]3221225676) -MsgId 4 -SessionId 8 -TreeId 0 -Body $trb)
             [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445) | Should -Match '^SMB2 TREE_CONNECT Response, STATUS_BAD_NETWORK_NAME'
         }
+
+        It 'scopes FileId name resolution per connection (no cross-connection collision)' {
+            [Smb2Parser]::ResetState()
+            $ckA = [Smb2Parser]::ConnKey('10.0.0.5', 49000, '10.0.0.9', 445)
+            $ckB = [Smb2Parser]::ConnKey('10.0.0.6', 49001, '10.0.0.20', 445)
+            $ckA | Should -Be ([Smb2Parser]::ConnKey('10.0.0.9', 445, '10.0.0.5', 49000))   # order-independent
+            $ckA | Should -Not -Be $ckB
+            # Port/address swap must NOT collide (pairing preserved).
+            [Smb2Parser]::ConnKey('10.0.0.5', 50000, '10.0.0.9', 445) |
+                Should -Not -Be ([Smb2Parser]::ConnKey('10.0.0.5', 445, '10.0.0.9', 50000))
+            # Same SessionId(1) + same FileId(0x1/0x2) on both connections, different filenames.
+            $reqA  = script:New-Smb2CreateReq  -Name 'connA.txt' -MsgId 10 -SessionId 1
+            $respA = script:New-Smb2CreateResp -Action 1 -FidP 0x1 -FidV 0x2 -MsgId 10 -SessionId 1
+            $null = [Smb2Parser]::FormatSmb2Segment($reqA,  $reqA.Length,  445, 49000, $ckA)
+            $null = [Smb2Parser]::FormatSmb2Segment($respA, $respA.Length, 445, 49000, $ckA)
+            $reqB  = script:New-Smb2CreateReq  -Name 'connB.txt' -MsgId 10 -SessionId 1
+            $respB = script:New-Smb2CreateResp -Action 1 -FidP 0x1 -FidV 0x2 -MsgId 10 -SessionId 1
+            $null = [Smb2Parser]::FormatSmb2Segment($reqB,  $reqB.Length,  445, 49001, $ckB)
+            $null = [Smb2Parser]::FormatSmb2Segment($respB, $respB.Length, 445, 49001, $ckB)
+            # A CLOSE of FileId 0x1/0x2 resolves to the right file per connection.
+            $clb = [byte[]]::new(24); $clb[0]=24
+            [Array]::Copy((script:U32le 0x1), 0, $clb, 8, 4); [Array]::Copy((script:U32le 0x2), 0, $clb, 16, 4)
+            $close = script:Frame-Smb2 (script:New-Smb2Msg -Command 6 -MsgId 11 -SessionId 1 -Body $clb)
+            [Smb2Parser]::FormatSmb2Segment($close, $close.Length, 445, 49000, $ckA) | Should -Be 'SMB2 CLOSE Request, File: connA.txt'
+            [Smb2Parser]::FormatSmb2Segment($close, $close.Length, 445, 49001, $ckB) | Should -Be 'SMB2 CLOSE Request, File: connB.txt'
+        }
+
+        It 'resolves a related command sentinel FileId to the chain CREATE file' {
+            [Smb2Parser]::ResetState()
+            # Compound request: CREATE (name) | RELATED QUERY_INFO (sentinel FileId).
+            $name = [System.Text.Encoding]::Unicode.GetBytes('report.docx')
+            $cb = [byte[]]::new(56); $cb[0]=57; $cb[44]=120; $cb[46]=$name.Length; $cb[36]=1
+            $m1 = script:New-Smb2Msg -Command 5 -MsgId 10 -SessionId 1 -TreeId 5 -Body ($cb + $name)
+            $pad = (8 - ($m1.Length % 8)) % 8; $m1 = $m1 + [byte[]]::new($pad)
+            for ($i=0; $i -lt 4; $i++) { $m1[20+$i]=[byte](($m1.Length -shr (8*$i)) -band 0xff) }   # NextCommand
+            $qib = [byte[]]::new(40); $qib[0]=41; $qib[2]=1; $qib[3]=0x30
+            for ($i=24; $i -lt 40; $i++) { $qib[$i]=0xFF }   # sentinel FileId @24
+            $m2 = script:New-Smb2Msg -Command 16 -Flags 0x04 -MsgId 11 -SessionId 1 -TreeId 5 -Body $qib   # RELATED_OPERATIONS
+            $pkt = script:Frame-Smb2 ($m1 + $m2)
+            [Smb2Parser]::FormatSmb2Segment($pkt, $pkt.Length, 445, 12345) |
+                Should -Match 'SMB2 QUERY_INFO Request, INFO_FILE\\FileNormalizedNameInformation, File: report\.docx$'
+        }
+
+        It 'does not resolve a sentinel FileId for a non-related command' {
+            [Smb2Parser]::ResetState()
+            # Compound with CREATE but the second command lacks the RELATED flag; its sentinel
+            # FileId must fall through to the GUID, not the chain file.
+            $name = [System.Text.Encoding]::Unicode.GetBytes('report.docx')
+            $cb = [byte[]]::new(56); $cb[0]=57; $cb[44]=120; $cb[46]=$name.Length; $cb[36]=1
+            $m1 = script:New-Smb2Msg -Command 5 -MsgId 10 -SessionId 1 -TreeId 5 -Body ($cb + $name)
+            $pad = (8 - ($m1.Length % 8)) % 8; $m1 = $m1 + [byte[]]::new($pad)
+            for ($i=0; $i -lt 4; $i++) { $m1[20+$i]=[byte](($m1.Length -shr (8*$i)) -band 0xff) }
+            $clb = [byte[]]::new(24); $clb[0]=24
+            for ($i=8; $i -lt 24; $i++) { $clb[$i]=0xFF }   # sentinel FileId @8, no RELATED flag
+            $m2 = script:New-Smb2Msg -Command 6 -MsgId 11 -SessionId 1 -TreeId 5 -Body $clb
+            $pkt = script:Frame-Smb2 ($m1 + $m2)
+            $out = [Smb2Parser]::FormatSmb2Segment($pkt, $pkt.Length, 445, 12345)
+            $out | Should -Match 'SMB2 CLOSE Request, File: ffffffff-ffff-ffff'
+        }
+
+        It 'isolates legacy (connKey=0) sessions sharing the same MessageId' {
+            [Smb2Parser]::ResetState()
+            # Two CREATE requests, same MsgId 10, different sessions/names, both pending at once.
+            # The pending map is keyed by MsgKey(sessionId, messageId); if sessionId were dropped
+            # the two would collide on (0,10) and the responses would resolve the wrong file.
+            $reqA = script:New-Smb2CreateReq -Name 'sessA.txt' -MsgId 10 -SessionId 1
+            $reqB = script:New-Smb2CreateReq -Name 'sessB.txt' -MsgId 10 -SessionId 2
+            $null = [Smb2Parser]::FormatSmb2Segment($reqA, 445, 12345)
+            $null = [Smb2Parser]::FormatSmb2Segment($reqB, 445, 12345)
+            $respA = script:New-Smb2CreateResp -Action 1 -FidP 0x1 -FidV 0x2 -MsgId 10 -SessionId 1
+            $respB = script:New-Smb2CreateResp -Action 1 -FidP 0x3 -FidV 0x4 -MsgId 10 -SessionId 2
+            [Smb2Parser]::FormatSmb2Segment($respA, 12345, 445) |
+                Should -Match 'SMB2 CREATE Response, Action: FILE_OPENED; File: sessA\.txt$'
+            [Smb2Parser]::FormatSmb2Segment($respB, 12345, 445) |
+                Should -Match 'SMB2 CREATE Response, Action: FILE_OPENED; File: sessB\.txt$'
+        }
     }
 
     Context 'SMB2 Analysis detail tree (Phase 2a)' {
