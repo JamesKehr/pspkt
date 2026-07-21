@@ -61,6 +61,12 @@ public static class Smb2Parser
 
     // NT STATUS_PENDING: an interim response that must not consume request-correlation state.
     private const uint STATUS_PENDING = 0x00000103;
+    // Nonzero statuses that still carry a command-specific response body (not a generic ERROR),
+    // per MS-SMB2 3.3.4.4 "Sending an Error Response".
+    private const uint STATUS_MORE_PROCESSING_REQUIRED = 0xC0000016;
+    private const uint STATUS_BUFFER_OVERFLOW = 0x80000005;
+    private const uint STATUS_INVALID_PARAMETER = 0xC000000D;
+    private const uint STATUS_NOTIFY_ENUM_DIR = 0x0000010C;
 
     // --- Command codes ---
     // --- Command names (MS-SMB2 command table; the "SMB2 " prefix is added by the caller) ---
@@ -596,12 +602,14 @@ public static class Smb2Parser
     {
         if (isResponse)
         {
-            if (bodyLen < 24) return;
+            // Response layout: SecurityMode@2, DialectRevision@4, NegotiateContextCount@6,
+            // ServerGuid@8 (16), Capabilities@24, MaxTransact@28, MaxRead@32, MaxWrite@36.
+            if (bodyLen < 40) return;
             ushort dialect = ReadUInt16LE(data, off + 4);
-            uint caps       = ReadUInt32LE(data, off + 8);
-            uint maxTransact = ReadUInt32LE(data, off + 12);
-            uint maxRead     = ReadUInt32LE(data, off + 16);
-            uint maxWrite    = ReadUInt32LE(data, off + 20);
+            uint caps        = ReadUInt32LE(data, off + 24);
+            uint maxTransact = ReadUInt32LE(data, off + 28);
+            uint maxRead     = ReadUInt32LE(data, off + 32);
+            uint maxWrite    = ReadUInt32LE(data, off + 36);
             sb.Append(", Dialect ").Append(DialectName(dialect));
             sb.Append("; ").Append(maxTransact).Append('\\').Append(maxRead).Append('\\').Append(maxWrite);
             AppendCaps(sb, caps);
@@ -672,9 +680,9 @@ public static class Smb2Parser
             string name = ExtractName(data, hdr + nameOffset, nameLength, off, cmdEnd);
             if (name == null) name = "";
             RecordPending(sessionId, messageId, 2, name);
-            sb.Append(", File: ").Append(name.Length == 0 ? "<root>" : name);
-            sb.Append("; Disposition: ").Append(disp < (uint)CreateDispositions.Length
+            sb.Append(", Disposition: ").Append(disp < (uint)CreateDispositions.Length
                 ? CreateDispositions[disp] : "0x" + disp.ToString("X"));
+            sb.Append("; File: ").Append(name.Length == 0 ? "<root>" : name);
         }
         else
         {
@@ -696,9 +704,9 @@ public static class Smb2Parser
         ulong fidP = ReadUInt64LE(data, off + 64);
         ulong fidV = ReadUInt64LE(data, off + 72);
         ResolveFile(sessionId, messageId, fidP, fidV);
-        sb.Append(", File: ").Append(FileIdDisplay(data, off + 64, fidP, fidV));
-        sb.Append("; Action: ").Append(action < (uint)CreateActions.Length
+        sb.Append(", Action: ").Append(action < (uint)CreateActions.Length
             ? CreateActions[action] : "0x" + action.ToString("X"));
+        sb.Append("; File: ").Append(FileIdDisplay(data, off + 64, fidP, fidV));
     }
 
     private static void AppendReadWrite(StringBuilder sb, byte[] data, int off, int bodyLen,
@@ -1040,6 +1048,8 @@ public static class Smb2Parser
         uint status     = ReadUInt32LE(data, hdr + 8);
         ushort command  = ReadUInt16LE(data, hdr + 12);
         uint flags      = ReadUInt32LE(data, hdr + 16);
+        uint nextCommand = ReadUInt32LE(data, hdr + 20);
+        ulong messageId = ReadUInt64LE(data, hdr + 24);
         uint treeId     = ReadUInt32LE(data, hdr + 36);
         ulong sessionId = ReadUInt64LE(data, hdr + 40);
         bool isResponse = (flags & 0x00000001) != 0;
@@ -1057,13 +1067,28 @@ public static class Smb2Parser
 
         var root = new BoxyBox.TreeNode(sb.ToString(), "SMB2", true);
         root.Add(BuildSmb2HeaderNode(data, len, hdr, command, cmdName, flags, status, isResponse, isAsync, treeId, sessionId));
+
+        // Command body range: [hdr+64, cmdEnd) where cmdEnd is bounded by a valid NextCommand.
+        int bodyOff = hdr + 64;
+        int cmdEnd = len;
+        if (nextCommand != 0 && nextCommand >= 64 && nextCommand <= (uint)(len - hdr)) cmdEnd = hdr + (int)nextCommand;
+        int bodyLen = cmdEnd - bodyOff;
+        if (bodyLen < 0) bodyLen = 0;
+        root.Add(BuildSmb2CommandBodyNode(data, cmdEnd, hdr, bodyOff, bodyLen, command, cmdName, isResponse, status, sessionId, messageId));
         return root;
     }
 
     private static BoxyBox.TreeNode BuildSmb2HeaderNode(byte[] data, int len, int hdr, ushort command, string cmdName,
         uint flags, uint status, bool isResponse, bool isAsync, uint treeId, ulong sessionId)
     {
-        var h = new BoxyBox.TreeNode("SMB2 Header", "SMB2.Header", true);
+        // Collapsed summary line: "SMB2 Header - Cmd: <cmd> (0x<h>) <Request|Response>, TID: <tree>[, Status: ...]".
+        string tid = isAsync ? "(async)" : (LookupTree(sessionId, treeId) ?? "0x" + treeId.ToString("x"));
+        var hdrText = new StringBuilder(80);
+        hdrText.Append("SMB2 Header - Cmd: ").Append(cmdName).Append(" (0x").Append(command.ToString("x4")).Append(") ")
+               .Append(isResponse ? "Response" : "Request").Append(", TID: ").Append(tid);
+        if (isResponse && status != 0)
+            hdrText.Append(", Status: ").Append(StatusName(status)).Append(" (0x").Append(status.ToString("X8")).Append(")");
+        var h = new BoxyBox.TreeNode(hdrText.ToString(), "SMB2.Header", false);
         h.AddLeaf("ProtocolId: 0x" + HexBytes(data, hdr, 4, len));
         h.AddLeaf("Header Length: " + ReadUInt16LE(data, hdr + 4));
         h.AddLeaf("Credit Charge: " + ReadUInt16LE(data, hdr + 6));
@@ -1098,6 +1123,456 @@ public static class Smb2Parser
         return h;
     }
 
+    // -----------------------------------------------------------------------
+    // Per-command body subtree (Phase 2b). Field selection follows the Wireshark
+    // SMB2 dissector. FileInfo result parsing (QUERY_DIRECTORY / QUERY_INFO /
+    // SET_INFO output buffers) is deferred to Phase 2c.
+    // -----------------------------------------------------------------------
+    private static BoxyBox.TreeNode BuildSmb2CommandBodyNode(byte[] data, int cmdEnd, int hdr, int off, int bodyLen,
+        ushort command, string cmdName, bool isResponse, uint status, ulong sessionId, ulong messageId)
+    {
+        var node = new BoxyBox.TreeNode(cmdName + (isResponse ? " Response" : " Request"), "SMB2.Command", true);
+        if (bodyLen >= 2) node.AddLeaf("Structure Size: " + ReadUInt16LE(data, off));
+
+        // A generic SMB2 ERROR response (StructureSize 9) has no command-specific fields. Detect
+        // it by status: a nonzero status means a generic error body EXCEPT for the few
+        // "body-bearing" statuses (SESSION_SETUP + MORE_PROCESSING_REQUIRED during auth, and
+        // BUFFER_OVERFLOW for READ/IOCTL/QUERY_INFO which still return a partial body).
+        if (isResponse && !ResponseHasCommandBody(command, status))
+        {
+            if (bodyLen >= 8) node.AddLeaf("Byte Count: " + ReadUInt32LE(data, off + 4));
+            return node;
+        }
+
+        switch (command)
+        {
+            case 0x0000: BuildNegotiateBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
+            case 0x0001: BuildSessionSetupBody(node, data, off, bodyLen, isResponse); break;
+            case 0x0003: BuildTreeConnectBody(node, data, cmdEnd, hdr, off, bodyLen, isResponse); break;
+            case 0x0005: BuildCreateBody(node, data, cmdEnd, hdr, off, bodyLen, isResponse); break;
+            case 0x0006: BuildCloseBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
+            case 0x0007: if (!isResponse) node.AddLeaf(FileIdTreeLine(data, off + 8, cmdEnd)); break; // FLUSH
+            case 0x0008: BuildReadBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
+            case 0x0009: BuildWriteBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
+            case 0x000A: if (bodyLen >= 24) node.AddLeaf(FileIdTreeLine(data, off + 8, cmdEnd)); break; // LOCK
+            case 0x000B: BuildIoctlBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
+            case 0x000E: BuildQueryDirectoryBody(node, data, cmdEnd, hdr, off, bodyLen, isResponse); break;
+            case 0x000F: BuildChangeNotifyBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
+            case 0x0010: BuildQueryInfoBody(node, data, cmdEnd, off, bodyLen, isResponse, true); break;
+            case 0x0011: BuildQueryInfoBody(node, data, cmdEnd, off, bodyLen, isResponse, false); break;
+            case 0x0012: BuildOplockBreakBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
+            // LOGOFF / TREE_DISCONNECT / CANCEL / ECHO: structure size only.
+        }
+        return node;
+    }
+
+    private static void BuildNegotiateBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 36) return;
+            ushort dialectCount = ReadUInt16LE(data, off + 2);
+            n.AddLeaf("Dialect Count: " + dialectCount);
+            n.AddLeaf("Security Mode: 0x" + ReadUInt16LE(data, off + 4).ToString("x4") + SigningSummary(ReadUInt16LE(data, off + 4)));
+            n.AddLeaf("Capabilities: 0x" + ReadUInt32LE(data, off + 8).ToString("x8") + CapSummary(ReadUInt32LE(data, off + 8)));
+            n.AddLeaf("Client GUID: " + FormatGuid(data, off + 12));
+            var d = new BoxyBox.TreeNode("Dialects", "SMB2.Dialects", false);
+            for (int i = 0; i < dialectCount; i++)
+            {
+                int p = off + 36 + i * 2;
+                if (p + 2 > cmdEnd) break;
+                d.AddLeaf(DialectName(ReadUInt16LE(data, p)) + " (0x" + ReadUInt16LE(data, p).ToString("x4") + ")");
+            }
+            n.Add(d);
+        }
+        else
+        {
+            if (bodyLen < 64) return;
+            n.AddLeaf("Security Mode: 0x" + ReadUInt16LE(data, off + 2).ToString("x4") + SigningSummary(ReadUInt16LE(data, off + 2)));
+            ushort dialect = ReadUInt16LE(data, off + 4);
+            n.AddLeaf("Dialect: " + DialectName(dialect) + " (0x" + dialect.ToString("x4") + ")");
+            n.AddLeaf("Server GUID: " + FormatGuid(data, off + 8));
+            n.AddLeaf("Capabilities: 0x" + ReadUInt32LE(data, off + 24).ToString("x8") + CapSummary(ReadUInt32LE(data, off + 24)));
+            n.AddLeaf("Max Transaction Size: " + ReadUInt32LE(data, off + 28));
+            n.AddLeaf("Max Read Size: " + ReadUInt32LE(data, off + 32));
+            n.AddLeaf("Max Write Size: " + ReadUInt32LE(data, off + 36));
+            n.AddLeaf("System Time: " + FileTime(data, off + 40, cmdEnd));
+            n.AddLeaf("Server Start Time: " + FileTime(data, off + 48, cmdEnd));
+        }
+    }
+
+    private static void BuildSessionSetupBody(BoxyBox.TreeNode n, byte[] data, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 24) return;
+            n.AddLeaf("Flags: 0x" + data[off + 2].ToString("x2") + (((data[off + 2] & 0x01) != 0) ? " (BINDING)" : ""));
+            n.AddLeaf("Security Mode: 0x" + data[off + 3].ToString("x2") + SigningSummary(data[off + 3]));
+            n.AddLeaf("Capabilities: 0x" + ReadUInt32LE(data, off + 4).ToString("x8") + CapSummary(ReadUInt32LE(data, off + 4)));
+            n.AddLeaf("Previous Session Id: 0x" + ReadUInt64LE(data, off + 16).ToString("x"));
+            n.AddLeaf("Security Buffer Length: " + ReadUInt16LE(data, off + 14));
+        }
+        else
+        {
+            if (bodyLen < 8) return;
+            ushort sf = ReadUInt16LE(data, off + 2);
+            var parts = new List<string>(3);
+            if ((sf & 0x1) != 0) parts.Add("IS_GUEST");
+            if ((sf & 0x2) != 0) parts.Add("IS_NULL");
+            if ((sf & 0x4) != 0) parts.Add("ENCRYPT_DATA");
+            n.AddLeaf("Session Flags: 0x" + sf.ToString("x4") + (parts.Count > 0 ? " (" + string.Join(", ", parts) + ")" : ""));
+            n.AddLeaf("Security Buffer Length: " + ReadUInt16LE(data, off + 6));
+        }
+    }
+
+    private static void BuildTreeConnectBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int hdr, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 8) return;
+            ushort po = ReadUInt16LE(data, off + 4);
+            ushort pl = ReadUInt16LE(data, off + 6);
+            string path = ExtractName(data, hdr + po, pl, off, cmdEnd);
+            if (path != null) n.AddLeaf("Path: " + path);
+        }
+        else
+        {
+            if (bodyLen < 16) return;
+            byte st = data[off + 2];
+            string stn = st == 1 ? "DISK" : st == 2 ? "PIPE" : st == 3 ? "PRINT" : "0x" + st.ToString("x2");
+            n.AddLeaf("Share Type: " + stn + " (0x" + st.ToString("x2") + ")");
+            n.AddLeaf("Share Flags: 0x" + ReadUInt32LE(data, off + 4).ToString("x8"));
+            n.AddLeaf("Capabilities: 0x" + ReadUInt32LE(data, off + 8).ToString("x8"));
+            n.AddLeaf("Maximal Access: 0x" + ReadUInt32LE(data, off + 12).ToString("x8"));
+        }
+    }
+
+    private static void BuildCreateBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int hdr, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 56) return;
+            byte oplock = data[off + 3];
+            n.AddLeaf("Requested Oplock Level: " + OplockLevelName(oplock) + " (0x" + oplock.ToString("x2") + ")");
+            n.AddLeaf("Impersonation Level: " + ReadUInt32LE(data, off + 4));
+            n.AddLeaf("Desired Access: 0x" + ReadUInt32LE(data, off + 24).ToString("x8"));
+            n.AddLeaf("File Attributes: 0x" + ReadUInt32LE(data, off + 28).ToString("x8") + FileAttrSummary(ReadUInt32LE(data, off + 28)));
+            n.AddLeaf("Share Access: 0x" + ReadUInt32LE(data, off + 32).ToString("x8") + ShareAccessSummary(ReadUInt32LE(data, off + 32)));
+            uint disp = ReadUInt32LE(data, off + 36);
+            n.AddLeaf("Create Disposition: " + (disp < (uint)CreateDispositions.Length ? CreateDispositions[disp] : "0x" + disp.ToString("x")) + " (" + disp + ")");
+            n.AddLeaf("Create Options: 0x" + ReadUInt32LE(data, off + 40).ToString("x8") + CreateOptionsSummary(ReadUInt32LE(data, off + 40)));
+            ushort no = ReadUInt16LE(data, off + 44);
+            ushort nl = ReadUInt16LE(data, off + 46);
+            string name = ExtractName(data, hdr + no, nl, off, cmdEnd);
+            n.AddLeaf("Name: " + (string.IsNullOrEmpty(name) ? "<root>" : name));
+        }
+        else
+        {
+            if (bodyLen < 80) return;
+            byte oplock = data[off + 2];
+            n.AddLeaf("Oplock Level: " + OplockLevelName(oplock) + " (0x" + oplock.ToString("x2") + ")");
+            uint action = ReadUInt32LE(data, off + 4);
+            n.AddLeaf("Create Action: " + (action < (uint)CreateActions.Length ? CreateActions[action] : "0x" + action.ToString("x")) + " (" + action + ")");
+            n.AddLeaf("Creation Time: " + FileTime(data, off + 8, cmdEnd));
+            n.AddLeaf("Last Access Time: " + FileTime(data, off + 16, cmdEnd));
+            n.AddLeaf("Last Write Time: " + FileTime(data, off + 24, cmdEnd));
+            n.AddLeaf("Change Time: " + FileTime(data, off + 32, cmdEnd));
+            n.AddLeaf("Allocation Size: " + ReadUInt64LE(data, off + 40));
+            n.AddLeaf("End of File: " + ReadUInt64LE(data, off + 48));
+            n.AddLeaf("File Attributes: 0x" + ReadUInt32LE(data, off + 56).ToString("x8") + FileAttrSummary(ReadUInt32LE(data, off + 56)));
+            n.AddLeaf(FileIdTreeLine(data, off + 64, cmdEnd));
+        }
+    }
+
+    private static void BuildCloseBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 24) return;
+            ushort f = ReadUInt16LE(data, off + 2);
+            n.AddLeaf("Flags: 0x" + f.ToString("x4") + (((f & 0x1) != 0) ? " (POSTQUERY_ATTRIB)" : ""));
+            n.AddLeaf(FileIdTreeLine(data, off + 8, cmdEnd));
+        }
+        else
+        {
+            if (bodyLen < 60) return;
+            n.AddLeaf("Flags: 0x" + ReadUInt16LE(data, off + 2).ToString("x4"));
+            n.AddLeaf("Creation Time: " + FileTime(data, off + 8, cmdEnd));
+            n.AddLeaf("Last Access Time: " + FileTime(data, off + 16, cmdEnd));
+            n.AddLeaf("Last Write Time: " + FileTime(data, off + 24, cmdEnd));
+            n.AddLeaf("Change Time: " + FileTime(data, off + 32, cmdEnd));
+            n.AddLeaf("Allocation Size: " + ReadUInt64LE(data, off + 40));
+            n.AddLeaf("End of File: " + ReadUInt64LE(data, off + 48));
+            n.AddLeaf("File Attributes: 0x" + ReadUInt32LE(data, off + 56).ToString("x8") + FileAttrSummary(ReadUInt32LE(data, off + 56)));
+        }
+    }
+
+    private static void BuildReadBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 48) return;
+            n.AddLeaf("Length: " + ReadUInt32LE(data, off + 4));
+            n.AddLeaf("Offset: " + ReadUInt64LE(data, off + 8));
+            n.AddLeaf(FileIdTreeLine(data, off + 16, cmdEnd));
+            n.AddLeaf("Minimum Count: " + ReadUInt32LE(data, off + 32));
+        }
+        else
+        {
+            if (bodyLen < 16) return;
+            n.AddLeaf("Data Offset: " + data[off + 2]);
+            n.AddLeaf("Data Length: " + ReadUInt32LE(data, off + 4));
+            n.AddLeaf("Data Remaining: " + ReadUInt32LE(data, off + 8));
+        }
+    }
+
+    private static void BuildWriteBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 48) return;
+            n.AddLeaf("Data Offset: " + ReadUInt16LE(data, off + 2));
+            n.AddLeaf("Length: " + ReadUInt32LE(data, off + 4));
+            n.AddLeaf("Offset: " + ReadUInt64LE(data, off + 8));
+            n.AddLeaf(FileIdTreeLine(data, off + 16, cmdEnd));
+        }
+        else
+        {
+            if (bodyLen < 16) return;
+            n.AddLeaf("Count: " + ReadUInt32LE(data, off + 4));
+            n.AddLeaf("Remaining: " + ReadUInt32LE(data, off + 8));
+        }
+    }
+
+    private static void BuildIoctlBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse)
+    {
+        if (bodyLen < 8) return;
+        uint ctl = ReadUInt32LE(data, off + 4);
+        n.AddLeaf("Control Code: " + IoctlName(ctl) + " (0x" + ctl.ToString("x8") + ")");
+        if (bodyLen < 48) return;
+        n.AddLeaf(FileIdTreeLine(data, off + 8, cmdEnd));
+        n.AddLeaf("Input Offset: " + ReadUInt32LE(data, off + 24));
+        n.AddLeaf("Input Count: " + ReadUInt32LE(data, off + 28));
+        if (isResponse)
+        {
+            // IOCTL Response (StructureSize 49): OutputOffset@32, OutputCount@36.
+            n.AddLeaf("Output Offset: " + ReadUInt32LE(data, off + 32));
+            n.AddLeaf("Output Count: " + ReadUInt32LE(data, off + 36));
+        }
+        else if (bodyLen >= 56)
+        {
+            // IOCTL Request (StructureSize 57): OutputOffset@36, OutputCount@40.
+            n.AddLeaf("Output Offset: " + ReadUInt32LE(data, off + 36));
+            n.AddLeaf("Output Count: " + ReadUInt32LE(data, off + 40));
+        }
+    }
+
+    // A response's body is command-specific when the status is success, or one of the few
+    // nonzero statuses that still carry a valid (possibly partial) command body. Every other
+    // nonzero status is a generic SMB2 ERROR response.
+    private static bool ResponseHasCommandBody(ushort command, uint status)
+    {
+        if (status == 0) return true;
+        // Per MS-SMB2 3.3.4.4, only these command/status pairs return a command-specific body
+        // instead of a generic ERROR response. (The IOCTL cases are actually restricted to
+        // specific FSCTLs — PIPE_TRANSCEIVE/PEEK/DFS_GET_REFERRALS for overflow, SRV_COPYCHUNK
+        // for invalid-parameter — but gating at command+status granularity is close enough for
+        // a display aid.)
+        switch (command)
+        {
+            case 0x0001: return status == STATUS_MORE_PROCESSING_REQUIRED;   // SESSION_SETUP
+            case 0x0008:                                                     // READ (named pipe)
+            case 0x0010: return status == STATUS_BUFFER_OVERFLOW;            // QUERY_INFO
+            case 0x000B: return status == STATUS_BUFFER_OVERFLOW             // IOCTL
+                             || status == STATUS_INVALID_PARAMETER;
+            case 0x000F: return status == STATUS_NOTIFY_ENUM_DIR;            // CHANGE_NOTIFY
+            default:     return false;
+        }
+    }
+
+    private static void BuildQueryDirectoryBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int hdr, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 32) return;
+            byte ic = data[off + 2];
+            n.AddLeaf("File Information Class: " + FileInfoClassName(ic) + " (0x" + ic.ToString("x2") + ")");
+            n.AddLeaf("Flags: 0x" + data[off + 3].ToString("x2"));
+            n.AddLeaf("File Index: " + ReadUInt32LE(data, off + 4));
+            n.AddLeaf(FileIdTreeLine(data, off + 8, cmdEnd));
+            ushort no = ReadUInt16LE(data, off + 24);
+            ushort nl = ReadUInt16LE(data, off + 26);
+            string pat = ExtractName(data, hdr + no, nl, off, cmdEnd);
+            n.AddLeaf("Search Pattern: " + (string.IsNullOrEmpty(pat) ? "*" : pat));
+            n.AddLeaf("Output Buffer Length: " + ReadUInt32LE(data, off + 28));
+        }
+        else
+        {
+            if (bodyLen < 8) return;
+            n.AddLeaf("Output Buffer Offset: 0x" + ReadUInt16LE(data, off + 2).ToString("x4"));
+            n.AddLeaf("Output Buffer Length: " + ReadUInt32LE(data, off + 4));
+            // File/directory info entries are parsed in Phase 2c.
+        }
+    }
+
+    private static void BuildChangeNotifyBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 28) return;
+            n.AddLeaf("Flags: 0x" + ReadUInt16LE(data, off + 2).ToString("x4") + (((ReadUInt16LE(data, off + 2) & 0x1) != 0) ? " (WATCH_TREE)" : ""));
+            n.AddLeaf("Output Buffer Length: " + ReadUInt32LE(data, off + 4));
+            n.AddLeaf(FileIdTreeLine(data, off + 8, cmdEnd));
+            uint filter = ReadUInt32LE(data, off + 24);
+            var fn = new BoxyBox.TreeNode("Completion Filter: 0x" + filter.ToString("x8"), "SMB2.Filter", false);
+            for (int i = 0; i < ChangeNotifyFilters.Length; i++)
+                if ((filter & ChangeNotifyFilters[i].Key) != 0) fn.AddLeaf(ChangeNotifyFilters[i].Value);
+            n.Add(fn);
+        }
+        else
+        {
+            if (bodyLen < 8) return;
+            n.AddLeaf("Output Buffer Offset: 0x" + ReadUInt16LE(data, off + 2).ToString("x4"));
+            n.AddLeaf("Output Buffer Length: " + ReadUInt32LE(data, off + 4));
+        }
+    }
+
+    private static void BuildQueryInfoBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse, bool isQuery)
+    {
+        if (!isResponse)
+        {
+            if (bodyLen < 4) return;
+            byte it = data[off + 2];
+            byte ic = data[off + 3];
+            n.AddLeaf("Info Type: " + InfoTypeName(it) + " (0x" + it.ToString("x2") + ")");
+            n.AddLeaf("File Info Class: " + InfoClassName(it, ic) + " (0x" + ic.ToString("x2") + ")");
+            int fidOff = isQuery ? 24 : 16; // QUERY_INFO FileId@24, SET_INFO FileId@16
+            n.AddLeaf(FileIdTreeLine(data, off + fidOff, cmdEnd));
+        }
+        else
+        {
+            if (bodyLen < 8) return;
+            n.AddLeaf("Output Buffer Offset: 0x" + ReadUInt16LE(data, off + 2).ToString("x4"));
+            n.AddLeaf("Output Buffer Length: " + ReadUInt32LE(data, off + 4));
+            // Info result (FileInfoClass content) is parsed in Phase 2c.
+        }
+    }
+
+    private static void BuildOplockBreakBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse)
+    {
+        if (bodyLen < 2) return;
+        ushort ss = ReadUInt16LE(data, off);
+        if (ss == 24 && bodyLen >= 24)
+        {
+            byte level = data[off + 2];
+            n.AddLeaf("Oplock Level: " + OplockLevelName(level) + " (0x" + level.ToString("x2") + ")");
+            n.AddLeaf(FileIdTreeLine(data, off + 8, cmdEnd));
+        }
+        else if (ss == 44 && bodyLen >= 32)
+        {
+            n.AddLeaf("Lease Key: " + FormatGuid(data, off + 8));
+            n.AddLeaf("Current Lease State: " + LeaseStateStr(ReadUInt32LE(data, off + 24)));
+            n.AddLeaf("New Lease State: " + LeaseStateStr(ReadUInt32LE(data, off + 28)));
+        }
+        else if (ss == 36 && bodyLen >= 28)
+        {
+            n.AddLeaf("Lease Key: " + FormatGuid(data, off + 8));
+            n.AddLeaf("Lease State: " + LeaseStateStr(ReadUInt32LE(data, off + 24)));
+        }
+    }
+
+    // ---- detail-tree value helpers ----
+
+    private static string FileIdTreeLine(byte[] data, int fidOff, int len)
+    {
+        if (fidOff + 16 > len) return "File Id: (truncated)";
+        ulong p = ReadUInt64LE(data, fidOff);
+        ulong v = ReadUInt64LE(data, fidOff + 8);
+        string name = LookupFile(p, v);
+        string s = "File Id: " + FormatGuid(data, fidOff);
+        if (name != null && name.Length > 0) s += "  " + name;
+        return s;
+    }
+
+    private static string FileTime(byte[] data, int off, int len)
+    {
+        if (off + 8 > len) return "(truncated)";
+        ulong ft = ReadUInt64LE(data, off);
+        if (ft == 0) return "No time specified (0)";
+        if (ft == 0xFFFFFFFFFFFFFFFF) return "Infinity (-1)";
+        try { return DateTime.FromFileTimeUtc((long)ft).ToString("yyyy-MM-dd HH:mm:ss.fff") + " UTC"; }
+        catch { return "0x" + ft.ToString("x"); }
+    }
+
+    private static string OplockLevelName(byte level)
+    {
+        string s;
+        return OplockLevelNames.TryGetValue(level, out s) ? s : "0x" + level.ToString("x2");
+    }
+
+    private static string IoctlName(uint ctl)
+    {
+        string s;
+        return IoctlNames.TryGetValue(ctl, out s) ? s : "0x" + ctl.ToString("x8");
+    }
+
+    private static string SigningSummary(int mode)
+    {
+        var parts = new List<string>(2);
+        if ((mode & 0x1) != 0) parts.Add("SIGNING_ENABLED");
+        if ((mode & 0x2) != 0) parts.Add("SIGNING_REQUIRED");
+        return parts.Count > 0 ? " (" + string.Join(", ", parts) + ")" : "";
+    }
+
+    private static string CapSummary(uint caps)
+    {
+        if (caps == 0) return "";
+        var parts = new List<string>(7);
+        for (int i = 0; i < NegotiateCaps.Length; i++)
+            if ((caps & NegotiateCaps[i].Key) != 0) parts.Add(NegotiateCaps[i].Value);
+        return parts.Count > 0 ? " (" + string.Join(", ", parts) + ")" : "";
+    }
+
+    private static string FileAttrSummary(uint attr)
+    {
+        if (attr == 0) return "";
+        var parts = new List<string>(6);
+        if ((attr & 0x00000001) != 0) parts.Add("READONLY");
+        if ((attr & 0x00000002) != 0) parts.Add("HIDDEN");
+        if ((attr & 0x00000004) != 0) parts.Add("SYSTEM");
+        if ((attr & 0x00000010) != 0) parts.Add("DIRECTORY");
+        if ((attr & 0x00000020) != 0) parts.Add("ARCHIVE");
+        if ((attr & 0x00000080) != 0) parts.Add("NORMAL");
+        if ((attr & 0x00000400) != 0) parts.Add("REPARSE_POINT");
+        if ((attr & 0x00000800) != 0) parts.Add("COMPRESSED");
+        if ((attr & 0x00004000) != 0) parts.Add("ENCRYPTED");
+        return parts.Count > 0 ? " (" + string.Join(", ", parts) + ")" : "";
+    }
+
+    private static string ShareAccessSummary(uint sa)
+    {
+        if (sa == 0) return " (none)";
+        var parts = new List<string>(3);
+        if ((sa & 0x1) != 0) parts.Add("READ");
+        if ((sa & 0x2) != 0) parts.Add("WRITE");
+        if ((sa & 0x4) != 0) parts.Add("DELETE");
+        return " (" + string.Join(", ", parts) + ")";
+    }
+
+    private static string CreateOptionsSummary(uint opt)
+    {
+        var parts = new List<string>(4);
+        if ((opt & 0x00000001) != 0) parts.Add("DIRECTORY_FILE");
+        if ((opt & 0x00000002) != 0) parts.Add("WRITE_THROUGH");
+        if ((opt & 0x00000004) != 0) parts.Add("SEQUENTIAL_ONLY");
+        if ((opt & 0x00000040) != 0) parts.Add("NON_DIRECTORY_FILE");
+        if ((opt & 0x00000200) != 0) parts.Add("SYNCHRONOUS_IO_NONALERT");
+        if ((opt & 0x00001000) != 0) parts.Add("DELETE_ON_CLOSE");
+        if ((opt & 0x00004000) != 0) parts.Add("NO_EA_KNOWLEDGE");
+        if ((opt & 0x00100000) != 0) parts.Add("OPEN_REPARSE_POINT");
+        return parts.Count > 0 ? " (" + string.Join(", ", parts) + ")" : "";
+    }
+
     private static BoxyBox.TreeNode BuildSmb2FlagsNode(uint flags, bool isResponse)
     {
         var f = new BoxyBox.TreeNode("Flags: 0x" + flags.ToString("x8") + Smb2FlagSummary(flags), "SMB2.Flags", false);
@@ -1128,7 +1603,7 @@ public static class Smb2Parser
         uint msgSize = (len >= off + 40) ? ReadUInt32LE(data, off + 36) : 0;
         ulong sessId = (len >= off + 52) ? ReadUInt64LE(data, off + 44) : 0;
         var root = new BoxyBox.TreeNode("SMB2 Encrypted - SessId 0x" + sessId.ToString("x") + ", len " + msgSize, "SMB2", true);
-        var h = new BoxyBox.TreeNode("SMB2 Transform Header", "SMB2.Header", true);
+        var h = new BoxyBox.TreeNode("SMB2 Transform Header", "SMB2.Header", false);
         h.AddLeaf("ProtocolId: 0x" + HexBytes(data, off, 4, len));
         h.AddLeaf("Signature: " + HexBytes(data, off + 4, 16, len));
         h.AddLeaf("Nonce: " + HexBytes(data, off + 20, 16, len));
@@ -1142,7 +1617,7 @@ public static class Smb2Parser
     private static BoxyBox.TreeNode BuildSmb1NegotiateNode(byte[] data, int len, int off)
     {
         var root = new BoxyBox.TreeNode("SMB1 Negotiate Protocol Request", "SMB2", true);
-        var h = new BoxyBox.TreeNode("SMB Header", "SMB2.Header", true);
+        var h = new BoxyBox.TreeNode("SMB Header", "SMB2.Header", false);
         h.AddLeaf("Server Component: SMB");
         byte cmd = (len > off + 4) ? data[off + 4] : (byte)0;
         h.AddLeaf("SMB Command: Negotiate Protocol (0x" + cmd.ToString("x2") + ")");

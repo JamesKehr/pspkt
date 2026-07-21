@@ -2080,7 +2080,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         It 'formats a CREATE request with filename and correct MS-SMB2 disposition' {
             $pkt = script:New-Smb2CreateReq -Name 'share\file.txt' -Disposition 3 -MsgId 10 -SessionId 99
             [Smb2Parser]::FormatSmb2Segment($pkt, 445, 12345) |
-                Should -Be 'SMB2 CREATE Request, File: share\file.txt; Disposition: FILE_OPEN_IF'
+                Should -Be 'SMB2 CREATE Request, Disposition: FILE_OPEN_IF; File: share\file.txt'
         }
 
         It 'resolves the filename on the CREATE response by correlating the request' {
@@ -2088,7 +2088,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $resp = script:New-Smb2CreateResp -Action 2 -FidP 0x1111 -FidV 0xABCD -MsgId 10 -SessionId 99
             $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
             [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445) |
-                Should -Be 'SMB2 CREATE Response, File: share\file.txt; Action: FILE_CREATED'
+                Should -Be 'SMB2 CREATE Response, Action: FILE_CREATED; File: share\file.txt'
         }
 
         It 'resolves a FileId to its name on a later CLOSE request' {
@@ -2159,7 +2159,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             # Final success response still resolves the filename.
             $fin = script:New-Smb2CreateResp -Action 2 -FidP 0x50 -FidV 0x51 -MsgId 30 -SessionId 4
             [Smb2Parser]::FormatSmb2Segment($fin, 12345, 445) |
-                Should -Be 'SMB2 CREATE Response, File: async.dat; Action: FILE_CREATED'
+                Should -Be 'SMB2 CREATE Response, Action: FILE_CREATED; File: async.dat'
         }
 
         It 'formats an encrypted (Transform header) packet' {
@@ -2186,7 +2186,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $crMsg = script:New-Smb2Msg -Command 5 -MsgId 2 -SessionId 5 -Body ($cb + $n)
             $chained = script:Frame-Smb2 ($tcMsg + $crMsg)
             [Smb2Parser]::FormatSmb2Segment($chained, 445, 12345) |
-                Should -Be 'SMB2 TREE_CONNECT Request, \\srv\pub | SMB2 CREATE Request, File: a.txt; Disposition: FILE_CREATE'
+                Should -Be 'SMB2 TREE_CONNECT Request, \\srv\pub | SMB2 CREATE Request, Disposition: FILE_CREATE; File: a.txt'
         }
 
         It 'formats a NEGOTIATE request with dialect list and capabilities' {
@@ -2196,6 +2196,18 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $neg = script:Frame-Smb2 (script:New-Smb2Msg -Command 0 -MsgId 0 -Body ($nb + $dialects))
             [Smb2Parser]::FormatSmb2Segment($neg, 445, 12345) |
                 Should -Be 'SMB2 NEGOTIATE Request, Requested Dialects 2.0.2, 3.1.1; DFS, LARGE_MTU'
+        }
+
+        It 'formats a NEGOTIATE response with the correct max sizes and capabilities' {
+            # Response layout: DialectRevision@4, ServerGuid@8, Capabilities@24, Max*@28/32/36.
+            $nb = [byte[]]::new(64); $nb[0]=65; $nb[4]=0x11; $nb[5]=0x03   # StructSize 65, dialect 3.1.1
+            [Array]::Copy([byte[]](0x2f,0,0,0), 0, $nb, 24, 4)             # caps 0x2f
+            [Array]::Copy([BitConverter]::GetBytes([uint32]8388608), 0, $nb, 28, 4)  # MaxTransact
+            [Array]::Copy([BitConverter]::GetBytes([uint32]8388608), 0, $nb, 32, 4)  # MaxRead
+            [Array]::Copy([BitConverter]::GetBytes([uint32]8388608), 0, $nb, 36, 4)  # MaxWrite
+            $neg = script:Frame-Smb2 (script:New-Smb2Msg -Command 0 -Flags 1 -MsgId 0 -Body $nb)
+            [Smb2Parser]::FormatSmb2Segment($neg, 12345, 445) |
+                Should -Be 'SMB2 NEGOTIATE Response, Dialect 3.1.1; 8388608\8388608\8388608; DFS, LEASING, LARGE_MTU, MULTI_CHANNEL, DIRECTORY_LEASING'
         }
 
         It 'ResetState clears the name tables so a later capture starts clean' {
@@ -2300,7 +2312,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
 
         BeforeEach { [Smb2Parser]::ResetState() }
 
-        It 'builds a collapsed header and expanded SMB2 header for a sync request' {
+        It 'builds a collapsed header (with summary) and the SMB2 header fields for a sync request' {
             $cb = [byte[]]::new(56); $cb[0]=57
             $h = script:New-Smb2Msg2 -Command 5 -Flags 0x08 -MsgId 42 -SessionId 0x99 -TreeId 5 -Body $cb
             # Set CreditCharge (header+6) for the field check.
@@ -2309,8 +2321,11 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $roots.Count | Should -Be 1
             $roots[0].Key | Should -Be 'SMB2'
             [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB2 CREATE - TID 0x5'
+            # The SMB2 Header node is collapsed by default and carries a summary line.
+            $hdrNode = $roots[0].Children | Where-Object { $_.Key -eq 'SMB2.Header' }
+            $hdrNode.IsExpanded | Should -BeFalse
+            [BoxyBox.AnsiText]::StripAnsi($hdrNode.Text) | Should -Be 'SMB2 Header - Cmd: CREATE (0x0005) Request, TID: 0x5'
             $txt = script:Smb2TreeText $roots
-            $txt | Should -Match 'SMB2 Header'
             $txt | Should -Match 'ProtocolId: 0xfe534d42'
             $txt | Should -Match 'Command: CREATE \(5\)'
             $txt | Should -Match 'Channel Sequence: 0'
@@ -2328,6 +2343,9 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $h = script:New-Smb2Msg2 -Command 5 -Flags 1 -Status ([uint32]3221225506) -MsgId 7 -SessionId 3 -TreeId 9 -Body $b
             $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445)
             [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB2 CREATE - TID 0x9; Status: STATUS_ACCESS_DENIED (0xC0000022)'
+            $hdrNode = $roots[0].Children | Where-Object { $_.Key -eq 'SMB2.Header' }
+            [BoxyBox.AnsiText]::StripAnsi($hdrNode.Text) |
+                Should -Be 'SMB2 Header - Cmd: CREATE (0x0005) Response, TID: 0x9, Status: STATUS_ACCESS_DENIED (0xC0000022)'
             $txt = script:Smb2TreeText $roots
             $txt | Should -Match 'NT Status: STATUS_ACCESS_DENIED \(0xC0000022\)'
             $txt | Should -Match 'Response: This is a RESPONSE'
@@ -2402,6 +2420,132 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $roots.Count | Should -Be 2
             [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Match '^SMB2 CLOSE'
             [BoxyBox.AnsiText]::StripAnsi($roots[1].Text) | Should -Match '^SMB2 TREE_DISCONNECT'
+        }
+
+        # ---- Phase 2b: per-command body subtrees ----
+
+        It 'builds a CREATE request body with decoded fields' {
+            $name = [System.Text.Encoding]::Unicode.GetBytes('reports\q3.xlsx')
+            $cb = [byte[]]::new(56); $cb[0]=57; $cb[3]=0x09      # RequestedOplockLevel BATCH
+            $cb[44]=120; $cb[46]=$name.Length; $cb[36]=1         # NameOffset/Length, Disposition FILE_OPEN
+            [Array]::Copy((script:U32le2 0x00000020), 0, $cb, 28, 4)  # FileAttributes ARCHIVE
+            [Array]::Copy((script:U32le2 0x00000007), 0, $cb, 32, 4)  # ShareAccess R/W/D
+            [Array]::Copy((script:U32le2 0x00000040), 0, $cb, 40, 4)  # CreateOptions NON_DIRECTORY_FILE
+            $h = script:New-Smb2Msg2 -Command 5 -MsgId 1 -SessionId 9 -TreeId 5 -Body ($cb + $name)
+            $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 445, 12345)
+            $txt = script:Smb2TreeText $roots
+            $txt | Should -Match 'CREATE Request'
+            $txt | Should -Match 'Structure Size: 57'
+            $txt | Should -Match 'Requested Oplock Level: SMB2_OPLOCK_LEVEL_BATCH \(0x09\)'
+            $txt | Should -Match 'File Attributes: 0x00000020 \(ARCHIVE\)'
+            $txt | Should -Match 'Share Access: 0x00000007 \(READ, WRITE, DELETE\)'
+            $txt | Should -Match 'Create Disposition: FILE_OPEN \(1\)'
+            $txt | Should -Match 'Create Options: 0x00000040 \(NON_DIRECTORY_FILE\)'
+            $txt | Should -Match 'Name: reports\\q3\.xlsx'
+        }
+
+        It 'builds a CREATE response body with times, attributes, and a File Id GUID' {
+            $crb = [byte[]]::new(88); $crb[0]=89; $crb[2]=0x01; $crb[4]=1   # oplock II, action OPENED
+            [Array]::Copy([BitConverter]::GetBytes([uint64]40960), 0, $crb, 40, 8)  # AllocationSize
+            [Array]::Copy([BitConverter]::GetBytes([uint64]40000), 0, $crb, 48, 8)  # EndOfFile
+            [Array]::Copy((script:U32le2 0x20), 0, $crb, 56, 4)   # ARCHIVE
+            [Array]::Copy((script:U32le2 0xAB), 0, $crb, 64, 4)   # FileId persistent
+            [Array]::Copy((script:U32le2 0xCD), 0, $crb, 72, 4)   # FileId volatile
+            $h = script:New-Smb2Msg2 -Command 5 -Flags 1 -MsgId 1 -SessionId 9 -Body $crb
+            $expected = [Guid]::new([byte[]]($crb[64..79])).ToString()
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445))
+            $txt | Should -Match 'CREATE Response'
+            $txt | Should -Match 'Oplock Level: SMB2_OPLOCK_LEVEL_II \(0x01\)'
+            $txt | Should -Match 'Create Action: FILE_OPENED \(1\)'
+            $txt | Should -Match 'Allocation Size: 40960'
+            $txt | Should -Match 'End of File: 40000'
+            $txt | Should -Match "File Id: $([regex]::Escape($expected))"
+        }
+
+        It 'builds a NEGOTIATE request body with a dialects subtree and capability decode' {
+            $nb = [byte[]]::new(36); $nb[0]=36; $nb[2]=2; $nb[4]=0x03    # 2 dialects, secmode both
+            [Array]::Copy((script:U32le2 0x45), 0, $nb, 8, 4)             # caps DFS|LARGE_MTU|ENCRYPTION
+            $dialects = [byte[]](0x02,0x02, 0x11,0x03)
+            $h = script:New-Smb2Msg2 -Command 0 -MsgId 1 -Body ($nb + $dialects)
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 445, 12345))
+            $txt | Should -Match 'NEGOTIATE Request'
+            $txt | Should -Match 'Dialect Count: 2'
+            $txt | Should -Match 'Security Mode: 0x0003 \(SIGNING_ENABLED, SIGNING_REQUIRED\)'
+            $txt | Should -Match 'Capabilities: 0x00000045 \(DFS, LARGE_MTU, ENCRYPTION\)'
+            $txt | Should -Match 'Dialects'
+            $txt | Should -Match '2\.0\.2 \(0x0202\)'
+            $txt | Should -Match '3\.1\.1 \(0x0311\)'
+        }
+
+        It 'builds a READ request body with Length/Offset/File Id' {
+            $rb = [byte[]]::new(48); $rb[0]=49
+            [Array]::Copy((script:U32le2 65536), 0, $rb, 4, 4)
+            [Array]::Copy([BitConverter]::GetBytes([uint64]4096), 0, $rb, 8, 8)
+            [Array]::Copy((script:U32le2 0x10), 0, $rb, 16, 4)
+            [Array]::Copy((script:U32le2 0x20), 0, $rb, 24, 4)
+            $h = script:New-Smb2Msg2 -Command 8 -MsgId 1 -SessionId 9 -Body $rb
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 445, 12345))
+            $txt | Should -Match 'READ Request'
+            $txt | Should -Match 'Length: 65536'
+            $txt | Should -Match 'Offset: 4096'
+            $txt | Should -Match 'File Id: '
+        }
+
+        It 'builds a TREE_CONNECT response body with the share type' {
+            $b = [byte[]]::new(16); $b[0]=16; $b[2]=1   # ShareType DISK
+            $h = script:New-Smb2Msg2 -Command 3 -Flags 1 -MsgId 1 -SessionId 9 -TreeId 7 -Body $b
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445))
+            $txt | Should -Match 'TREE_CONNECT Response'
+            $txt | Should -Match 'Share Type: DISK \(0x01\)'
+        }
+
+        It 'renders an error response body without fabricated command fields' {
+            $b = [byte[]]::new(16); $b[0]=9   # generic ERROR body (StructureSize 9)
+            $h = script:New-Smb2Msg2 -Command 5 -Flags 1 -Status ([uint32]3221225506) -MsgId 1 -SessionId 9 -Body $b
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445))
+            $txt | Should -Match 'CREATE Response'
+            $txt | Should -Not -Match 'Create Action'
+            $txt | Should -Not -Match 'File Id'
+        }
+
+        It 'parses a SESSION_SETUP response body under STATUS_MORE_PROCESSING_REQUIRED' {
+            $b = [byte[]]::new(8); $b[0]=9; $b[2]=0x01   # SessionFlags IS_GUEST
+            $h = script:New-Smb2Msg2 -Command 1 -Flags 1 -Status ([uint32]3221225494) -MsgId 1 -SessionId 9 -Body $b  # 0xC0000016
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445))
+            $txt | Should -Match 'SESSION_SETUP Response'
+            $txt | Should -Match 'Session Flags: 0x0001 \(IS_GUEST\)'
+            $txt | Should -Not -Match 'Byte Count'
+        }
+
+        It 'uses the response field layout for an IOCTL response' {
+            $b = [byte[]]::new(48); $b[0]=49
+            [Array]::Copy((script:U32le2 0x0011C017), 0, $b, 4, 4)   # CtlCode PIPE_TRANSCEIVE
+            [Array]::Copy((script:U32le2 120), 0, $b, 32, 4)          # OutputOffset (response @32)
+            [Array]::Copy((script:U32le2 256), 0, $b, 36, 4)          # OutputCount  (response @36)
+            $h = script:New-Smb2Msg2 -Command 11 -Flags 1 -MsgId 1 -SessionId 9 -Body $b
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445))
+            $txt | Should -Match 'IOCTL Response'
+            $txt | Should -Match 'Control Code: FSCTL_PIPE_TRANSCEIVE \(0x0011c017\)'
+            $txt | Should -Match 'Output Offset: 120'
+            $txt | Should -Match 'Output Count: 256'
+        }
+
+        It 'gates body-bearing nonzero-status responses per MS-SMB2 3.3.4.4' {
+            # QUERY_DIRECTORY + STATUS_NO_MORE_FILES (0x80000006) is a GENERIC ERROR (no exemption).
+            $qb = [byte[]]::new(16); $qb[0]=9
+            $qh = script:New-Smb2Msg2 -Command 14 -Flags 1 -Status ([uint32]2147483654) -MsgId 1 -SessionId 9 -Body $qb
+            $qtxt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $qh), ($qh.Length + 4), 12345, 445))
+            $qtxt | Should -Match 'QUERY_DIRECTORY Response'
+            $qtxt | Should -Match 'Byte Count'
+            $qtxt | Should -Not -Match 'Output Buffer Length'
+            # CHANGE_NOTIFY + STATUS_NOTIFY_ENUM_DIR (0x0000010C) carries a CHANGE_NOTIFY body.
+            $cb = [byte[]]::new(8); $cb[0]=9
+            [Array]::Copy((script:U32le2 16), 0, $cb, 4, 4)
+            $ch = script:New-Smb2Msg2 -Command 15 -Flags 1 -Status ([uint32]268) -MsgId 2 -SessionId 9 -Body $cb
+            $ctxt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $ch), ($ch.Length + 4), 12345, 445))
+            $ctxt | Should -Match 'CHANGE_NOTIFY Response'
+            $ctxt | Should -Match 'Output Buffer Length: 16'
+            $ctxt | Should -Not -Match 'Byte Count'
         }
     }
 

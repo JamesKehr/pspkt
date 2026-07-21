@@ -65,8 +65,8 @@ The parser maintains **per-capture TID→tree-name and FID→file-name tables**:
 | NEGOTIATE (resp) | `SMB2 NEGOTIATE Response, Dialect 3.1.1; 8388608\8388608\8388608; LARGE_MTU, ENCRYPTION` |
 | SESSION_SETUP (req) | `SMB2 SESSION_SETUP Request, Signing enabled` |
 | TREE_CONNECT (req) | `SMB2 TREE_CONNECT Request, \\server\share` |
-| CREATE (req) | `SMB2 CREATE Request, File: docs\report.docx; Disposition: FILE_OPEN` |
-| CREATE (resp) | `SMB2 CREATE Response, File: docs\report.docx; Action: FILE_OPENED` |
+| CREATE (req) | `SMB2 CREATE Request, Disposition: FILE_OPEN; File: docs\report.docx` |
+| CREATE (resp) | `SMB2 CREATE Response, Action: FILE_OPENED; File: docs\report.docx` |
 | CLOSE (req) | `SMB2 CLOSE Request, File: docs\report.docx` |
 | READ (req) | `SMB2 READ Request, Len: 65536; Off: 0; File: docs\report.docx` |
 | WRITE (resp) | `SMB2 WRITE Response, File: docs\report.docx; Len: 65536` |
@@ -83,7 +83,7 @@ For an **unresolved** handle the name is replaced by the FileId GUID, e.g. `File
 
 ### Analysis Details tree
 
-In [Analysis mode](./Analysis-Mode.md) (`-pl Analysis`), selecting an SMB2 packet renders a Wireshark-style detail tree: one collapsible node per message in the (possibly compounded) chain — `SMB2 <Command> - <tree>[; Status: …]` — expanding to the full **SMB2 Header** (fields plus `Flags` bit-decode). SYNC and ASYNC headers, the encrypted Transform header, and the legacy SMB1 Negotiate header (with `Flags`/`Flags2`) are each rendered. Per-command body subtrees and file/directory info results are added in later updates.
+In [Analysis mode](./Analysis-Mode.md) (`-pl Analysis`), selecting an SMB2 packet renders a Wireshark-style detail tree: one collapsible node per message in the (possibly compounded) chain — `SMB2 <Command> - <tree>[; Status: …]` — expanding to the **SMB2 Header** (collapsed by default, summarized as `SMB2 Header - Cmd: <Command> (0x…) <Request|Response>, TID: <tree>[, Status: …]`) and the **command body** (per-command fields: dialects, access/disposition/options and file times for CREATE, offsets/lengths for READ/WRITE, the FileId as a GUID with its resolved name, etc.). SYNC and ASYNC headers, the encrypted Transform header, and the legacy SMB1 Negotiate header (with `Flags`/`Flags2`) are each rendered. File and directory info results (QUERY_DIRECTORY / QUERY_INFO / SET_INFO output buffers) are added in a later update.
 
 **Name-resolution limitations.** File/tree names resolve only when both the establishing request and its response were captured (raise `-PacketSize` if Create/TreeConnect bodies are truncated). The name tables are keyed by SMB `SessionId` + `MessageId` (not the TCP 4-tuple), so on the rare occasion that two connections to *different* servers reuse the same session and message ids concurrently, a name could be mis-attributed. Compounded messages that use `SMB2_FLAGS_RELATED_OPERATIONS` (inheriting the FileId/TreeId of the previous message in the chain) show the inherited sentinel handle rather than the resolved name. These are display-only aids; the captured pcapng is always exact.
 
