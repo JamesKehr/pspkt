@@ -254,7 +254,8 @@ public static class PacketDetailExtractor
             case "mDNS":
             case "DHCP":
             case "HTTP":
-            case "SMB2":       return 4; // LAYER_APPLICATION
+            case "SMB2":
+            case "TLS":        return 4; // LAYER_APPLICATION
             default:          return -1;
         }
     }
@@ -644,7 +645,19 @@ public static class PacketDetailExtractor
         byte[] payload = new byte[len];
         Buffer.BlockCopy(p, off, payload, 0, len);
 
-        if (sp == 53 || dp == 53 || sp == 5353 || dp == 5353)
+        // TLS is content-based (not port-based) and is checked FIRST for TCP so a TLS stream on a
+        // port that also matches a port-based parser (e.g. 53/80/445) still parses as TLS. Real
+        // HTTP request lines (ASCII) and the SMB2 NetBIOS header (0x00) can't match LooksLikeTls;
+        // a DNS-over-TCP length-prefix collision is possible but rare (needs a ~5120-6143 byte
+        // message) and affects only the detail dispatch, so the port-based branches keep working.
+        // (QUIC embeds TLS 1.3 in its own UDP packet format and SSH is not TLS — neither is
+        // handled here; see TLS_parser_instructions.md "Future work".)
+        if (!udp && TlsParser.LooksLikeTls(payload, len))
+        {
+            List<BoxyBox.TreeNode> tlsRoots = TlsParser.BuildTlsDetailTree(payload, len, sp, dp);
+            for (int i = 0; i < tlsRoots.Count; i++) roots.Add(tlsRoots[i]);
+        }
+        else if (sp == 53 || dp == 53 || sp == 5353 || dp == 5353)
         {
             byte[] dnsMsg = payload;
             int dnsLen = len;

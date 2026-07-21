@@ -6,6 +6,7 @@
 // struct without forcing the formatter to re-parse the same record.
 
 using System;
+using System.Collections.Generic;
 using System.Text;
 
 /// <summary>
@@ -66,6 +67,25 @@ public static class TlsParser
         int contentType = data[0];
         if (contentType < 20 || contentType > 23) return false;
         int version = (data[1] << 8) | data[2];
+        return version >= 0x0300 && version <= 0x0304;
+    }
+
+    /// <summary>
+    /// Range-based sanity check used to decide, at zero allocation cost, whether a not-yet-copied
+    /// TCP payload sitting at <paramref name="offset"/> in a larger raw buffer looks like a TLS
+    /// record. Lets the capture path allocate/copy the payload only for streams that actually
+    /// carry TLS, so content-based TLS detection works on any TCP port without a per-packet
+    /// BlockCopy of all traffic. Reads at most 3 bytes; never past <paramref name="length"/>.
+    /// </summary>
+    public static bool LooksLikeTls(byte[] data, int offset, int length)
+    {
+        // Overflow-safe range check: length>=5 guarantees the 3-byte header read stays in-buffer
+        // (offset+3 < offset+5 <= data.Length) without ever computing offset+3 directly.
+        if (data == null || offset < 0 || length < 5
+            || offset > data.Length || length > data.Length - offset) return false;
+        int contentType = data[offset];
+        if (contentType < 20 || contentType > 23) return false;
+        int version = (data[offset + 1] << 8) | data[offset + 2];
         return version >= 0x0300 && version <= 0x0304;
     }
 
@@ -147,7 +167,7 @@ public static class TlsParser
     public static string FormatTlsSegment(byte[] data, int dataLen)
     {
         TlsContext ctx;
-        if (!TryParseTls(data, out ctx)) return null;
+        if (!TryParseTls(data, dataLen, out ctx)) return null;
         string versionName = GetVersionName(ctx.Version);
         if (ctx.ContentType == 22 && ctx.HandshakeType > 0)
         {
@@ -286,5 +306,453 @@ public static class TlsParser
             pos += itemLen;
         }
         return null;
+    }
+
+    // ==================== Analysis detail tree ====================
+    //
+    // On-demand (JIT) parse for the Analysis Details box. Unlike the hot-path formatters above,
+    // this may allocate freely: it runs only when a user selects a packet, not per captured
+    // packet. A single TCP segment can carry several TLS records (and a handshake record several
+    // messages), so the builder emits one collapsed root node per record. Each root's collapsed
+    // line carries the ClientHello SNI so it is visible without expanding.
+
+    /// <summary>
+    /// Builds the Analysis Details tree for a TLS-bearing TCP payload. Returns one collapsed
+    /// root node per TLS record found in the segment. Stops at the first byte that doesn't look
+    /// like a TLS record header (segment ends mid-record, or carries trailing non-TLS bytes).
+    /// Bounded to 64 records to cap loop time on malformed input.
+    /// </summary>
+    public static List<BoxyBox.TreeNode> BuildTlsDetailTree(byte[] data, int len, int srcPort, int dstPort)
+    {
+        var roots = new List<BoxyBox.TreeNode>();
+        if (data == null) return roots;
+        if (len > data.Length) len = data.Length;
+
+        int pos = 0;
+        int guard = 0;
+        while (pos + 5 <= len && guard++ < 64)
+        {
+            int contentType = data[pos];
+            int version = (data[pos + 1] << 8) | data[pos + 2];
+            if (contentType < 20 || contentType > 23 || version < 0x0300 || version > 0x0304) break;
+            int recLen = PacketParseHelper.ReadUInt16BE(data, pos + 3);
+            int bodyOff = pos + 5;
+            int bodyEnd = Math.Min(len, bodyOff + recLen);
+            roots.Add(BuildTlsRecordNode(data, bodyOff, bodyEnd, contentType, version, recLen));
+            pos = bodyOff + recLen;   // advances >= 5 (record header) even for a zero-length record
+        }
+        return roots;
+    }
+
+    private static BoxyBox.TreeNode BuildTlsRecordNode(byte[] data, int bodyOff, int bodyEnd,
+        int contentType, int version, int recLen)
+    {
+        string versionName = GetVersionName(version);
+        string primary = GetContentTypeName(contentType);
+        string sni = null;
+
+        // Build the record body child nodes first so the collapsed root can surface the SNI /
+        // first handshake name.
+        var childNodes = new List<BoxyBox.TreeNode>();
+        if (contentType == 22)
+        {
+            if (bodyOff < bodyEnd)
+            {
+                string hn = GetHandshakeName(data[bodyOff]);
+                if (hn != null) primary = hn;
+            }
+            AppendHandshakeNodes(data, bodyOff, bodyEnd, childNodes, out sni);
+        }
+        else if (contentType == 21)
+        {
+            childNodes.Add(BuildAlertNode(data, bodyOff, bodyEnd));
+        }
+        else if (contentType == 20)
+        {
+            childNodes.Add(new BoxyBox.TreeNode("Change Cipher Spec Message", "TLS.CCS", false));
+        }
+        else if (contentType == 23)
+        {
+            int adLen = Math.Max(0, bodyEnd - bodyOff);
+            childNodes.Add(new BoxyBox.TreeNode("Encrypted Application Data: " + adLen + " bytes", "TLS.AppData", false));
+        }
+
+        var summary = new StringBuilder(96);
+        summary.Append("TLS ").Append(primary).Append("; ver: ").Append(versionName).Append("; len: ").Append(recLen);
+        if (!string.IsNullOrEmpty(sni)) summary.Append("; SNI: ").Append(sni);
+
+        var root = new BoxyBox.TreeNode(summary.ToString(), "TLS", false);   // collapsed by default
+
+        var rec = new BoxyBox.TreeNode("Record Layer: " + GetContentTypeName(contentType) + " Protocol, Version " + versionName, "TLS.Record", false);
+        rec.AddLeaf("Content Type: " + GetContentTypeName(contentType) + " (" + contentType + ")");
+        rec.AddLeaf("Version: " + versionName + " (0x" + version.ToString("x4") + ")");
+        rec.AddLeaf("Length: " + recLen);
+        root.Add(rec);
+
+        for (int i = 0; i < childNodes.Count; i++) root.Add(childNodes[i]);
+        return root;
+    }
+
+    // Walks the handshake messages inside a Handshake record body [start, end). A single record
+    // can chain several messages (e.g. ServerHello + EncryptedExtensions + Certificate). Returns
+    // the SNI of the first ClientHello seen via firstSni.
+    private static void AppendHandshakeNodes(byte[] data, int start, int end, List<BoxyBox.TreeNode> outNodes, out string firstSni)
+    {
+        firstSni = null;
+        int pos = start;
+        int guard = 0;
+        while (pos + 4 <= end && guard++ < 32)
+        {
+            int hsType = data[pos];
+            int hsLen = (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3];
+            int msgBody = pos + 4;
+            int msgEnd = Math.Min(end, msgBody + hsLen);
+            string hsName = GetHandshakeName(hsType);
+            var node = new BoxyBox.TreeNode("Handshake Protocol: " + (hsName != null ? hsName : "Unknown (" + hsType + ")"), "TLS.Handshake", false);
+            node.AddLeaf("Handshake Type: " + (hsName != null ? hsName : "Unknown") + " (" + hsType + ")");
+            node.AddLeaf("Length: " + hsLen);
+
+            string sni = null;
+            if (hsType == 1) BuildClientHelloBody(data, msgBody, msgEnd, node, out sni);
+            else if (hsType == 2) BuildServerHelloBody(data, msgBody, msgEnd, node);
+            if (firstSni == null && sni != null) firstSni = sni;
+
+            outNodes.Add(node);
+            pos = msgBody + hsLen;   // advances >= 4 (handshake header) even for a zero-length message
+        }
+    }
+
+    // ClientHello body: version(2) random(32) sessionId(1+var) cipherSuites(2+var)
+    // compression(1+var) extensions(2+var).
+    private static void BuildClientHelloBody(byte[] data, int off, int end, BoxyBox.TreeNode parent, out string sni)
+    {
+        sni = null;
+        int pos = off;
+        if (pos + 34 > end) return;
+        int legacyVer = (data[pos] << 8) | data[pos + 1];
+        parent.AddLeaf("Version: " + GetVersionName(legacyVer) + " (0x" + legacyVer.ToString("x4") + ")");
+        pos += 2;
+        parent.AddLeaf("Random: " + HexPreview(data, pos, 32, 32));
+        pos += 32;
+
+        if (pos + 1 > end) return;
+        int sidLen = data[pos]; pos += 1;
+        parent.AddLeaf("Session ID Length: " + sidLen);
+        if (pos + sidLen > end) return;
+        if (sidLen > 0) parent.AddLeaf("Session ID: " + HexPreview(data, pos, sidLen, 32));
+        pos += sidLen;
+
+        if (pos + 2 > end) return;
+        int csLen = PacketParseHelper.ReadUInt16BE(data, pos); pos += 2;
+        int csEnd = Math.Min(end, pos + csLen);
+        var csNode = new BoxyBox.TreeNode("Cipher Suites (" + (csLen / 2) + " suites)", "TLS.CipherSuites", false);
+        int cp = pos; int cguard = 0;
+        while (cp + 2 <= csEnd && cguard++ < 512)
+        {
+            int cs = PacketParseHelper.ReadUInt16BE(data, cp);
+            csNode.AddLeaf("Cipher Suite: " + CipherSuiteName(cs) + " (0x" + cs.ToString("x4") + ")");
+            cp += 2;
+        }
+        parent.Add(csNode);
+        pos = csEnd;
+
+        if (pos + 1 > end) return;
+        int compLen = data[pos]; pos += 1;
+        int compEnd = Math.Min(end, pos + compLen);
+        var compNode = new BoxyBox.TreeNode("Compression Methods (" + compLen + " methods)", "TLS.Compression", false);
+        for (int i = pos; i < compEnd; i++)
+            compNode.AddLeaf("Compression Method: " + (data[i] == 0 ? "null" : data[i].ToString()) + " (" + data[i] + ")");
+        parent.Add(compNode);
+        pos = compEnd;
+
+        if (pos + 2 > end) return;
+        int extLen = PacketParseHelper.ReadUInt16BE(data, pos); pos += 2;
+        int extEnd = Math.Min(end, pos + extLen);
+        var extParent = new BoxyBox.TreeNode("Extensions", "TLS.Extensions", false);
+        BuildExtensions(data, pos, extEnd, true, extParent, out sni);
+        if (extParent.HasChildren) parent.Add(extParent);
+    }
+
+    // ServerHello body: version(2) random(32) sessionId(1+var) cipherSuite(2)
+    // compressionMethod(1) extensions(2+var).
+    private static void BuildServerHelloBody(byte[] data, int off, int end, BoxyBox.TreeNode parent)
+    {
+        int pos = off;
+        if (pos + 34 > end) return;
+        int legacyVer = (data[pos] << 8) | data[pos + 1];
+        parent.AddLeaf("Version: " + GetVersionName(legacyVer) + " (0x" + legacyVer.ToString("x4") + ")");
+        pos += 2;
+        parent.AddLeaf("Random: " + HexPreview(data, pos, 32, 32));
+        pos += 32;
+
+        if (pos + 1 > end) return;
+        int sidLen = data[pos]; pos += 1;
+        parent.AddLeaf("Session ID Length: " + sidLen);
+        if (pos + sidLen > end) return;
+        if (sidLen > 0) parent.AddLeaf("Session ID: " + HexPreview(data, pos, sidLen, 32));
+        pos += sidLen;
+
+        if (pos + 2 > end) return;
+        int cs = PacketParseHelper.ReadUInt16BE(data, pos); pos += 2;
+        parent.AddLeaf("Cipher Suite: " + CipherSuiteName(cs) + " (0x" + cs.ToString("x4") + ")");
+
+        if (pos + 1 > end) return;
+        int comp = data[pos]; pos += 1;
+        parent.AddLeaf("Compression Method: " + (comp == 0 ? "null" : comp.ToString()) + " (" + comp + ")");
+
+        if (pos + 2 > end) return;
+        int extLen = PacketParseHelper.ReadUInt16BE(data, pos); pos += 2;
+        int extEnd = Math.Min(end, pos + extLen);
+        var extParent = new BoxyBox.TreeNode("Extensions", "TLS.Extensions", false);
+        string sni;
+        BuildExtensions(data, pos, extEnd, false, extParent, out sni);
+        if (extParent.HasChildren) parent.Add(extParent);
+    }
+
+    // Iterates the extension block [start, end): each entry is type(2) len(2) data(len). SNI,
+    // supported_versions, and ALPN get their inner values decoded; the rest show type + length.
+    private static void BuildExtensions(byte[] data, int start, int end, bool isClient, BoxyBox.TreeNode parent, out string sni)
+    {
+        sni = null;
+        int pos = start;
+        int guard = 0;
+        while (pos + 4 <= end && guard++ < 64)
+        {
+            int extType = PacketParseHelper.ReadUInt16BE(data, pos);
+            int extDataLen = PacketParseHelper.ReadUInt16BE(data, pos + 2);
+            int extBody = pos + 4;
+            int extBodyEnd = Math.Min(end, extBody + extDataLen);
+            var ext = new BoxyBox.TreeNode("Extension: " + ExtensionName(extType) + " (len " + extDataLen + ")", null, false);
+            ext.AddLeaf("Type: " + ExtensionName(extType) + " (" + extType + ")");
+            ext.AddLeaf("Length: " + extDataLen);
+
+            if (extType == 0 && isClient)   // server_name (SNI)
+            {
+                string s = ParseSniExtension(data, extBody, extBodyEnd);
+                if (s != null) { ext.AddLeaf("Server Name: " + s); if (sni == null) sni = s; }
+            }
+            else if (extType == 43)   // supported_versions (reveals true TLS 1.3)
+            {
+                if (isClient)
+                {
+                    if (extBody < extBodyEnd)
+                    {
+                        int listLen = data[extBody];
+                        int vp = extBody + 1; int vend = Math.Min(extBodyEnd, vp + listLen);
+                        while (vp + 2 <= vend)
+                        {
+                            int v = PacketParseHelper.ReadUInt16BE(data, vp);
+                            ext.AddLeaf("Supported Version: " + GetVersionName(v) + " (0x" + v.ToString("x4") + ")");
+                            vp += 2;
+                        }
+                    }
+                }
+                else if (extBody + 2 <= extBodyEnd)
+                {
+                    int v = PacketParseHelper.ReadUInt16BE(data, extBody);
+                    ext.AddLeaf("Supported Version: " + GetVersionName(v) + " (0x" + v.ToString("x4") + ")");
+                }
+            }
+            else if (extType == 16)   // application_layer_protocol_negotiation (ALPN)
+            {
+                if (extBody + 2 <= extBodyEnd)
+                {
+                    int alpnLen = PacketParseHelper.ReadUInt16BE(data, extBody);
+                    int ap = extBody + 2; int aend = Math.Min(extBodyEnd, ap + alpnLen);
+                    while (ap + 1 <= aend)
+                    {
+                        int nlen = data[ap]; ap += 1;
+                        if (ap + nlen > aend) break;
+                        ext.AddLeaf("ALPN Protocol: " + Encoding.ASCII.GetString(data, ap, nlen));
+                        ap += nlen;
+                    }
+                }
+            }
+            parent.Add(ext);
+            pos = extBody + extDataLen;
+        }
+    }
+
+    // server_name extension body: server_name_list length(2) then entries of
+    // name_type(1) name_length(2) name. Returns the first host_name (type 0).
+    private static string ParseSniExtension(byte[] data, int start, int end)
+    {
+        if (start + 2 > end) return null;
+        int listLen = PacketParseHelper.ReadUInt16BE(data, start);
+        int p = start + 2; int listEnd = Math.Min(end, p + listLen);
+        while (p + 3 <= listEnd)
+        {
+            int nameType = data[p];
+            int nameLen = PacketParseHelper.ReadUInt16BE(data, p + 1);
+            p += 3;
+            if (p + nameLen > listEnd) break;
+            if (nameType == 0) return Encoding.ASCII.GetString(data, p, nameLen);
+            p += nameLen;
+        }
+        return null;
+    }
+
+    // Alert body: level(1) description(1).
+    private static BoxyBox.TreeNode BuildAlertNode(byte[] data, int off, int end)
+    {
+        var node = new BoxyBox.TreeNode("Alert Message", "TLS.Alert", false);
+        if (off + 2 <= end)
+        {
+            int level = data[off]; int desc = data[off + 1];
+            node.Text = "Alert Message: " + AlertLevelName(level) + ", " + AlertDescName(desc);
+            node.AddLeaf("Level: " + AlertLevelName(level) + " (" + level + ")");
+            node.AddLeaf("Description: " + AlertDescName(desc) + " (" + desc + ")");
+        }
+        else
+        {
+            node.AddLeaf("(encrypted or truncated)");
+        }
+        return node;
+    }
+
+    // Lowercase hex of up to maxBytes bytes; appends "..." when the field is longer.
+    private static string HexPreview(byte[] data, int off, int count, int maxBytes)
+    {
+        if (count < 0) count = 0;
+        int show = Math.Min(count, maxBytes);
+        var sb = new StringBuilder(show * 2 + 4);
+        for (int i = 0; i < show && off + i < data.Length; i++) sb.Append(data[off + i].ToString("x2"));
+        if (count > show) sb.Append("...");
+        return sb.ToString();
+    }
+
+    /// <summary>Returns a display name for a TLS extension type, or a hex form when unknown.</summary>
+    public static string ExtensionName(int extType)
+    {
+        switch (extType)
+        {
+            case 0:  return "server_name";
+            case 1:  return "max_fragment_length";
+            case 5:  return "status_request";
+            case 10: return "supported_groups";
+            case 11: return "ec_point_formats";
+            case 13: return "signature_algorithms";
+            case 14: return "use_srtp";
+            case 15: return "heartbeat";
+            case 16: return "application_layer_protocol_negotiation";
+            case 18: return "signed_certificate_timestamp";
+            case 21: return "padding";
+            case 22: return "encrypt_then_mac";
+            case 23: return "extended_master_secret";
+            case 27: return "compress_certificate";
+            case 28: return "record_size_limit";
+            case 35: return "session_ticket";
+            case 41: return "pre_shared_key";
+            case 42: return "early_data";
+            case 43: return "supported_versions";
+            case 44: return "cookie";
+            case 45: return "psk_key_exchange_modes";
+            case 50: return "signature_algorithms_cert";
+            case 51: return "key_share";
+            case 65037: return "encrypted_client_hello";
+            case 65281: return "renegotiation_info";
+            default: return "unknown (0x" + extType.ToString("x4") + ")";
+        }
+    }
+
+    /// <summary>Returns a display name for a TLS alert level (1=Warning, 2=Fatal).</summary>
+    public static string AlertLevelName(int level)
+    {
+        switch (level)
+        {
+            case 1: return "Warning";
+            case 2: return "Fatal";
+            default: return "Level" + level;
+        }
+    }
+
+    /// <summary>Returns a display name for a TLS alert description code.</summary>
+    public static string AlertDescName(int desc)
+    {
+        switch (desc)
+        {
+            case 0:   return "close_notify";
+            case 10:  return "unexpected_message";
+            case 20:  return "bad_record_mac";
+            case 21:  return "decryption_failed";
+            case 22:  return "record_overflow";
+            case 30:  return "decompression_failure";
+            case 40:  return "handshake_failure";
+            case 41:  return "no_certificate";
+            case 42:  return "bad_certificate";
+            case 43:  return "unsupported_certificate";
+            case 44:  return "certificate_revoked";
+            case 45:  return "certificate_expired";
+            case 46:  return "certificate_unknown";
+            case 47:  return "illegal_parameter";
+            case 48:  return "unknown_ca";
+            case 49:  return "access_denied";
+            case 50:  return "decode_error";
+            case 51:  return "decrypt_error";
+            case 70:  return "protocol_version";
+            case 71:  return "insufficient_security";
+            case 80:  return "internal_error";
+            case 86:  return "inappropriate_fallback";
+            case 90:  return "user_canceled";
+            case 100: return "no_renegotiation";
+            case 109: return "missing_extension";
+            case 110: return "unsupported_extension";
+            case 112: return "unrecognized_name";
+            case 113: return "bad_certificate_status_response";
+            case 115: return "unknown_psk_identity";
+            case 116: return "certificate_required";
+            case 120: return "no_application_protocol";
+            default:  return "alert_" + desc;
+        }
+    }
+
+    /// <summary>
+    /// Returns a display name for a cipher suite code. Covers the TLS 1.3 suites and the common
+    /// TLS 1.2 ECDHE suites; unknown codes fall back to a hex form.
+    /// </summary>
+    public static string CipherSuiteName(int suite)
+    {
+        switch (suite)
+        {
+            // TLS 1.3
+            case 0x1301: return "TLS_AES_128_GCM_SHA256";
+            case 0x1302: return "TLS_AES_256_GCM_SHA384";
+            case 0x1303: return "TLS_CHACHA20_POLY1305_SHA256";
+            case 0x1304: return "TLS_AES_128_CCM_SHA256";
+            case 0x1305: return "TLS_AES_128_CCM_8_SHA256";
+            // Common TLS 1.2 ECDHE
+            case 0xC02B: return "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256";
+            case 0xC02C: return "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384";
+            case 0xC02F: return "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256";
+            case 0xC030: return "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384";
+            case 0xCCA8: return "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256";
+            case 0xCCA9: return "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256";
+            case 0xC013: return "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA";
+            case 0xC014: return "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA";
+            case 0x009C: return "TLS_RSA_WITH_AES_128_GCM_SHA256";
+            case 0x009D: return "TLS_RSA_WITH_AES_256_GCM_SHA384";
+            case 0x002F: return "TLS_RSA_WITH_AES_128_CBC_SHA";
+            case 0x0035: return "TLS_RSA_WITH_AES_256_CBC_SHA";
+            case 0x000A: return "TLS_RSA_WITH_3DES_EDE_CBC_SHA";
+            case 0x00FF: return "TLS_EMPTY_RENEGOTIATION_INFO_SCSV";
+            case 0x5600: return "TLS_FALLBACK_SCSV";
+            case 0x0A0A:
+            case 0x1A1A:
+            case 0x2A2A:
+            case 0x3A3A:
+            case 0x4A4A:
+            case 0x5A5A:
+            case 0x6A6A:
+            case 0x7A7A:
+            case 0x8A8A:
+            case 0x9A9A:
+            case 0xAAAA:
+            case 0xBABA:
+            case 0xCACA:
+            case 0xDADA:
+            case 0xEAEA:
+            case 0xFAFA: return "GREASE";
+            default:     return "Unknown";
+        }
     }
 }

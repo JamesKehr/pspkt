@@ -4,6 +4,8 @@ This page documents the TLS application-layer display filter parameters on `Star
 
 TLS filters are evaluated against each individual TLS record. Records below the recognised TLS ports (443, 8443, 993, 995, 465, 636) are inspected; other TCP traffic passes through without filtering — see *Standard ports only* below.
 
+> **Display vs. filtering.** The `-Tls*` *predicate filters* on this page are port-gated (see *Standard ports only*). The TLS **display/parsing** — the Default/Detailed one-liner and the Analysis Details tree — is **content-based** and applies to TLS records on *any* TCP port. See [TLS_parser_instructions.md](https://github.com/JamesKehr/pspkt/blob/main/Parsers/Application/TLS_parser_instructions.md) for the parser output at every level and the [Analysis Details](#analysis-details-output) section below.
+
 ## Parameters
 
 | Parameter | Type | Description |
@@ -26,7 +28,7 @@ Pass `-NoWarning` to silence the auto-bump warnings without affecting operationa
 
 ## Standard ports only
 
-The TLS predicate only fires for packets on the recognised TLS ports — **443, 8443, 993, 995, 465, 636**. Packets on other TCP ports (e.g. a TLS service on port 9999) bypass the predicate and are displayed unfiltered. To narrow the capture to a non-standard TLS port, add a kernel capture filter:
+The TLS **predicate** (the `-Tls*` filter parameters) only fires for packets on the recognised TLS ports — **443, 8443, 993, 995, 465, 636**. Packets on other TCP ports (e.g. a TLS service on port 9999) bypass the predicate. They are still **parsed and displayed** as TLS — the display path is content-based (see the note at the top of this page) — but the `-Tls*` filters won't match or drop them. To narrow the capture to a non-standard TLS port, add a kernel capture filter:
 
 ```powershell
 $f = New-PspktFilter -Name 'TLS-9999' -TransportProtocol TCP -Port1 9999
@@ -35,7 +37,19 @@ Add-PspktFilter -Session $session -Filter $f
 Start-Pspkt -Session $session -pl Detailed
 ```
 
-This v1 limitation is documented; a future revision may expose a `-TlsPort` parameter to extend the predicate's known-port set.
+This predicate limitation is documented; a future revision may expose a `-TlsPort` parameter to extend the predicate's known-port set.
+
+## Analysis Details output
+
+At the `Analysis` parsing level (`-pl Analysis`), TLS records are parsed on demand into a Wireshark-style Details tree when you select a packet. The TLS node is **collapsed by default** and its collapsed line carries the ClientHello **SNI** so it's visible without expanding:
+
+```
+[+]TLS ClientHello; ver: TLS 1.2; len: 512; SNI: www.example.com
+```
+
+Expanding the node reveals the Record Layer sub-node plus the handshake / alert body — cipher suites, compression methods, and decoded `server_name` (SNI), `supported_versions`, and ALPN extensions for ClientHello/ServerHello. One root node is emitted per TLS record in the segment. The full field-by-field layout is documented in [TLS_parser_instructions.md](https://github.com/JamesKehr/pspkt/blob/main/Parsers/Application/TLS_parser_instructions.md).
+
+> **QUIC / SSH.** QUIC (HTTP/3, UDP 443) carries its TLS 1.3 handshake inside an encrypted UDP packet format, and SSH is not TLS at all — neither is parsed by the TLS parser. Both are tracked as future work in the parser instructions file.
 
 ## Examples
 
