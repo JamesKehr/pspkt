@@ -2164,8 +2164,8 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
 
         It 'formats an encrypted (Transform header) packet' {
             $tf = [byte[]]::new(52); $tf[0]=0xfd; $tf[1]=0x53; $tf[2]=0x4d; $tf[3]=0x42
-            [Array]::Copy((script:U32le 200), 0, $tf, 4, 4)
-            [Array]::Copy((script:U32le 0x777), 0, $tf, 44, 4)
+            [Array]::Copy((script:U32le 200), 0, $tf, 36, 4)   # OriginalMessageSize @36
+            [Array]::Copy((script:U32le 0x777), 0, $tf, 44, 4) # SessionId @44
             [Smb2Parser]::FormatSmb2Segment((script:Frame-Smb2 $tf), 445, 12345) |
                 Should -Be 'SMB2 Encrypted, SessId 0x777, len 200'
         }

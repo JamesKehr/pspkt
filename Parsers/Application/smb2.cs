@@ -467,11 +467,13 @@ public static class Smb2Parser
         if (len < offset + 4) return null;
         uint headerMagic = (uint)(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24));
 
-        // Encrypted (Transform header): only the session id is reachable.
+        // Encrypted (Transform header): only the OriginalMessageSize and SessionId are in the
+        // clear. Layout (MS-SMB2 2.2.41): ProtocolId@0, Signature@4, Nonce@20,
+        // OriginalMessageSize@36, Reserved@40, Flags@42, SessionId@44.
         if (headerMagic == SMB2_TRANSFORM_MAGIC)
         {
             if (len < offset + 52) return "SMB2 Encrypted";
-            uint msgSize = ReadUInt32LE(data, offset + 4);
+            uint msgSize = ReadUInt32LE(data, offset + 36);
             ulong sessId = ReadUInt64LE(data, offset + 44);
             return "SMB2 Encrypted, SessId 0x" + sessId.ToString("x") + ", len " + msgSize.ToString();
         }
