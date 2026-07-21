@@ -840,6 +840,27 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $ctx.Truncated      | Should -BeFalse
         }
 
+        It 'TlsParser.TryParseTls with extractSni=false skips SNI (tier gating) but keeps the rest' {
+            $ctx = [TlsContext]::new()
+            $ok = [TlsParser]::TryParseTls($script:tlsClientHelloExample, $script:tlsClientHelloExample.Length, $false, [ref]$ctx)
+            $ok | Should -BeTrue
+            $ctx.Valid          | Should -BeTrue
+            $ctx.ContentType    | Should -Be 22
+            $ctx.HandshakeType  | Should -Be 1
+            $ctx.Sni            | Should -BeNullOrEmpty   # gated off
+            # extractSni=true still extracts it.
+            $ctx2 = [TlsContext]::new()
+            $null = [TlsParser]::TryParseTls($script:tlsClientHelloExample, $script:tlsClientHelloExample.Length, $true, [ref]$ctx2)
+            $ctx2.Sni | Should -Be 'example.com'
+        }
+
+        It 'TlsParser.FormatTlsSegment (Default one-liner) never shows the SNI' {
+            # The Default formatter gates SNI off; the line names the handshake but not the host.
+            $line = [TlsParser]::FormatTlsSegment($script:tlsClientHelloExample, $script:tlsClientHelloExample.Length)
+            $line | Should -Match 'ClientHello'
+            $line | Should -Not -Match 'example\.com'
+        }
+
         It 'TlsParser.TryParseTls handles AppData (no handshake type, no SNI)' {
             $ctx = [TlsContext]::new()
             $null = [TlsParser]::TryParseTls($script:tlsAppData12, [ref]$ctx)
@@ -1338,6 +1359,36 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $ctx.UserAgent | Should -Be 'pspkt-test'
         }
 
+        It 'HttpParser.TryParseHttp field mask gates header extraction (tier/predicate gating)' {
+            # Host-only mask (the Default/Detailed one-liner need): only Host is allocated;
+            # User-Agent / Content-Type / Content-Length are skipped.
+            $ctxHost = [HttpContext]::new()
+            $ok = [HttpParser]::TryParseHttp($script:httpReqGet, $script:httpReqGet.Length, [HttpParseFields]::Host, [ref]$ctxHost)
+            $ok | Should -BeTrue
+            $ctxHost.Host          | Should -Be 'api.example.com'
+            $ctxHost.Method        | Should -Be 'GET'           # first line always parsed
+            $ctxHost.UserAgent     | Should -BeNullOrEmpty
+            $ctxHost.ContentType   | Should -BeNullOrEmpty
+            $ctxHost.ContentLength | Should -Be -1
+
+            # Host | ContentType (a Content-Type predicate's need): Host + Content-Type, still no UA/CL.
+            $ctxCt = [HttpContext]::new()
+            $mask = [HttpParseFields]::Host -bor [HttpParseFields]::ContentType
+            $null = [HttpParser]::TryParseHttp($script:httpReqGet, $script:httpReqGet.Length, $mask, [ref]$ctxCt)
+            $ctxCt.Host          | Should -Be 'api.example.com'
+            $ctxCt.ContentType   | Should -Be 'application/json'
+            $ctxCt.UserAgent     | Should -BeNullOrEmpty
+            $ctxCt.ContentLength | Should -Be -1
+
+            # All (the Analysis Details tree's need): every header extracted.
+            $ctxAll = [HttpContext]::new()
+            $null = [HttpParser]::TryParseHttp($script:httpReqGet, $script:httpReqGet.Length, [HttpParseFields]::All, [ref]$ctxAll)
+            $ctxAll.Host          | Should -Be 'api.example.com'
+            $ctxAll.UserAgent     | Should -Be 'pspkt-test'
+            $ctxAll.ContentType   | Should -Be 'application/json'
+            $ctxAll.ContentLength | Should -Be 0
+        }
+
         It 'HttpParser Default/Detailed request line (Method + Host + URI)' {
             $ctx = [HttpContext]::new()
             $null = [HttpParser]::TryParseHttp($script:httpReqGet, [ref]$ctx)
@@ -1601,6 +1652,39 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             [PacketLineFormatter]::HasAppPredicate | Should -BeTrue
             [PacketLineFormatter]::ClearAppPredicates()
             [PacketLineFormatter]::HasAppPredicate | Should -BeFalse
+        }
+
+        It 'a Content-Type predicate still filters through the gated hot path (mask includes CT)' {
+            # Proves SetHttpPredicate adds ContentType to the hot-path field mask: a request whose
+            # Content-Type matches must pass, and a non-matching one must be filtered. If the mask
+            # omitted CT, ctx.ContentType would be null and the predicate would reject both.
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]](0xc0,0x00, 0,80, 0,0,0,1, 0,0,0,2, 0x50,0x18, 0xff,0xff, 0,0, 0,0)   # dst 80
+            $ipLen = 20 + $tcp.Length + $script:httpReqGet.Length
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[12]=10;$ip[15]=5; $ip[16]=93;$ip[17]=184;$ip[18]=216;$ip[19]=34
+            $pkt = $eth + $ip + $tcp + $script:httpReqGet
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 1
+            try {
+                $pMatch = [HttpAppPredicate]::new()
+                $pMatch.ContentTypeRegex = [regex]::new('json', 'IgnoreCase,Compiled')
+                [PacketLineFormatter]::SetHttpPredicate($pMatch)
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+                $out | Should -Match 'HTTP: GET'
+
+                $pMiss = [HttpAppPredicate]::new()
+                $pMiss.ContentTypeRegex = [regex]::new('xml', 'IgnoreCase,Compiled')
+                [PacketLineFormatter]::SetHttpPredicate($pMiss)
+                $out2 = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+                $out2 | Should -Not -Match 'HTTP: GET'
+            } finally {
+                [PacketLineFormatter]::ClearAppPredicates()
+                Set-PspktDetailLevel -Level 1
+            }
         }
     }
 

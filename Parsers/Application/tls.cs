@@ -98,13 +98,26 @@ public static class TlsParser
     /// </summary>
     public static bool TryParseTls(byte[] data, out TlsContext ctx)
     {
-        return TryParseTls(data, data != null ? data.Length : 0, out ctx);
+        return TryParseTls(data, data != null ? data.Length : 0, true, out ctx);
     }
 
     /// <summary>
-    /// Overload accepting explicit data length for reusable-buffer callers.
+    /// Overload accepting explicit data length for reusable-buffer callers. Extracts the
+    /// ClientHello SNI (the tier/predicate-gated field) so existing callers are unchanged.
     /// </summary>
     public static bool TryParseTls(byte[] data, int dataLength, out TlsContext ctx)
+    {
+        return TryParseTls(data, dataLength, true, out ctx);
+    }
+
+    /// <summary>
+    /// Full overload with tier gating. <paramref name="extractSni"/> lets the Default one-liner
+    /// (which never displays the SNI) skip the ClientHello extension walk + SNI string allocation.
+    /// The Detailed one-liner and the app-layer predicate (both at ParsingLevel &gt;= Detailed)
+    /// pass true so the SNI is available where it is actually shown / filtered on. The Analysis
+    /// Details tree does its own full parse, so it is unaffected by this gate.
+    /// </summary>
+    public static bool TryParseTls(byte[] data, int dataLength, bool extractSni, out TlsContext ctx)
     {
         ctx = default(TlsContext);
         if (!LooksLikeTls(data, dataLength)) return false;
@@ -118,7 +131,7 @@ public static class TlsParser
         if (ctx.ContentType == 22 && dataLength >= 6)
         {
             ctx.HandshakeType = data[5];
-            if (ctx.HandshakeType == 1) // ClientHello — try SNI extraction.
+            if (ctx.HandshakeType == 1 && extractSni) // ClientHello — try SNI extraction.
             {
                 bool truncated;
                 ctx.Sni = ExtractSni(data, dataLength, out truncated);
@@ -167,7 +180,8 @@ public static class TlsParser
     public static string FormatTlsSegment(byte[] data, int dataLen)
     {
         TlsContext ctx;
-        if (!TryParseTls(data, dataLen, out ctx)) return null;
+        // Default one-liner never shows the SNI, so skip the ClientHello extension walk.
+        if (!TryParseTls(data, dataLen, false, out ctx)) return null;
         string versionName = GetVersionName(ctx.Version);
         if (ctx.ContentType == 22 && ctx.HandshakeType > 0)
         {

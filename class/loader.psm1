@@ -66,6 +66,7 @@ if ($null -eq $typeCheck) {
         [HttpParser]
         [HttpContext]
         [HttpAppPredicate]
+        [HttpParseFields]
         [DhcpParser]
         [DhcpContext]
         [DhcpAppPredicate]

@@ -195,6 +195,12 @@ public static class PacketLineFormatter
     private static Smb2AppPredicate _smb2Predicate;
     private static IcmpAppPredicate _icmpPredicate;
 
+    // Hot-path HTTP header fields to extract (tier/predicate-gated). The one-liner only needs
+    // Host; a Content-Type predicate adds ContentType. User-Agent / Content-Length are never
+    // read on the hot path (only the Analysis Details tree, which parses All off the hot path),
+    // so they are never in this mask. Recomputed by SetHttpPredicate.
+    private static HttpParseFields _httpHotFields = HttpParseFields.Host;
+
     // Thread-static cache populated by the IPv4 fast-path gate in FormatSinglePacketInto
     // when a DNS predicate accepts a packet. DetectUdpAppDetailed re-uses the cached
     // parse instead of re-decoding the same payload. Invalidated at the top of every
@@ -296,6 +302,10 @@ public static class PacketLineFormatter
     public static void SetHttpPredicate(HttpAppPredicate p)
     {
         _httpPredicate = p;
+        // The one-liner always needs Host; add Content-Type only when a Content-Type filter is
+        // active. User-Agent / Content-Length are never read on the hot path.
+        _httpHotFields = HttpParseFields.Host
+            | (p != null && p.ContentTypeRegex != null ? HttpParseFields.ContentType : HttpParseFields.None);
     }
 
     /// <summary>
@@ -338,6 +348,7 @@ public static class PacketLineFormatter
         _dhcpPredicate = null;
         _smb2Predicate = null;
         _icmpPredicate = null;
+        _httpHotFields = HttpParseFields.Host;
     }
 
     /// <summary>True when any application-layer predicate is configured.</summary>
@@ -2010,7 +2021,7 @@ public static class PacketLineFormatter
             if (_httpPredicate != null)
             {
                 HttpContext hctx;
-                if (HttpParser.TryParseHttp(data, dataLen, out hctx))
+                if (HttpParser.TryParseHttp(data, dataLen, _httpHotFields, out hctx))
                 {
                     if (!_httpPredicate.Evaluate(ref hctx)) return FilteredByPredicate;
                     return HttpParser.FormatHttpFromContext(ref hctx, connKey);
@@ -2107,8 +2118,10 @@ public static class PacketLineFormatter
         // Delegates to HttpParser. The single-call entry-point is preserved so the
         // FormatDetailedLineInto TCP branch (which doesn't have access to the
         // cached HttpContext from the IPv4 fast-path gate) keeps working unchanged.
+        // Uses the same tier/predicate-gated field mask as the fast-path gate so the
+        // cached-vs-fresh parse produce identical output.
         HttpContext ctx;
-        if (!HttpParser.TryParseHttp(data, dataLen, out ctx)) return null;
+        if (!HttpParser.TryParseHttp(data, dataLen, _httpHotFields, out ctx)) return null;
         return HttpParser.FormatHttpFromContext(ref ctx, connKey);
     }
 
@@ -2880,7 +2893,7 @@ public static class PacketLineFormatter
             && (HttpParser.IsHttpPort(srcPort) || HttpParser.IsHttpPort(dstPort)))
         {
             HttpContext hctx;
-            if (HttpParser.TryParseHttp(transportPayload, dataLen, out hctx))
+            if (HttpParser.TryParseHttp(transportPayload, dataLen, _httpHotFields, out hctx))
             {
                 if (!_httpPredicate.Evaluate(ref hctx)) return false;
                 _httpCtxCache = hctx;
