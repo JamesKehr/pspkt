@@ -57,7 +57,7 @@ SMB2 <COMMAND> <Request|Response>[, <STATUS> (0x…)][, <command-specific detail
 
 The NT status is shown only on **responses** whose status isn't `STATUS_SUCCESS`. Compounded (chained) messages are each rendered and joined with ` | `.
 
-The parser maintains **per-capture TID→tree-name and FID→file-name tables**: a TreeConnect request's share path is correlated (by session + message id) to the TreeId assigned in its response, and a Create request's filename to the FileId in its response. Later commands that carry that FileId (Close, Read, Write, …) then display the resolved name plus the FileId as a GUID string, e.g. `File: docs\report.docx (00001a2b-0000-0000-0000-000000000000)`. When the establishing packet wasn't captured, just the GUID is shown; a body truncated by `-PacketSize` before the FileId shows `File: ?`. The tables reset at the start of every capture.
+The parser maintains **per-capture TID→tree-name and FID→file-name tables**: a TreeConnect request's share path is correlated (by session + message id) to the TreeId assigned in its response, and a Create request's filename to the FileId in its response. Later commands that carry that FileId (Close, Read, Write, …) then display the resolved name, e.g. `File: docs\report.docx`. When the establishing packet wasn't captured (so the name is unknown), the FileId is shown as a GUID string instead; a body truncated by `-PacketSize` before the FileId shows `File: ?`. The tables reset at the start of every capture.
 
 | Command | Example line |
 |---|---|
@@ -66,16 +66,18 @@ The parser maintains **per-capture TID→tree-name and FID→file-name tables**:
 | SESSION_SETUP (req) | `SMB2 SESSION_SETUP Request, Signing enabled` |
 | TREE_CONNECT (req) | `SMB2 TREE_CONNECT Request, \\server\share` |
 | CREATE (req) | `SMB2 CREATE Request, File: docs\report.docx; Disposition: FILE_OPEN` |
-| CREATE (resp) | `SMB2 CREATE Response, File: docs\report.docx (00001a2b-0000-0000-0000-000000000000); Action: FILE_OPENED` |
-| CLOSE (req) | `SMB2 CLOSE Request, File: docs\report.docx (00001a2b-…)` |
-| READ (req) | `SMB2 READ Request, Len: 65536; Off: 0; File: docs\report.docx (00001a2b-…)` |
-| WRITE (resp) | `SMB2 WRITE Response, File: docs\report.docx (00001a2b-…); Len: 65536` |
+| CREATE (resp) | `SMB2 CREATE Response, File: docs\report.docx; Action: FILE_OPENED` |
+| CLOSE (req) | `SMB2 CLOSE Request, File: docs\report.docx` |
+| READ (req) | `SMB2 READ Request, Len: 65536; Off: 0; File: docs\report.docx` |
+| WRITE (resp) | `SMB2 WRITE Response, File: docs\report.docx; Len: 65536` |
 | IOCTL | `SMB2 IOCTL Request, FSCTL_PIPE_TRANSCEIVE (0x0011c017)` |
-| QUERY_DIRECTORY (req) | `SMB2 QUERY_DIRECTORY Request, File: … (GUID); FileIdBothDirectoryInformation (0x25), Pattern: *` |
-| QUERY_INFO (req) | `SMB2 QUERY_INFO Request, INFO_FILE\FileAllInformation, File: … (GUID)` |
-| CHANGE_NOTIFY (req) | `SMB2 CHANGE_NOTIFY Request, File: … (GUID); Completion Filter: 0x00000017, FILE_NAME, DIR_NAME, ATTRIBUTES, LAST_WRITE` |
+| QUERY_DIRECTORY (req) | `SMB2 QUERY_DIRECTORY Request, File: … ; FileIdBothDirectoryInformation (0x25), Pattern: *` |
+| QUERY_INFO (req) | `SMB2 QUERY_INFO Request, INFO_FILE\FileAllInformation, File: …` |
+| CHANGE_NOTIFY (req) | `SMB2 CHANGE_NOTIFY Request, File: … ; Completion Filter: 0x00000017, FILE_NAME, DIR_NAME, ATTRIBUTES, LAST_WRITE` |
 | OPLOCK_BREAK (lease) | `SMB2 OPLOCK_BREAK Request, Lease Break: RH -> R; LeaseKey: …` |
 | Encrypted | `SMB2 Encrypted, SessId 0x…, len …` |
+
+For an **unresolved** handle the name is replaced by the FileId GUID, e.g. `File: 00001a2b-0000-0000-0000-000000000000`.
 
 `LOGOFF`, `TREE_DISCONNECT`, `CANCEL`, and `ECHO` render as the header line only (no command-specific detail).
 
