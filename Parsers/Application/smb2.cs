@@ -332,6 +332,10 @@ public static class Smb2Parser
     private static readonly Dictionary<U64Pair, string> _treeNames = new Dictionary<U64Pair, string>();
     // (FileId persistent, FileId volatile) -> filename.
     private static readonly Dictionary<U64Pair, string> _fileNames = new Dictionary<U64Pair, string>();
+    // (SessionId, MessageId) -> packed (InfoType << 8 | FileInfoClass) recorded from a
+    // QUERY_DIRECTORY / QUERY_INFO request, so the Analysis detail tree can parse the matching
+    // response output buffer (whose structure depends on the requested class).
+    private static readonly Dictionary<U64Pair, int> _pendingInfo = new Dictionary<U64Pair, int>();
 
     /// <summary>
     /// Clears all stateful TID/FID name tables. Called at capture start so discovered
@@ -344,6 +348,34 @@ public static class Smb2Parser
             _pending.Clear();
             _treeNames.Clear();
             _fileNames.Clear();
+            _pendingInfo.Clear();
+        }
+    }
+
+    // Records the (InfoType, FileInfoClass) of a QUERY_DIRECTORY / QUERY_INFO request so the
+    // matching response's output buffer can be parsed. Not consumed on read (the detail tree may
+    // re-parse the response as the user navigates); bounded + cleared with the other state.
+    private static void RecordInfoClass(ulong sessionId, ulong messageId, byte infoType, byte infoClass)
+    {
+        lock (_stateLock)
+        {
+            U64Pair key = new U64Pair(sessionId, messageId);
+            if (_pendingInfo.Count >= StateCap && !_pendingInfo.ContainsKey(key)) return;
+            _pendingInfo[key] = (infoType << 8) | infoClass;
+        }
+    }
+
+    // Returns true and outputs (infoType, infoClass) when a request's class was recorded.
+    private static bool LookupInfoClass(ulong sessionId, ulong messageId, out byte infoType, out byte infoClass)
+    {
+        infoType = 0; infoClass = 0;
+        lock (_stateLock)
+        {
+            int packed;
+            if (!_pendingInfo.TryGetValue(new U64Pair(sessionId, messageId), out packed)) return false;
+            infoType = (byte)((packed >> 8) & 0xFF);
+            infoClass = (byte)(packed & 0xFF);
+            return true;
         }
     }
 
@@ -751,6 +783,7 @@ public static class Smb2Parser
         }
         if (bodyLen < 32) return;
         byte infoClass = data[off + 2];
+        RecordInfoClass(sessionId, messageId, 0, infoClass);
         ushort nameOffset = ReadUInt16LE(data, off + 24);
         ushort nameLength = ReadUInt16LE(data, off + 26);
         string pattern = ExtractName(data, hdr + nameOffset, nameLength, off, cmdEnd);
@@ -784,6 +817,7 @@ public static class Smb2Parser
         if (bodyLen < 4) return;
         byte infoType = data[off + 2];
         byte infoClass = data[off + 3];
+        if (isQuery) RecordInfoClass(sessionId, messageId, infoType, infoClass);
         int fidOff = isQuery ? 24 : 16; // QUERY_INFO FileId@24, SET_INFO FileId@16
         sb.Append(", ").Append(InfoTypeName(infoType)).Append('\\').Append(InfoClassName(infoType, infoClass));
         sb.Append(isQuery ? ", " : "; ");
@@ -886,6 +920,20 @@ public static class Smb2Parser
         if (length <= 0 || start < rangeStart || start + length > rangeEnd || rangeEnd > data.Length) return null;
         try { return Encoding.Unicode.GetString(data, start, length & ~1); }
         catch { return null; }
+    }
+
+    // Like ExtractName, but clamps a declared name length to what's actually present in
+    // [start, rangeEnd) and appends " (truncated)" when the buffer was cut short (e.g. a
+    // STATUS_BUFFER_OVERFLOW response). Returns the partial name instead of failing outright.
+    private static string ExtractNameClamped(byte[] data, int start, int declaredLength, int rangeEnd)
+    {
+        if (start < 0 || start > rangeEnd || rangeEnd > data.Length) return null;
+        int avail = rangeEnd - start;
+        int use = (declaredLength < avail) ? declaredLength : avail;
+        if (use <= 0) return "";
+        string s = ExtractName(data, start, use, start, rangeEnd);
+        if (s == null) return null;
+        return (use < declaredLength) ? s + " (truncated)" : s;
     }
 
     private static string StatusName(uint status)
@@ -1156,10 +1204,10 @@ public static class Smb2Parser
             case 0x0009: BuildWriteBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
             case 0x000A: if (bodyLen >= 24) node.AddLeaf(FileIdTreeLine(data, off + 8, cmdEnd)); break; // LOCK
             case 0x000B: BuildIoctlBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
-            case 0x000E: BuildQueryDirectoryBody(node, data, cmdEnd, hdr, off, bodyLen, isResponse); break;
+            case 0x000E: BuildQueryDirectoryBody(node, data, cmdEnd, hdr, off, bodyLen, isResponse, sessionId, messageId); break;
             case 0x000F: BuildChangeNotifyBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
-            case 0x0010: BuildQueryInfoBody(node, data, cmdEnd, off, bodyLen, isResponse, true); break;
-            case 0x0011: BuildQueryInfoBody(node, data, cmdEnd, off, bodyLen, isResponse, false); break;
+            case 0x0010: BuildQueryInfoBody(node, data, cmdEnd, hdr, off, bodyLen, isResponse, true, sessionId, messageId); break;
+            case 0x0011: BuildQueryInfoBody(node, data, cmdEnd, hdr, off, bodyLen, isResponse, false, sessionId, messageId); break;
             case 0x0012: BuildOplockBreakBody(node, data, cmdEnd, off, bodyLen, isResponse); break;
             // LOGOFF / TREE_DISCONNECT / CANCEL / ECHO: structure size only.
         }
@@ -1390,7 +1438,8 @@ public static class Smb2Parser
         }
     }
 
-    private static void BuildQueryDirectoryBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int hdr, int off, int bodyLen, bool isResponse)
+    private static void BuildQueryDirectoryBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int hdr, int off, int bodyLen,
+        bool isResponse, ulong sessionId, ulong messageId)
     {
         if (!isResponse)
         {
@@ -1409,10 +1458,89 @@ public static class Smb2Parser
         else
         {
             if (bodyLen < 8) return;
-            n.AddLeaf("Output Buffer Offset: 0x" + ReadUInt16LE(data, off + 2).ToString("x4"));
-            n.AddLeaf("Output Buffer Length: " + ReadUInt32LE(data, off + 4));
-            // File/directory info entries are parsed in Phase 2c.
+            ushort obOff = ReadUInt16LE(data, off + 2);
+            uint obLen = ReadUInt32LE(data, off + 4);
+            n.AddLeaf("Output Buffer Offset: 0x" + obOff.ToString("x4"));
+            n.AddLeaf("Output Buffer Length: " + obLen);
+            int bufStart = hdr + obOff;
+            int bufEnd = bufStart + (int)obLen;
+            if (bufEnd > cmdEnd) bufEnd = cmdEnd;
+            if (obLen == 0 || bufStart < off || bufStart >= bufEnd) return;
+            byte infoType, infoClass;
+            if (LookupInfoClass(sessionId, messageId, out infoType, out infoClass))
+                BuildDirEntries(n, data, bufStart, bufEnd, infoClass);
+            else
+                n.AddLeaf("Directory Entries: (request not captured — information class unknown)");
         }
+    }
+
+    // Parses the NextEntryOffset-linked list of directory entries in a QUERY_DIRECTORY response
+    // output buffer, per the FileInformationClass requested. Entry count is capped for display.
+    private static void BuildDirEntries(BoxyBox.TreeNode parent, byte[] data, int start, int end, byte infoClass)
+    {
+        const int MaxEntries = 500;
+        int pos = start;
+        int shown = 0;
+        int total = 0;
+        int guard = 0;
+        var entries = new BoxyBox.TreeNode("Directory Entries", "SMB2.DirEntries", false);
+        // `pos <= end - 4` (not `pos + 4 <= end`) so a pos near Int32.MaxValue can't overflow the
+        // loop condition; NextEntryOffset math is done in long to avoid wrap-around.
+        while (pos >= start && pos <= end - 4 && guard++ < 200000)
+        {
+            uint next = ReadUInt32LE(data, pos);
+            long entryEndL = (next == 0) ? end : (long)pos + next;
+            int entryEnd = (entryEndL > end || entryEndL <= pos) ? end : (int)entryEndL;
+            total++;
+            if (shown < MaxEntries) { if (BuildOneDirEntry(entries, data, pos, entryEnd, infoClass, total)) shown++; }
+            if (next == 0) break;
+            long nextPos = (long)pos + next;
+            if (nextPos <= pos || nextPos > end) break;
+            pos = (int)nextPos;
+        }
+        entries.Text = "Directory Entries (" + total + ")" + (total > shown ? " — showing first " + shown : "");
+        parent.Add(entries);
+    }
+
+    private static bool BuildOneDirEntry(BoxyBox.TreeNode parent, byte[] data, int pos, int end, byte infoClass, int index)
+    {
+        // FileNamesInformation: NextEntryOffset(4), FileIndex(4), FileNameLength(4), FileName.
+        if (infoClass == 0x0C)
+        {
+            if (pos + 12 > end) return false;
+            uint nl0 = ReadUInt32LE(data, pos + 8);
+            string nm = ExtractName(data, pos + 12, (int)nl0, pos + 12, end);
+            parent.Add(new BoxyBox.TreeNode("[" + index + "] " + (string.IsNullOrEmpty(nm) ? "?" : nm), null, false));
+            return true;
+        }
+        // Common FileXxxDirectoryInformation layout (timestamps at +8..+32, EndOfFile@40,
+        // FileAttributes@56, FileNameLength@60; FileName offset varies by class).
+        if (pos + 64 > end) return false;
+        int fnOff;
+        switch (infoClass)
+        {
+            case 0x01: fnOff = 64;  break; // FileDirectoryInformation
+            case 0x02: fnOff = 68;  break; // FileFullDirectoryInformation (+EaSize)
+            case 0x03: fnOff = 94;  break; // FileBothDirectoryInformation (+EaSize+ShortName)
+            case 0x25: fnOff = 104; break; // FileIdBothDirectoryInformation (+FileId)
+            case 0x26: fnOff = 80;  break; // FileIdFullDirectoryInformation (+FileId)
+            default:   fnOff = 64;  break;
+        }
+        ulong eof = ReadUInt64LE(data, pos + 40);
+        uint attr = ReadUInt32LE(data, pos + 56);
+        uint nameLen = ReadUInt32LE(data, pos + 60);
+        string name = ExtractName(data, pos + fnOff, (int)nameLen, pos + fnOff, end);
+        var e = new BoxyBox.TreeNode("[" + index + "] " + (string.IsNullOrEmpty(name) ? "?" : name), null, false);
+        e.AddLeaf("End of File: " + eof);
+        e.AddLeaf("File Attributes: 0x" + attr.ToString("x8") + FileAttrSummary(attr));
+        e.AddLeaf("Last Write Time: " + FileTime(data, pos + 24, end));
+        if (infoClass == 0x25 || infoClass == 0x26)
+        {
+            int idOff = (infoClass == 0x25) ? 96 : 72;
+            if (pos + idOff + 8 <= end) e.AddLeaf("File Id: 0x" + ReadUInt64LE(data, pos + idOff).ToString("x"));
+        }
+        parent.Add(e);
+        return true;
     }
 
     private static void BuildChangeNotifyBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse)
@@ -1437,7 +1565,8 @@ public static class Smb2Parser
         }
     }
 
-    private static void BuildQueryInfoBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int off, int bodyLen, bool isResponse, bool isQuery)
+    private static void BuildQueryInfoBody(BoxyBox.TreeNode n, byte[] data, int cmdEnd, int hdr, int off, int bodyLen,
+        bool isResponse, bool isQuery, ulong sessionId, ulong messageId)
     {
         if (!isResponse)
         {
@@ -1448,13 +1577,177 @@ public static class Smb2Parser
             n.AddLeaf("File Info Class: " + InfoClassName(it, ic) + " (0x" + ic.ToString("x2") + ")");
             int fidOff = isQuery ? 24 : 16; // QUERY_INFO FileId@24, SET_INFO FileId@16
             n.AddLeaf(FileIdTreeLine(data, off + fidOff, cmdEnd));
+            // SET_INFO request: the class AND the buffer being set are both in the request.
+            if (!isQuery && bodyLen >= 32)
+            {
+                uint bufLen = ReadUInt32LE(data, off + 4);
+                ushort bufOff = ReadUInt16LE(data, off + 8);
+                int bs = hdr + bufOff;
+                int be = bs + (int)bufLen;
+                if (be > cmdEnd) be = cmdEnd;
+                if (bufLen > 0 && bs >= off && bs < be) BuildInfoResult(n, data, bs, be, it, ic);
+            }
         }
-        else
+        else if (isQuery) // QUERY_INFO response carries the output buffer; SET_INFO response is structure-only.
         {
             if (bodyLen < 8) return;
-            n.AddLeaf("Output Buffer Offset: 0x" + ReadUInt16LE(data, off + 2).ToString("x4"));
-            n.AddLeaf("Output Buffer Length: " + ReadUInt32LE(data, off + 4));
-            // Info result (FileInfoClass content) is parsed in Phase 2c.
+            ushort obOff = ReadUInt16LE(data, off + 2);
+            uint obLen = ReadUInt32LE(data, off + 4);
+            n.AddLeaf("Output Buffer Offset: 0x" + obOff.ToString("x4"));
+            n.AddLeaf("Output Buffer Length: " + obLen);
+            if (obLen == 0) return;
+            int bs = hdr + obOff;
+            int be = bs + (int)obLen;
+            if (be > cmdEnd) be = cmdEnd;
+            if (bs < off || bs >= be) return;
+            byte it, ic;
+            if (LookupInfoClass(sessionId, messageId, out it, out ic)) BuildInfoResult(n, data, bs, be, it, ic);
+            else n.AddLeaf("Info: (request not captured — information class unknown)");
+        }
+    }
+
+    // Parses a single QUERY_INFO / SET_INFO info structure (file or filesystem) into a subtree.
+    private static void BuildInfoResult(BoxyBox.TreeNode parent, byte[] data, int start, int end, byte infoType, byte infoClass)
+    {
+        var node = new BoxyBox.TreeNode(InfoTypeName(infoType) + "\\" + InfoClassName(infoType, infoClass), "SMB2.Info", false);
+        if (infoType == 2) BuildFsInfo(node, data, start, end, infoClass);
+        else BuildFileInfo(node, data, start, end, infoClass);
+        parent.Add(node);
+    }
+
+    private static void BuildFileInfo(BoxyBox.TreeNode node, byte[] data, int start, int end, byte infoClass)
+    {
+        switch (infoClass)
+        {
+            case 0x04: // FileBasicInformation
+                if (start + 36 > end) break;
+                node.AddLeaf("Creation Time: " + FileTime(data, start, end));
+                node.AddLeaf("Last Access Time: " + FileTime(data, start + 8, end));
+                node.AddLeaf("Last Write Time: " + FileTime(data, start + 16, end));
+                node.AddLeaf("Change Time: " + FileTime(data, start + 24, end));
+                node.AddLeaf("File Attributes: 0x" + ReadUInt32LE(data, start + 32).ToString("x8") + FileAttrSummary(ReadUInt32LE(data, start + 32)));
+                break;
+            case 0x05: // FileStandardInformation
+                if (start + 22 > end) break;
+                node.AddLeaf("Allocation Size: " + ReadUInt64LE(data, start));
+                node.AddLeaf("End of File: " + ReadUInt64LE(data, start + 8));
+                node.AddLeaf("Number of Links: " + ReadUInt32LE(data, start + 16));
+                node.AddLeaf("Delete Pending: " + (data[start + 20] != 0));
+                node.AddLeaf("Directory: " + (data[start + 21] != 0));
+                break;
+            case 0x06: // FileInternalInformation
+                if (start + 8 > end) break;
+                node.AddLeaf("Index Number: 0x" + ReadUInt64LE(data, start).ToString("x"));
+                break;
+            case 0x07: // FileEaInformation
+                if (start + 4 > end) break;
+                node.AddLeaf("Ea Size: " + ReadUInt32LE(data, start));
+                break;
+            case 0x0E: // FilePositionInformation
+                if (start + 8 > end) break;
+                node.AddLeaf("Current Byte Offset: " + ReadUInt64LE(data, start));
+                break;
+            case 0x22: // FileNetworkOpenInformation
+                if (start + 56 > end) break;
+                node.AddLeaf("Creation Time: " + FileTime(data, start, end));
+                node.AddLeaf("Last Access Time: " + FileTime(data, start + 8, end));
+                node.AddLeaf("Last Write Time: " + FileTime(data, start + 16, end));
+                node.AddLeaf("Change Time: " + FileTime(data, start + 24, end));
+                node.AddLeaf("Allocation Size: " + ReadUInt64LE(data, start + 32));
+                node.AddLeaf("End of File: " + ReadUInt64LE(data, start + 40));
+                node.AddLeaf("File Attributes: 0x" + ReadUInt32LE(data, start + 48).ToString("x8") + FileAttrSummary(ReadUInt32LE(data, start + 48)));
+                break;
+            case 0x15: // FileAlternateNameInformation
+            case 0x30: // FileNormalizedNameInformation
+            {
+                if (start + 4 > end) break;
+                uint nl = ReadUInt32LE(data, start);
+                node.AddLeaf("Name: " + (ExtractNameClamped(data, start + 4, (int)nl, end) ?? "?"));
+                break;
+            }
+            case 0x12: // FileAllInformation — composite
+                if (start + 40 > end) break;
+                node.AddLeaf("Creation Time: " + FileTime(data, start, end));
+                node.AddLeaf("Last Write Time: " + FileTime(data, start + 16, end));
+                node.AddLeaf("File Attributes: 0x" + ReadUInt32LE(data, start + 32).ToString("x8") + FileAttrSummary(ReadUInt32LE(data, start + 32)));
+                if (start + 64 <= end)
+                {
+                    node.AddLeaf("Allocation Size: " + ReadUInt64LE(data, start + 40));
+                    node.AddLeaf("End of File: " + ReadUInt64LE(data, start + 48));
+                }
+                if (start + 100 <= end)
+                {
+                    uint anl = ReadUInt32LE(data, start + 96);
+                    node.AddLeaf("Name: " + (ExtractNameClamped(data, start + 100, (int)anl, end) ?? "?"));
+                }
+                break;
+            // --- SET_INFO classes ---
+            case 0x0A: // FileRenameInformation
+                if (start + 20 > end) break;
+                node.AddLeaf("Replace If Exists: " + (data[start] != 0));
+                node.AddLeaf("Root Directory: 0x" + ReadUInt64LE(data, start + 8).ToString("x"));
+                uint rnl = ReadUInt32LE(data, start + 16);
+                node.AddLeaf("New Name: " + (ExtractName(data, start + 20, (int)rnl, start + 20, end) ?? "?"));
+                break;
+            case 0x0D: // FileDispositionInformation
+                if (start + 1 > end) break;
+                node.AddLeaf("Delete Pending: " + (data[start] != 0));
+                break;
+            case 0x13: // FileAllocationInformation
+                if (start + 8 > end) break;
+                node.AddLeaf("Allocation Size: " + ReadUInt64LE(data, start));
+                break;
+            case 0x14: // FileEndOfFileInformation
+                if (start + 8 > end) break;
+                node.AddLeaf("End of File: " + ReadUInt64LE(data, start));
+                break;
+            default:
+                node.AddLeaf("(class 0x" + infoClass.ToString("x2") + " not decoded; " + (end - start) + " bytes)");
+                break;
+        }
+    }
+
+    private static void BuildFsInfo(BoxyBox.TreeNode node, byte[] data, int start, int end, byte infoClass)
+    {
+        switch (infoClass)
+        {
+            case 0x01: // FileFsVolumeInformation
+                if (start + 18 > end) break;
+                node.AddLeaf("Volume Creation Time: " + FileTime(data, start, end));
+                node.AddLeaf("Volume Serial Number: 0x" + ReadUInt32LE(data, start + 8).ToString("x8"));
+                uint vll = ReadUInt32LE(data, start + 12);
+                node.AddLeaf("Volume Label: " + (ExtractNameClamped(data, start + 18, (int)vll, end) ?? ""));
+                break;
+            case 0x03: // FileFsSizeInformation
+                if (start + 24 > end) break;
+                node.AddLeaf("Total Allocation Units: " + ReadUInt64LE(data, start));
+                node.AddLeaf("Available Allocation Units: " + ReadUInt64LE(data, start + 8));
+                node.AddLeaf("Sectors Per Allocation Unit: " + ReadUInt32LE(data, start + 16));
+                node.AddLeaf("Bytes Per Sector: " + ReadUInt32LE(data, start + 20));
+                break;
+            case 0x04: // FileFsDeviceInformation
+                if (start + 8 > end) break;
+                node.AddLeaf("Device Type: " + ReadUInt32LE(data, start));
+                node.AddLeaf("Characteristics: 0x" + ReadUInt32LE(data, start + 4).ToString("x8"));
+                break;
+            case 0x05: // FileFsAttributeInformation
+                if (start + 12 > end) break;
+                node.AddLeaf("FS Attributes: 0x" + ReadUInt32LE(data, start).ToString("x8"));
+                node.AddLeaf("Max Component Name Length: " + ReadUInt32LE(data, start + 4));
+                uint fsnl = ReadUInt32LE(data, start + 8);
+                node.AddLeaf("File System Name: " + (ExtractNameClamped(data, start + 12, (int)fsnl, end) ?? ""));
+                break;
+            case 0x07: // FileFsFullSizeInformation
+                if (start + 32 > end) break;
+                node.AddLeaf("Total Allocation Units: " + ReadUInt64LE(data, start));
+                node.AddLeaf("Caller Available Units: " + ReadUInt64LE(data, start + 8));
+                node.AddLeaf("Actual Available Units: " + ReadUInt64LE(data, start + 16));
+                node.AddLeaf("Sectors Per Allocation Unit: " + ReadUInt32LE(data, start + 24));
+                node.AddLeaf("Bytes Per Sector: " + ReadUInt32LE(data, start + 28));
+                break;
+            default:
+                node.AddLeaf("(FS class 0x" + infoClass.ToString("x2") + " not decoded; " + (end - start) + " bytes)");
+                break;
         }
     }
 
