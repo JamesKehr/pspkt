@@ -1754,13 +1754,16 @@ public static class PacketLineFormatter
         }
         else if (transportProto == 6) // TCP
         {
-            // Note: parsed TCP app protocols (DNS over TCP on 53, HTTP on 80/8080/8000/8888,
-            // SMB2 on 445) are intentionally NOT hinted here. A packet on one of those ports
-            // only reaches this hint fallback when it carries no app-layer message (handshake /
-            // ACK / FIN segments), which is a pure transport event and must render as a plain
-            // "TCP [flags] ..." segment rather than "SMB: TCP [flags] ..." / "HTTP: TCP ..." /
-            // "DNS: TCP ...".
-            if (srcPort == 443   || dstPort == 443)   return "HTTPS";
+            // Note: parsed TCP app protocols (TLS on 443/8443/993/995/465/636/853/5986, DNS over
+            // TCP on 53, HTTP on 80/8080/8000/8888, SMB2 on 445) are intentionally NOT hinted
+            // here. A packet on one of those ports only reaches this hint fallback when it carries
+            // no app-layer message (handshake / ACK / FIN segments), which is a pure transport
+            // event and must render as a plain "TCP [flags] ..." segment rather than
+            // "HTTPS: TCP [flags] ..." / "IMAPS: TCP ..." / "SMB: TCP ..." / "HTTP: TCP ...".
+            // TLS records (on any port) are detected by content and shown by the TLS parser; a
+            // payload-less segment on a TLS-wrapped port is pure transport, and the port number
+            // already identifies the tunneled service (443=HTTPS, 993=IMAPS, 5986=WinRM-S, etc.).
+            // WinRM (5985) stays hinted because it is cleartext HTTP, not TLS.
             if (srcPort == 22    || dstPort == 22)    return "SSH";
             if (srcPort == 23    || dstPort == 23)    return "Telnet";
             if (srcPort == 25    || dstPort == 25)    return "SMTP";
@@ -1770,18 +1773,11 @@ public static class PacketLineFormatter
             if (srcPort == 139   || dstPort == 139)   return "NetBIOS-SSN";
             if (srcPort == 143   || dstPort == 143)   return "IMAP";
             if (srcPort == 389   || dstPort == 389)   return "LDAP";
-            if (srcPort == 636   || dstPort == 636)   return "LDAPS";
-            if (srcPort == 853   || dstPort == 853)   return "DoT";
-            if (srcPort == 993   || dstPort == 993)   return "IMAPS";
-            if (srcPort == 995   || dstPort == 995)   return "POP3S";
             if (srcPort == 3306  || dstPort == 3306)  return "MySQL";
             if (srcPort == 3389  || dstPort == 3389)  return "RDP";
             if (srcPort == 5432  || dstPort == 5432)  return "PostgreSQL";
             if (srcPort == 5985  || dstPort == 5985)  return "WinRM";
-            if (srcPort == 5986  || dstPort == 5986)  return "WinRM-S";
-            if (srcPort == 8443  || dstPort == 8443)  return "HTTPS-ALT";
             if (srcPort == 3343  || dstPort == 3343)  return "CSVFS-RCP";
-            if (srcPort == 465   || dstPort == 465)   return "SMTPS";
             if (srcPort == 587   || dstPort == 587)   return "SMTP-SUB";
         }
         return null;
