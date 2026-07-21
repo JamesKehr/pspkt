@@ -1119,13 +1119,18 @@ public static class PacketLineFormatter
                 transportDetail = TcpParser.FormatTcpDetailed(ipv6Flags, (ushort)ipv6SrcPort, (ushort)ipv6DstPort, ipv6Seq, ipv6Ack, ipv6Win, ipv6DataLen, rawPacketData, ipv6OptOffset >= 0 ? ipv6OptOffset : 0, ipv6OptLen);
                 byte[] ipv6Payload = null;
                 int ipv6PayLen = 0;
-                if (ipv6DataLen > 0 && ipv6TransportOffset + ipv6DataOffset < rawEnd
-                    && NeedsTcpPayload(ipv6SrcPort, ipv6DstPort))
+                if (ipv6DataLen > 0 && ipv6TransportOffset + ipv6DataOffset < rawEnd)
                 {
                     int payloadLen = Math.Min(ipv6DataLen, rawEnd - ipv6TransportOffset - ipv6DataOffset);
-                    ipv6Payload = RentPayloadBuffer(payloadLen);
-                    Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + ipv6DataOffset, ipv6Payload, 0, payloadLen);
-                    ipv6PayLen = payloadLen;
+                    // Port-based detectors, or a zero-copy TLS peek so content-based TLS on any
+                    // port is picked up without copying every TCP payload (mirrors the IPv4 path).
+                    if (NeedsTcpPayload(ipv6SrcPort, ipv6DstPort)
+                        || TlsParser.LooksLikeTls(rawPacketData, ipv6TransportOffset + ipv6DataOffset, payloadLen))
+                    {
+                        ipv6Payload = RentPayloadBuffer(payloadLen);
+                        Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + ipv6DataOffset, ipv6Payload, 0, payloadLen);
+                        ipv6PayLen = payloadLen;
+                    }
                 }
                 appDetail = DetectTcpAppDetailed(ipv6SrcPort, ipv6DstPort, ipv6Payload, ipv6PayLen, ipv6Src, ipv6Dst);
             }
@@ -1338,8 +1343,11 @@ public static class PacketLineFormatter
                     HttpParser.BuildConnKey(srcAddr, srcPort, dstAddr, dstPort));
                 if (suffix != null) appLayer = 4;
             }
-            if (suffix == null && (IsTlsPort(srcPort) || IsTlsPort(dstPort)))
+            if (suffix == null && TlsParser.LooksLikeTls(udpData, dataLen))
             {
+                // Content-based (not port-gated): detect TLS on any TCP stream carrying real TLS
+                // records, so HTTPS and TLS-on-any-port both get the TLS one-liner. LooksLikeTls
+                // is a cheap 4-byte header check that returns false for non-TLS payloads.
                 suffix = DetectTlsContent(udpData, dataLen);
                 if (suffix != null) appLayer = 4;
             }
@@ -1540,6 +1548,24 @@ public static class PacketLineFormatter
                             HttpParser.BuildConnKey(src, sp, dst, dp));
                         if (httpStr != null)
                             return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, httpStr, 4, lineCounter);
+                    }
+                }
+
+                // For TCP carrying TLS records (content-based, any port), show the TLS one-liner.
+                // Mirrors the IPv4 Default path: a zero-copy LooksLikeTls peek gates the payload
+                // copy so non-TLS TCP traffic pays nothing.
+                if (nextHeader == 6 && rawOffset + rawLength >= transOff + 20)
+                {
+                    int tlsTcpDataOff = (data[transOff + 12] >> 4) * 4;
+                    int tlsPayloadStart = transOff + tlsTcpDataOff;
+                    int tlsLen = (rawOffset + rawLength) - tlsPayloadStart;
+                    if (tlsTcpDataOff >= 20 && tlsLen > 0 && TlsParser.LooksLikeTls(data, tlsPayloadStart, tlsLen))
+                    {
+                        byte[] tlsPayload = RentPayloadBuffer(tlsLen);
+                        Buffer.BlockCopy(data, tlsPayloadStart, tlsPayload, 0, tlsLen);
+                        string tlsStr = DetectTlsContent(tlsPayload, tlsLen);
+                        if (tlsStr != null)
+                            return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, tlsStr, 4, lineCounter);
                     }
                 }
 
@@ -1803,7 +1829,7 @@ public static class PacketLineFormatter
             string http = DetectHttpContent(data, dataLen, srcPort, dstPort);
             if (http != null) return http;
         }
-        if (IsTlsPort(srcPort) || IsTlsPort(dstPort))
+        if (TlsParser.LooksLikeTls(data, dataLen))
         {
             string tls = DetectTlsContent(data, dataLen);
             if (tls != null) return tls;
@@ -1901,8 +1927,43 @@ public static class PacketLineFormatter
             return null;
         if (dataLen > data.Length) dataLen = data.Length;
 
-        // DNS over TCP (port 53): 2-byte length prefix + DNS message. Detected by port before
-        // the content-based HTTP/TLS probes so it isn't misclassified.
+        // TLS is content-based (any port) and is probed FIRST — before the port-based DNS/SMB2
+        // and content-based HTTP branches — so a TLS stream on a port that also matches a
+        // port-based parser (e.g. 53/445) parses as TLS instead of rendering as garbage. Matches
+        // the Default one-liner and Analysis dispatch ordering. A real HTTP request line (ASCII
+        // letter) or the SMB2 NetBIOS header (0x00) can't match the TLS signature; a DNS-over-TCP
+        // length prefix collision is possible but rare (needs a ~5120-6143 byte message whose
+        // prefix+txid match content-type 20-23 + version 0x0300-0x0304) and affects only the
+        // summary line, so it's accepted for cross-level consistency.
+        if (TlsParser.LooksLikeTls(data, dataLen))
+        {
+            // IPv4 fast path: predicate already ran in FormatSinglePacketInto and
+            // stashed the parsed context here. Format from cache to avoid a re-parse.
+            if (_tlsCtxCacheValid)
+            {
+                _tlsCtxCacheValid = false;
+                return TlsParser.FormatTlsFromContext(ref _tlsCtxCache, dataLen);
+            }
+
+            // IPv6 path (or any case where the early gate didn't run): evaluate inline.
+            // FilteredByPredicate bubbles up through FormatDetailedLineInto to FormatBatch
+            // which rolls back any partial appends.
+            if (_tlsPredicate != null)
+            {
+                TlsContext tctx;
+                if (TlsParser.TryParseTls(data, dataLen, out tctx))
+                {
+                    if (!_tlsPredicate.Evaluate(ref tctx)) return FilteredByPredicate;
+                    return TlsParser.FormatTlsFromContext(ref tctx, dataLen);
+                }
+                // Unparseable TLS payload — fall through to whatever the legacy
+                // FormatTlsDetailed returns (will also be null in practice).
+            }
+
+            return FormatTlsDetailed(data, dataLen);
+        }
+
+        // DNS over TCP (port 53): 2-byte length prefix + DNS message.
         if (srcPort == 53 || dstPort == 53)
         {
             string dns = DetectTcpDns(data, dataLen, srcPort, dstPort, true);
@@ -1962,34 +2023,6 @@ public static class PacketLineFormatter
             }
 
             return FormatHttpDetailed(data, dataLen, connKey);
-        }
-
-        if (TlsParser.LooksLikeTls(data, dataLen))
-        {
-            // IPv4 fast path: predicate already ran in FormatSinglePacketInto and
-            // stashed the parsed context here. Format from cache to avoid a re-parse.
-            if (_tlsCtxCacheValid)
-            {
-                _tlsCtxCacheValid = false;
-                return TlsParser.FormatTlsFromContext(ref _tlsCtxCache, dataLen);
-            }
-
-            // IPv6 path (or any case where the early gate didn't run): evaluate inline.
-            // FilteredByPredicate bubbles up through FormatDetailedLineInto to FormatBatch
-            // which rolls back any partial appends.
-            if (_tlsPredicate != null)
-            {
-                TlsContext tctx;
-                if (TlsParser.TryParseTls(data, dataLen, out tctx))
-                {
-                    if (!_tlsPredicate.Evaluate(ref tctx)) return FilteredByPredicate;
-                    return TlsParser.FormatTlsFromContext(ref tctx, dataLen);
-                }
-                // Unparseable TLS payload — fall through to whatever the legacy
-                // FormatTlsDetailed returns (will also be null in practice).
-            }
-
-            return FormatTlsDetailed(data, dataLen);
         }
 
         return null;
@@ -2689,17 +2722,23 @@ public static class PacketLineFormatter
                                 // Only allocate the transport payload if an app-layer detector
                                 // (SMB2/HTTP/TLS) can actually consume it. Saves a per-packet
                                 // BlockCopy of the full TCP payload for the vast majority of
-                                // traffic that doesn't hit a known port.
-                                if (dataLen > 0 && NeedsTcpPayload(srcPort, dstPort))
+                                // traffic that doesn't hit a known port. TLS is content-based
+                                // (any port), so peek the first record bytes in the raw buffer
+                                // — a zero-copy check — and allocate when they look like TLS.
+                                if (dataLen > 0)
                                 {
                                     int payloadStart = transportOffset + tcpDataOffset;
                                     if (payloadStart < rawLength)
                                     {
                                         int copyLen = Math.Min(dataLen, rawLength - payloadStart);
-                                        transportPayload = RentPayloadBuffer(copyLen);
-                                        Buffer.BlockCopy(raw, rawOffset + payloadStart, transportPayload, 0, copyLen);
-                                        // Store actual length for parsers that accept dataLength parameter.
-                                        dataLen = copyLen;
+                                        if (NeedsTcpPayload(srcPort, dstPort)
+                                            || TlsParser.LooksLikeTls(raw, rawOffset + payloadStart, copyLen))
+                                        {
+                                            transportPayload = RentPayloadBuffer(copyLen);
+                                            Buffer.BlockCopy(raw, rawOffset + payloadStart, transportPayload, 0, copyLen);
+                                            // Store actual length for parsers that accept dataLength parameter.
+                                            dataLen = copyLen;
+                                        }
                                     }
                                 }
                             }

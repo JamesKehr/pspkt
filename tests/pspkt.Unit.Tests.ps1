@@ -960,6 +960,202 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         }
     }
 
+    Context 'TlsParser.BuildTlsDetailTree (Analysis Details)' {
+        BeforeAll {
+            function script:U16b([int]$v) { return [byte[]]@([byte](($v -shr 8) -band 0xff), [byte]($v -band 0xff)) }
+            function script:U24b([int]$v) { return [byte[]]@([byte](($v -shr 16) -band 0xff), [byte](($v -shr 8) -band 0xff), [byte]($v -band 0xff)) }
+
+            # ClientHello over a TLS 1.0 (0x0301) record: SNI=example.com, cipher 0x1301,
+            # supported_versions=0x0304 (true TLS 1.3), ALPN=h2.
+            $name = [System.Text.Encoding]::ASCII.GetBytes('example.com')
+            $sniList  = [byte[]]@(0x00) + (script:U16b $name.Length) + $name
+            $sniData  = (script:U16b $sniList.Length) + $sniList
+            $sniExt   = [byte[]]@(0x00,0x00) + (script:U16b $sniData.Length) + $sniData
+            $svData   = [byte[]]@(0x02,0x03,0x04)                      # list_len=2 + 0x0304
+            $svExt    = [byte[]]@(0x00,0x2b) + (script:U16b $svData.Length) + $svData
+            $alpnList = [byte[]]@(0x02,0x68,0x32)                      # len=2 + "h2"
+            $alpnData = (script:U16b $alpnList.Length) + $alpnList
+            $alpnExt  = [byte[]]@(0x00,0x10) + (script:U16b $alpnData.Length) + $alpnData
+            $exts   = $sniExt + $svExt + $alpnExt
+            $random = [byte[]]::new(32)
+            $chBody = [byte[]]@(0x03,0x03) + $random + [byte[]]@(0x00) + (script:U16b 2) + [byte[]]@(0x13,0x01) + [byte[]]@(0x01,0x00) + (script:U16b $exts.Length) + $exts
+            $hs = [byte[]]@(0x01) + (script:U24b $chBody.Length) + $chBody
+            $script:tlsCH = [byte[]](@(0x16,0x03,0x01) + (script:U16b $hs.Length) + $hs)
+
+            # Alert record: Fatal (2), handshake_failure (0x28 = 40), TLS 1.2 wire.
+            $script:tlsAlertRec = [byte[]](0x15,0x03,0x03,0x00,0x02,0x02,0x28)
+
+            # ApplicationData record: TLS 1.2, 16-byte encrypted body.
+            $script:tlsAppRec = [byte[]](@(0x17,0x03,0x03,0x00,0x10) + ((,0x42)*16))
+        }
+
+        It 'root node is collapsed and shows the SNI on the collapsed line' {
+            $roots = [TlsParser]::BuildTlsDetailTree($script:tlsCH, $script:tlsCH.Length, 443, 50000)
+            $roots.Count | Should -Be 1
+            $roots[0].Key | Should -Be 'TLS'
+            $roots[0].IsExpanded | Should -BeFalse
+            $roots[0].Text | Should -Match '^TLS ClientHello; ver: TLS 1\.0; len: \d+; SNI: example\.com$'
+        }
+
+        It 'includes a Record Layer sub-node with content type, version and length' {
+            $ch = [TlsParser]::BuildTlsDetailTree($script:tlsCH, $script:tlsCH.Length, 443, 50000)[0]
+            $rec = $ch.Children | Where-Object { $_.Key -eq 'TLS.Record' }
+            $rec | Should -Not -BeNullOrEmpty
+            $rec.IsExpanded | Should -BeFalse
+            ($rec.Children | Where-Object { $_.Text -eq 'Content Type: Handshake (22)' }).Count | Should -Be 1
+            ($rec.Children | Where-Object { $_.Text -eq 'Version: TLS 1.0 (0x0301)' }).Count | Should -Be 1
+        }
+
+        It 'parses the ClientHello handshake with cipher suites' {
+            $ch = [TlsParser]::BuildTlsDetailTree($script:tlsCH, $script:tlsCH.Length, 443, 50000)[0]
+            $hs = $ch.Children | Where-Object { $_.Key -eq 'TLS.Handshake' }
+            $hs.Text | Should -Be 'Handshake Protocol: ClientHello'
+            ($hs.Children | Where-Object { $_.Text -eq 'Handshake Type: ClientHello (1)' }).Count | Should -Be 1
+            ($hs.Children | Where-Object { $_.Text -eq 'Version: TLS 1.2 (0x0303)' }).Count | Should -Be 1
+            $cs = $hs.Children | Where-Object { $_.Key -eq 'TLS.CipherSuites' }
+            ($cs.Children | Where-Object { $_.Text -eq 'Cipher Suite: TLS_AES_128_GCM_SHA256 (0x1301)' }).Count | Should -Be 1
+        }
+
+        It 'decodes the SNI, ALPN, and supported_versions extensions' {
+            $ch = [TlsParser]::BuildTlsDetailTree($script:tlsCH, $script:tlsCH.Length, 443, 50000)[0]
+            $exts = ($ch.Children | Where-Object { $_.Key -eq 'TLS.Handshake' }).Children | Where-Object { $_.Key -eq 'TLS.Extensions' }
+            $exts | Should -Not -BeNullOrEmpty
+            $sni = $exts.Children | Where-Object { $_.Text -like 'Extension: server_name*' }
+            ($sni.Children | Where-Object { $_.Text -eq 'Server Name: example.com' }).Count | Should -Be 1
+            $sv = $exts.Children | Where-Object { $_.Text -like 'Extension: supported_versions*' }
+            ($sv.Children | Where-Object { $_.Text -eq 'Supported Version: TLS 1.3 (0x0304)' }).Count | Should -Be 1
+            $alpn = $exts.Children | Where-Object { $_.Text -like 'Extension: application_layer_protocol_negotiation*' }
+            ($alpn.Children | Where-Object { $_.Text -eq 'ALPN Protocol: h2' }).Count | Should -Be 1
+        }
+
+        It 'renders an Alert record with level and description' {
+            $roots = [TlsParser]::BuildTlsDetailTree($script:tlsAlertRec, $script:tlsAlertRec.Length, 443, 50000)
+            $roots.Count | Should -Be 1
+            $roots[0].Text | Should -Be 'TLS Alert; ver: TLS 1.2; len: 2'
+            $alert = $roots[0].Children | Where-Object { $_.Key -eq 'TLS.Alert' }
+            $alert.Text | Should -Be 'Alert Message: Fatal, handshake_failure'
+            ($alert.Children | Where-Object { $_.Text -eq 'Level: Fatal (2)' }).Count | Should -Be 1
+            ($alert.Children | Where-Object { $_.Text -eq 'Description: handshake_failure (40)' }).Count | Should -Be 1
+        }
+
+        It 'emits one root per TLS record in a multi-record segment' {
+            $multi = [byte[]]($script:tlsCH + $script:tlsAppRec)
+            $roots = [TlsParser]::BuildTlsDetailTree($multi, $multi.Length, 443, 50000)
+            $roots.Count | Should -Be 2
+            $roots[0].Text | Should -Match '^TLS ClientHello;'
+            $roots[1].Text | Should -Be 'TLS ApplicationData; ver: TLS 1.2; len: 16'
+            ($roots[1].Children | Where-Object { $_.Text -eq 'Encrypted Application Data: 16 bytes' }).Count | Should -Be 1
+        }
+
+        It 'detects TLS content on a non-standard TCP port (content-based, not port-gated)' {
+            # A ClientHello record on TCP 9999<->12345 (neither is a recognised TLS port). The
+            # capture path must peek the payload bytes (zero-copy) and allocate/parse it as TLS,
+            # then the Default one-liner shows the TLS handshake.
+            $tls = [byte[]](0x16,0x03,0x01, 0x00,0x04, 0x01,0x00,0x00,0x00)   # TLS1.0 record, ClientHello
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=0x27; $tcp[1]=0x0f      # src port 9999
+            $tcp[2]=0x30; $tcp[3]=0x39      # dst port 12345
+            $tcp[12]=0x50; $tcp[13]=0x18    # data offset 5 (20 bytes), PSH+ACK
+            $ipLen = 20 + $tcp.Length + $tls.Length
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $pkt = $eth + $ip + $tcp + $tls
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'TLS 1\.0 ClientHello'
+        }
+
+        It 'parses TLS on a conflicting port (445) instead of the SMB2 branch (Analysis dispatch)' {
+            # TLS on TCP 445 must reach the content-based TLS branch, not the unconditional SMB2
+            # port branch (which would emit no TLS node). Verifies BuildAppNode checks TLS first.
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=0x01; $tcp[1]=0xbd      # src port 445
+            $tcp[2]=0x30; $tcp[3]=0x39      # dst port 12345
+            $tcp[12]=0x50; $tcp[13]=0x18
+            $ipLen = 20 + $tcp.Length + $script:tlsCH.Length
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $pkt = $eth + $ip + $tcp + $script:tlsCH
+            $tls = ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) | Where-Object { $_.Key -eq 'TLS' }
+            $tls | Should -Not -BeNullOrEmpty
+            $tls.Text | Should -Match '^TLS ClientHello;.*SNI: example\.com$'
+        }
+
+        It 'shows the TLS line for TLS over IPv6 at Default' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=0x01; $tcp[1]=0xbb      # src port 443
+            $tcp[2]=0x30; $tcp[3]=0x39      # dst port 12345
+            $tcp[12]=0x50; $tcp[13]=0x18
+            $payLen = $tcp.Length + $script:tlsCH.Length
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]]( [byte](($payLen -shr 8) -band 0xff), [byte]($payLen -band 0xff), 6, 64 )
+            $ip6 += ([byte[]](0x20,0x01) + [byte[]]::new(14)) + ([byte[]](0x20,0x01) + [byte[]]::new(13) + [byte[]](2))
+            $pkt = $eth + $ip6 + $tcp + $script:tlsCH
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'IPv6 .+: TLS 1\.0 ClientHello'
+        }
+
+        It 'continues past a zero-length TLS record to emit later records' {
+            # A zero-length ChangeCipherSpec (14 03 03 00 00) followed by a ClientHello. Both must
+            # be emitted — the record walk advances by the header size even when body length is 0.
+            $ccs = [byte[]](0x14,0x03,0x03,0x00,0x00)
+            $multi = [byte[]]($ccs + $script:tlsCH)
+            $roots = [TlsParser]::BuildTlsDetailTree($multi, $multi.Length, 443, 50000)
+            $roots.Count | Should -Be 2
+            $roots[0].Text | Should -Be 'TLS ChangeCipherSpec; ver: TLS 1.2; len: 0'
+            $roots[1].Text | Should -Match '^TLS ClientHello;.*SNI: example\.com$'
+        }
+
+        It 'continues past a zero-length handshake message to emit later handshakes' {
+            # A Handshake record carrying ServerHelloDone (type 14, len 0) then a Finished
+            # (type 20, len 0). The handshake walk must advance past the zero-length message.
+            $body = [byte[]](0x0e,0x00,0x00,0x00, 0x14,0x00,0x00,0x00)
+            $rec  = [byte[]](@(0x16,0x03,0x03) + (script:U16b $body.Length) + $body)
+            $root = [TlsParser]::BuildTlsDetailTree($rec, $rec.Length, 443, 50000)[0]
+            $hs = @($root.Children | Where-Object { $_.Key -eq 'TLS.Handshake' })
+            $hs.Count | Should -Be 2
+            $hs[0].Text | Should -Be 'Handshake Protocol: ServerHelloDone'
+            $hs[1].Text | Should -Be 'Handshake Protocol: Finished'
+        }
+
+        It 'parses TLS on port 53 as TLS (not garbage DNS) at Detailed level' {
+            # A ClientHello on TCP 53<->12345. The Detailed path must probe TLS content before the
+            # port-53 DNS branch, so it renders as TLS, not a misparsed DNS message.
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=0x00; $tcp[1]=0x35      # src port 53
+            $tcp[2]=0x30; $tcp[3]=0x39      # dst port 12345
+            $tcp[12]=0x50; $tcp[13]=0x18
+            $ipLen = 20 + $tcp.Length + $script:tlsCH.Length
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $pkt = $eth + $ip + $tcp + $script:tlsCH
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 1
+            $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            $out | Should -Match 'TLS ClientHello; ver: TLS 1\.0'
+            $out | Should -Not -Match 'DNS'
+        }
+    }
+
     Context 'HTTP application-layer predicate' {
         BeforeAll {
             $script:httpStartCmd = Get-Command -Name Start-Pspkt -ErrorAction Stop
