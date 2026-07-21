@@ -678,9 +678,9 @@ public static class Smb2Parser
             string name = ExtractName(data, hdr + nameOffset, nameLength, off, cmdEnd);
             if (name == null) name = "";
             RecordPending(sessionId, messageId, 2, name);
-            sb.Append(", File: ").Append(name.Length == 0 ? "<root>" : name);
-            sb.Append("; Disposition: ").Append(disp < (uint)CreateDispositions.Length
+            sb.Append(", Disposition: ").Append(disp < (uint)CreateDispositions.Length
                 ? CreateDispositions[disp] : "0x" + disp.ToString("X"));
+            sb.Append("; File: ").Append(name.Length == 0 ? "<root>" : name);
         }
         else
         {
@@ -702,9 +702,9 @@ public static class Smb2Parser
         ulong fidP = ReadUInt64LE(data, off + 64);
         ulong fidV = ReadUInt64LE(data, off + 72);
         ResolveFile(sessionId, messageId, fidP, fidV);
-        sb.Append(", File: ").Append(FileIdDisplay(data, off + 64, fidP, fidV));
-        sb.Append("; Action: ").Append(action < (uint)CreateActions.Length
+        sb.Append(", Action: ").Append(action < (uint)CreateActions.Length
             ? CreateActions[action] : "0x" + action.ToString("X"));
+        sb.Append("; File: ").Append(FileIdDisplay(data, off + 64, fidP, fidV));
     }
 
     private static void AppendReadWrite(StringBuilder sb, byte[] data, int off, int bodyLen,
@@ -1079,7 +1079,14 @@ public static class Smb2Parser
     private static BoxyBox.TreeNode BuildSmb2HeaderNode(byte[] data, int len, int hdr, ushort command, string cmdName,
         uint flags, uint status, bool isResponse, bool isAsync, uint treeId, ulong sessionId)
     {
-        var h = new BoxyBox.TreeNode("SMB2 Header", "SMB2.Header", true);
+        // Collapsed summary line: "SMB2 Header - Cmd: <cmd> (0x<h>) <Request|Response>, TID: <tree>[, Status: ...]".
+        string tid = isAsync ? "(async)" : (LookupTree(sessionId, treeId) ?? "0x" + treeId.ToString("x"));
+        var hdrText = new StringBuilder(80);
+        hdrText.Append("SMB2 Header - Cmd: ").Append(cmdName).Append(" (0x").Append(command.ToString("x4")).Append(") ")
+               .Append(isResponse ? "Response" : "Request").Append(", TID: ").Append(tid);
+        if (isResponse && status != 0)
+            hdrText.Append(", Status: ").Append(StatusName(status)).Append(" (0x").Append(status.ToString("X8")).Append(")");
+        var h = new BoxyBox.TreeNode(hdrText.ToString(), "SMB2.Header", false);
         h.AddLeaf("ProtocolId: 0x" + HexBytes(data, hdr, 4, len));
         h.AddLeaf("Header Length: " + ReadUInt16LE(data, hdr + 4));
         h.AddLeaf("Credit Charge: " + ReadUInt16LE(data, hdr + 6));
@@ -1594,7 +1601,7 @@ public static class Smb2Parser
         uint msgSize = (len >= off + 40) ? ReadUInt32LE(data, off + 36) : 0;
         ulong sessId = (len >= off + 52) ? ReadUInt64LE(data, off + 44) : 0;
         var root = new BoxyBox.TreeNode("SMB2 Encrypted - SessId 0x" + sessId.ToString("x") + ", len " + msgSize, "SMB2", true);
-        var h = new BoxyBox.TreeNode("SMB2 Transform Header", "SMB2.Header", true);
+        var h = new BoxyBox.TreeNode("SMB2 Transform Header", "SMB2.Header", false);
         h.AddLeaf("ProtocolId: 0x" + HexBytes(data, off, 4, len));
         h.AddLeaf("Signature: " + HexBytes(data, off + 4, 16, len));
         h.AddLeaf("Nonce: " + HexBytes(data, off + 20, 16, len));
@@ -1608,7 +1615,7 @@ public static class Smb2Parser
     private static BoxyBox.TreeNode BuildSmb1NegotiateNode(byte[] data, int len, int off)
     {
         var root = new BoxyBox.TreeNode("SMB1 Negotiate Protocol Request", "SMB2", true);
-        var h = new BoxyBox.TreeNode("SMB Header", "SMB2.Header", true);
+        var h = new BoxyBox.TreeNode("SMB Header", "SMB2.Header", false);
         h.AddLeaf("Server Component: SMB");
         byte cmd = (len > off + 4) ? data[off + 4] : (byte)0;
         h.AddLeaf("SMB Command: Negotiate Protocol (0x" + cmd.ToString("x2") + ")");

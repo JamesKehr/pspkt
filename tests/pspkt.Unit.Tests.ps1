@@ -2080,7 +2080,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         It 'formats a CREATE request with filename and correct MS-SMB2 disposition' {
             $pkt = script:New-Smb2CreateReq -Name 'share\file.txt' -Disposition 3 -MsgId 10 -SessionId 99
             [Smb2Parser]::FormatSmb2Segment($pkt, 445, 12345) |
-                Should -Be 'SMB2 CREATE Request, File: share\file.txt; Disposition: FILE_OPEN_IF'
+                Should -Be 'SMB2 CREATE Request, Disposition: FILE_OPEN_IF; File: share\file.txt'
         }
 
         It 'resolves the filename on the CREATE response by correlating the request' {
@@ -2088,7 +2088,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $resp = script:New-Smb2CreateResp -Action 2 -FidP 0x1111 -FidV 0xABCD -MsgId 10 -SessionId 99
             $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
             [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445) |
-                Should -Be 'SMB2 CREATE Response, File: share\file.txt; Action: FILE_CREATED'
+                Should -Be 'SMB2 CREATE Response, Action: FILE_CREATED; File: share\file.txt'
         }
 
         It 'resolves a FileId to its name on a later CLOSE request' {
@@ -2159,7 +2159,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             # Final success response still resolves the filename.
             $fin = script:New-Smb2CreateResp -Action 2 -FidP 0x50 -FidV 0x51 -MsgId 30 -SessionId 4
             [Smb2Parser]::FormatSmb2Segment($fin, 12345, 445) |
-                Should -Be 'SMB2 CREATE Response, File: async.dat; Action: FILE_CREATED'
+                Should -Be 'SMB2 CREATE Response, Action: FILE_CREATED; File: async.dat'
         }
 
         It 'formats an encrypted (Transform header) packet' {
@@ -2186,7 +2186,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $crMsg = script:New-Smb2Msg -Command 5 -MsgId 2 -SessionId 5 -Body ($cb + $n)
             $chained = script:Frame-Smb2 ($tcMsg + $crMsg)
             [Smb2Parser]::FormatSmb2Segment($chained, 445, 12345) |
-                Should -Be 'SMB2 TREE_CONNECT Request, \\srv\pub | SMB2 CREATE Request, File: a.txt; Disposition: FILE_CREATE'
+                Should -Be 'SMB2 TREE_CONNECT Request, \\srv\pub | SMB2 CREATE Request, Disposition: FILE_CREATE; File: a.txt'
         }
 
         It 'formats a NEGOTIATE request with dialect list and capabilities' {
@@ -2300,7 +2300,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
 
         BeforeEach { [Smb2Parser]::ResetState() }
 
-        It 'builds a collapsed header and expanded SMB2 header for a sync request' {
+        It 'builds a collapsed header (with summary) and the SMB2 header fields for a sync request' {
             $cb = [byte[]]::new(56); $cb[0]=57
             $h = script:New-Smb2Msg2 -Command 5 -Flags 0x08 -MsgId 42 -SessionId 0x99 -TreeId 5 -Body $cb
             # Set CreditCharge (header+6) for the field check.
@@ -2309,8 +2309,11 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $roots.Count | Should -Be 1
             $roots[0].Key | Should -Be 'SMB2'
             [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB2 CREATE - TID 0x5'
+            # The SMB2 Header node is collapsed by default and carries a summary line.
+            $hdrNode = $roots[0].Children | Where-Object { $_.Key -eq 'SMB2.Header' }
+            $hdrNode.IsExpanded | Should -BeFalse
+            [BoxyBox.AnsiText]::StripAnsi($hdrNode.Text) | Should -Be 'SMB2 Header - Cmd: CREATE (0x0005) Request, TID: 0x5'
             $txt = script:Smb2TreeText $roots
-            $txt | Should -Match 'SMB2 Header'
             $txt | Should -Match 'ProtocolId: 0xfe534d42'
             $txt | Should -Match 'Command: CREATE \(5\)'
             $txt | Should -Match 'Channel Sequence: 0'
@@ -2328,6 +2331,9 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $h = script:New-Smb2Msg2 -Command 5 -Flags 1 -Status ([uint32]3221225506) -MsgId 7 -SessionId 3 -TreeId 9 -Body $b
             $roots = [Smb2Parser]::BuildSmb2DetailTree((script:Frame2 $h), ($h.Length + 4), 12345, 445)
             [BoxyBox.AnsiText]::StripAnsi($roots[0].Text) | Should -Be 'SMB2 CREATE - TID 0x9; Status: STATUS_ACCESS_DENIED (0xC0000022)'
+            $hdrNode = $roots[0].Children | Where-Object { $_.Key -eq 'SMB2.Header' }
+            [BoxyBox.AnsiText]::StripAnsi($hdrNode.Text) |
+                Should -Be 'SMB2 Header - Cmd: CREATE (0x0005) Response, TID: 0x9, Status: STATUS_ACCESS_DENIED (0xC0000022)'
             $txt = script:Smb2TreeText $roots
             $txt | Should -Match 'NT Status: STATUS_ACCESS_DENIED \(0xC0000022\)'
             $txt | Should -Match 'Response: This is a RESPONSE'
