@@ -3793,14 +3793,25 @@ function Start-Pspkt {
             $useRealTime = $false
         }
 
-        # Auto-increase PacketSize for protocols that need more payload (e.g., DHCP options at byte 240+).
-        # Only bump if the user did not explicitly specify a larger PacketSize.
+        # Auto-increase PacketSize for protocols that need more payload (e.g., DHCP options at
+        # byte 240+; SMB2 Create filenames / TreeConnect paths + compounded commands). Only bump
+        # if the user did not explicitly specify a PacketSize.
         if ($quickFilters.Count -gt 0 -and -not $PSBoundParameters.ContainsKey('PacketSize')) {
             $needsDHCP = $DHCP.IsPresent -or $DHCPv6.IsPresent -or $AA.IsPresent -or $AAv4.IsPresent -or $AAv6.IsPresent
-            if ($needsDHCP -and $Session.PacketSize -lt 590) {
-                $Session.PacketSize = 590
-            } elseif ($DNS.IsPresent -and $Session.PacketSize -lt 512) {
-                $Session.PacketSize = 512
+            $qfFloor = 0
+            if ($needsDHCP)     { $qfFloor = [Math]::Max($qfFloor, 590) }
+            if ($DNS.IsPresent) { $qfFloor = [Math]::Max($qfFloor, 512) }
+            # SMB2 Create/TreeConnect bodies can reach MAX_PATH (520 bytes) and compounded
+            # commands push later fields further out; 1500 (MTU) covers the common case and
+            # matches the SMB2 app-filter / Analysis floors.
+            if ($SMB.IsPresent) { $qfFloor = [Math]::Max($qfFloor, 1500) }
+            if ($qfFloor -gt 0 -and $Session.PacketSize -lt $qfFloor) {
+                $previousQfSize = $Session.PacketSize
+                $Session.PacketSize = $qfFloor
+                # Warn only for the large SMB bump (the small DNS/DHCP bumps stay quiet).
+                if ($SMB.IsPresent -and $qfFloor -eq 1500 -and -not $NoWarning.IsPresent) {
+                    Write-Warning "SMB2 parsing benefits from a larger -PacketSize; auto-bumping from $previousQfSize to 1500 bytes (use -PacketSize 0 to capture full packets)."
+                }
             }
         }
 
@@ -4023,6 +4034,9 @@ function Start-Pspkt {
         # Always clear first so a predicate left over from a prior capture in the
         # same PS session can't silently filter this one.
         [PacketLineFormatter]::ClearAppPredicates()
+        # Clear the SMB2 TID/FID name tables so discovered tree/file names from a prior
+        # capture in the same PS session never leak into this one.
+        [Smb2Parser]::ResetState()
         if ($dnsPredicateActive) {
             $dnsPredicate = [DnsAppPredicate]::new()
 
@@ -4640,6 +4654,8 @@ function Start-Pspkt {
 
             # Clear any application-layer predicate so it can't leak into a later capture.
             [PacketLineFormatter]::ClearAppPredicates()
+            # Free the SMB2 TID/FID name tables (can grow large on long captures).
+            [Smb2Parser]::ResetState()
 
             # Mark capture inactive (wakes any consumer/writer waiters).
             [PktMonApi]::SetCaptureActive($false)

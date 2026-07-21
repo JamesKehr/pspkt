@@ -1836,6 +1836,26 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $script:smbStartCmd.Parameters['SmbMatchTruncated'].ParameterType | Should -Be ([switch])
         }
 
+        It 'contentless TCP on the SMB port renders as plain TCP, not an SMB hint' {
+            # A bare ACK on port 445 carries no SMB2 message; it must render as a plain
+            # transport segment ("TCP [.] ...") rather than "SMB: TCP [.] ...".
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6; $ip[3]=40
+            $ip[12]=10;$ip[13]=24;$ip[14]=0;$ip[15]=72; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=5
+            # src ephemeral, dst 445 (0x01BD), seq 1, ack 2, ACK-only (0x10), win 252, no payload
+            $tcp = [byte[]](0xe4,0x37, 0x01,0xBD, 0,0,0,1, 0,0,0,2, 0x50,0x10, 0x00,0xFC, 0,0, 0,0)
+            $pkt = $eth + $ip + $tcp
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1 }
+            $out | Should -Match 'TCP \[\.\], seq 1, ack 2'
+            $out | Should -Not -Match 'SMB'
+        }
+
         It 'Smb2Parser.TryParseSmb2Header extracts Create request fields' {
             $ctx = [Smb2Context]::new()
             $ok = [Smb2Parser]::TryParseSmb2Header($script:smbCreateReq, 12345, 445, [ref]$ctx)
@@ -1995,6 +2015,245 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             [PacketLineFormatter]::HasAppPredicate | Should -BeTrue
             [PacketLineFormatter]::ClearAppPredicates()
             [PacketLineFormatter]::HasAppPredicate | Should -BeFalse
+        }
+    }
+
+    Context 'SMB2 spec formatter (Phase 1)' {
+        BeforeAll {
+            # Builds a framed SMB2 message (Direct-TCP length prefix + SMB2 header + body).
+            function script:New-Smb2Msg {
+                param(
+                    [int]$Command, [byte]$Flags = 0, [uint32]$Status = 0,
+                    [uint64]$MsgId = 0, [uint64]$SessionId = 0, [uint32]$TreeId = 0,
+                    [uint32]$NextCommand = 0, [byte[]]$Body = [byte[]]::new(0)
+                )
+                $hdr = [byte[]]::new(64)
+                $hdr[0]=0xfe; $hdr[1]=0x53; $hdr[2]=0x4d; $hdr[3]=0x42; $hdr[4]=64
+                $hdr[8]=$Status -band 0xff; $hdr[9]=($Status -shr 8) -band 0xff
+                $hdr[10]=($Status -shr 16) -band 0xff; $hdr[11]=($Status -shr 24) -band 0xff
+                $hdr[12]=$Command -band 0xff; $hdr[16]=$Flags
+                for ($i=0; $i -lt 4; $i++) { $hdr[20+$i]=[byte](($NextCommand -shr (8*$i)) -band 0xff) }
+                for ($i=0; $i -lt 8; $i++) { $hdr[24+$i]=[byte](($MsgId -shr (8*$i)) -band 0xff) }
+                for ($i=0; $i -lt 4; $i++) { $hdr[36+$i]=[byte](($TreeId -shr (8*$i)) -band 0xff) }
+                for ($i=0; $i -lt 8; $i++) { $hdr[40+$i]=[byte](($SessionId -shr (8*$i)) -band 0xff) }
+                return ,($hdr + $Body)
+            }
+            function script:Frame-Smb2 {
+                param([byte[]]$Msg)
+                $t = $Msg.Length
+                return ,([byte[]](0x00, (($t -shr 16) -band 0xff), (($t -shr 8) -band 0xff), ($t -band 0xff)) + $Msg)
+            }
+            function script:U32le { param([uint32]$v) [byte[]](($v -band 0xff), (($v -shr 8) -band 0xff), (($v -shr 16) -band 0xff), (($v -shr 24) -band 0xff)) }
+            # Expected GUID string for a FileId whose persistent/volatile low dwords are P/V.
+            function script:FidGuid {
+                param([uint32]$P, [uint32]$V)
+                $b = [byte[]]::new(16)
+                [Array]::Copy((script:U32le $P), 0, $b, 0, 4)
+                [Array]::Copy((script:U32le $V), 0, $b, 8, 4)
+                return [Guid]::new($b).ToString()
+            }
+
+            # Create request body (StructSize 57): filename at header+120, disposition@36.
+            function script:New-Smb2CreateReq {
+                param([string]$Name, [uint32]$Disposition = 1, [uint64]$MsgId, [uint64]$SessionId)
+                $n = [System.Text.Encoding]::Unicode.GetBytes($Name)
+                $cb = [byte[]]::new(56); $cb[0]=57
+                $no = 120
+                $cb[44]=$no -band 0xff; $cb[45]=($no -shr 8) -band 0xff
+                $cb[46]=$n.Length -band 0xff; $cb[47]=($n.Length -shr 8) -band 0xff
+                $cb[36]=$Disposition -band 0xff
+                return script:Frame-Smb2 (script:New-Smb2Msg -Command 5 -MsgId $MsgId -SessionId $SessionId -Body ($cb + $n))
+            }
+            # Create response body (StructSize 89): action@4, FileId@64.
+            function script:New-Smb2CreateResp {
+                param([uint32]$Action, [uint32]$FidP, [uint32]$FidV, [uint64]$MsgId, [uint64]$SessionId, [uint32]$Status = 0)
+                $b = [byte[]]::new(88); $b[0]=89
+                [Array]::Copy((script:U32le $Action), 0, $b, 4, 4)
+                [Array]::Copy((script:U32le $FidP), 0, $b, 64, 4)
+                [Array]::Copy((script:U32le $FidV), 0, $b, 72, 4)
+                return script:Frame-Smb2 (script:New-Smb2Msg -Command 5 -Flags 1 -Status $Status -MsgId $MsgId -SessionId $SessionId -Body $b)
+            }
+        }
+
+        BeforeEach { [Smb2Parser]::ResetState() }
+
+        It 'formats a CREATE request with filename and correct MS-SMB2 disposition' {
+            $pkt = script:New-Smb2CreateReq -Name 'share\file.txt' -Disposition 3 -MsgId 10 -SessionId 99
+            [Smb2Parser]::FormatSmb2Segment($pkt, 445, 12345) |
+                Should -Be 'SMB2 CREATE Request, File: share\file.txt; Disposition: FILE_OPEN_IF'
+        }
+
+        It 'resolves the filename on the CREATE response by correlating the request' {
+            $req  = script:New-Smb2CreateReq  -Name 'share\file.txt' -Disposition 1 -MsgId 10 -SessionId 99
+            $resp = script:New-Smb2CreateResp -Action 2 -FidP 0x1111 -FidV 0xABCD -MsgId 10 -SessionId 99
+            $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
+            [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445) |
+                Should -Be "SMB2 CREATE Response, File: share\file.txt ($(script:FidGuid 0x1111 0xABCD)); Action: FILE_CREATED"
+        }
+
+        It 'resolves a FileId to its name on a later CLOSE request' {
+            $req  = script:New-Smb2CreateReq  -Name 'docs\a.txt' -MsgId 10 -SessionId 99
+            $resp = script:New-Smb2CreateResp -Action 1 -FidP 0x2222 -FidV 0xBEEF -MsgId 10 -SessionId 99
+            $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
+            $null = [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445)
+            $clb = [byte[]]::new(24); $clb[0]=24
+            [Array]::Copy((script:U32le 0x2222), 0, $clb, 8, 4)
+            [Array]::Copy((script:U32le 0xBEEF), 0, $clb, 16, 4)
+            $close = script:Frame-Smb2 (script:New-Smb2Msg -Command 6 -MsgId 11 -SessionId 99 -Body $clb)
+            [Smb2Parser]::FormatSmb2Segment($close, 445, 12345) |
+                Should -Be "SMB2 CLOSE Request, File: docs\a.txt ($(script:FidGuid 0x2222 0xBEEF))"
+        }
+
+        It 'renders an unknown FileId as a GUID string' {
+            $clb = [byte[]]::new(24); $clb[0]=24
+            [Array]::Copy((script:U32le 0x3333), 0, $clb, 8, 4)
+            [Array]::Copy((script:U32le 0xC0DE), 0, $clb, 16, 4)
+            $expected = [Guid]::new([byte[]]($clb[8..23])).ToString()
+            $close = script:Frame-Smb2 (script:New-Smb2Msg -Command 6 -MsgId 5 -SessionId 1 -Body $clb)
+            [Smb2Parser]::FormatSmb2Segment($close, 445, 12345) |
+                Should -Be "SMB2 CLOSE Request, File: $expected"
+        }
+
+        It 'formats a TREE_CONNECT request with the UNC path' {
+            $path = [System.Text.Encoding]::Unicode.GetBytes('\\server\share')
+            $tb = [byte[]]::new(8); $tb[0]=9; $po=72
+            $tb[4]=$po -band 0xff; $tb[5]=($po -shr 8) -band 0xff
+            $tb[6]=$path.Length -band 0xff; $tb[7]=($path.Length -shr 8) -band 0xff
+            $tc = script:Frame-Smb2 (script:New-Smb2Msg -Command 3 -MsgId 5 -SessionId 99 -Body ($tb + $path))
+            [Smb2Parser]::FormatSmb2Segment($tc, 445, 12345) |
+                Should -Be 'SMB2 TREE_CONNECT Request, \\server\share'
+        }
+
+        It 'formats a READ request with Len/Off and echoes the file on the response' {
+            $req  = script:New-Smb2CreateReq  -Name 'big.bin' -MsgId 10 -SessionId 7
+            $resp = script:New-Smb2CreateResp -Action 1 -FidP 0x10 -FidV 0x20 -MsgId 10 -SessionId 7
+            $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
+            $null = [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445)
+            $rb = [byte[]]::new(48); $rb[0]=49
+            [Array]::Copy((script:U32le 4096), 0, $rb, 4, 4)
+            [Array]::Copy((script:U32le 0x10), 0, $rb, 16, 4)
+            [Array]::Copy((script:U32le 0x20), 0, $rb, 24, 4)
+            $read = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -MsgId 12 -SessionId 7 -Body $rb)
+            [Smb2Parser]::FormatSmb2Segment($read, 445, 12345) |
+                Should -Be "SMB2 READ Request, Len: 4096; Off: 0; File: big.bin ($(script:FidGuid 0x10 0x20))"
+            $rrb = [byte[]]::new(16); $rrb[0]=17
+            [Array]::Copy((script:U32le 4096), 0, $rrb, 4, 4)
+            $readResp = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -Flags 1 -MsgId 12 -SessionId 7 -Body $rrb)
+            [Smb2Parser]::FormatSmb2Segment($readResp, 12345, 445) |
+                Should -Be "SMB2 READ Response, File: big.bin ($(script:FidGuid 0x10 0x20)); Len: 4096"
+        }
+
+        It 'shows the NT status on an error response with no fabricated CREATE fields' {
+            $resp = script:New-Smb2CreateResp -Action 0 -FidP 0 -FidV 0 -MsgId 20 -SessionId 99 -Status ([uint32]3221225506)
+            [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445) |
+                Should -Be 'SMB2 CREATE Response, STATUS_ACCESS_DENIED (0xC0000022)'
+        }
+
+        It 'preserves the filename across an async STATUS_PENDING CREATE response' {
+            $req = script:New-Smb2CreateReq -Name 'async.dat' -MsgId 30 -SessionId 4
+            $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
+            # Interim STATUS_PENDING CREATE response: header-only, must not discard the pending name.
+            $prb = [byte[]]::new(16); $prb[0]=9
+            $pend = script:Frame-Smb2 (script:New-Smb2Msg -Command 5 -Flags 1 -Status 0x103 -MsgId 30 -SessionId 4 -Body $prb)
+            [Smb2Parser]::FormatSmb2Segment($pend, 12345, 445) | Should -Be 'SMB2 CREATE Response, STATUS_PENDING (0x00000103)'
+            # Final success response still resolves the filename.
+            $fin = script:New-Smb2CreateResp -Action 2 -FidP 0x50 -FidV 0x51 -MsgId 30 -SessionId 4
+            [Smb2Parser]::FormatSmb2Segment($fin, 12345, 445) |
+                Should -Be "SMB2 CREATE Response, File: async.dat ($(script:FidGuid 0x50 0x51)); Action: FILE_CREATED"
+        }
+
+        It 'formats an encrypted (Transform header) packet' {
+            $tf = [byte[]]::new(52); $tf[0]=0xfd; $tf[1]=0x53; $tf[2]=0x4d; $tf[3]=0x42
+            [Array]::Copy((script:U32le 200), 0, $tf, 36, 4)   # OriginalMessageSize @36
+            [Array]::Copy((script:U32le 0x777), 0, $tf, 44, 4) # SessionId @44
+            [Smb2Parser]::FormatSmb2Segment((script:Frame-Smb2 $tf), 445, 12345) |
+                Should -Be 'SMB2 Encrypted, SessId 0x777, len 200'
+        }
+
+        It 'emits one line per command for a compounded (chained) packet' {
+            $path = [System.Text.Encoding]::Unicode.GetBytes('\\srv\pub')
+            $tb = [byte[]]::new(8); $tb[0]=9; $po=72
+            $tb[4]=$po -band 0xff; $tb[5]=($po -shr 8) -band 0xff
+            $tb[6]=$path.Length -band 0xff; $tb[7]=($path.Length -shr 8) -band 0xff
+            $tcMsg = script:New-Smb2Msg -Command 3 -MsgId 1 -SessionId 5 -Body ($tb + $path)
+            $pad = (8 - ($tcMsg.Length % 8)) % 8
+            $tcMsg = $tcMsg + [byte[]]::new($pad)
+            $next = $tcMsg.Length
+            for ($i=0; $i -lt 4; $i++) { $tcMsg[20+$i]=[byte](($next -shr (8*$i)) -band 0xff) }
+            $n = [System.Text.Encoding]::Unicode.GetBytes('a.txt')
+            $cb = [byte[]]::new(56); $cb[0]=57; $cb[44]=120 -band 0xff; $cb[45]=0
+            $cb[46]=$n.Length -band 0xff; $cb[47]=0; $cb[36]=2
+            $crMsg = script:New-Smb2Msg -Command 5 -MsgId 2 -SessionId 5 -Body ($cb + $n)
+            $chained = script:Frame-Smb2 ($tcMsg + $crMsg)
+            [Smb2Parser]::FormatSmb2Segment($chained, 445, 12345) |
+                Should -Be 'SMB2 TREE_CONNECT Request, \\srv\pub | SMB2 CREATE Request, File: a.txt; Disposition: FILE_CREATE'
+        }
+
+        It 'formats a NEGOTIATE request with dialect list and capabilities' {
+            $nb = [byte[]]::new(36); $nb[0]=36; $nb[2]=2
+            [Array]::Copy([byte[]](0x05,0,0,0), 0, $nb, 8, 4)   # caps DFS|LARGE_MTU
+            $dialects = [byte[]](0x02,0x02, 0x11,0x03)          # 2.0.2, 3.1.1
+            $neg = script:Frame-Smb2 (script:New-Smb2Msg -Command 0 -MsgId 0 -Body ($nb + $dialects))
+            [Smb2Parser]::FormatSmb2Segment($neg, 445, 12345) |
+                Should -Be 'SMB2 NEGOTIATE Request, Requested Dialects 2.0.2, 3.1.1; DFS, LARGE_MTU'
+        }
+
+        It 'ResetState clears the name tables so a later capture starts clean' {
+            $req  = script:New-Smb2CreateReq  -Name 'leak.txt' -MsgId 10 -SessionId 99
+            $resp = script:New-Smb2CreateResp -Action 1 -FidP 0x40 -FidV 0x41 -MsgId 10 -SessionId 99
+            $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
+            $null = [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445)
+            [Smb2Parser]::ResetState()
+            $clb = [byte[]]::new(24); $clb[0]=24
+            [Array]::Copy((script:U32le 0x40), 0, $clb, 8, 4)
+            [Array]::Copy((script:U32le 0x41), 0, $clb, 16, 4)
+            $expected = [Guid]::new([byte[]]($clb[8..23])).ToString()
+            $close = script:Frame-Smb2 (script:New-Smb2Msg -Command 6 -MsgId 11 -SessionId 99 -Body $clb)
+            [Smb2Parser]::FormatSmb2Segment($close, 445, 12345) |
+                Should -Be "SMB2 CLOSE Request, File: $expected"
+        }
+
+        It 'does not crash or hang on a malformed NextCommand' {
+            # A huge NextCommand must not wrap the offset negative and index out of range.
+            $body = [byte[]]::new(64)
+            $pkt = script:Frame-Smb2 (script:New-Smb2Msg -Command 0 -MsgId 0 -NextCommand 0x7FFFFFF0 -Body $body)
+            $out = [Smb2Parser]::FormatSmb2Segment($pkt, 445, 12345)
+            $out | Should -Match '^SMB2 NEGOTIATE'   # first command still rendered, no throw
+        }
+
+        It 'keeps the handle for the final response across a STATUS_PENDING interim response' {
+            $req  = script:New-Smb2CreateReq  -Name 'pending.dat' -MsgId 10 -SessionId 3
+            $resp = script:New-Smb2CreateResp -Action 1 -FidP 0x7 -FidV 0x8 -MsgId 10 -SessionId 3
+            $null = [Smb2Parser]::FormatSmb2Segment($req, 445, 12345)
+            $null = [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445)
+            # Read request stashes the echo.
+            $rb = [byte[]]::new(48); $rb[0]=49
+            [Array]::Copy((script:U32le 1024), 0, $rb, 4, 4)
+            [Array]::Copy((script:U32le 0x7), 0, $rb, 16, 4)
+            [Array]::Copy((script:U32le 0x8), 0, $rb, 24, 4)
+            $read = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -MsgId 20 -SessionId 3 -Body $rb)
+            $null = [Smb2Parser]::FormatSmb2Segment($read, 445, 12345)
+            # Interim STATUS_PENDING response must peek (not consume) the stashed name.
+            $prb = [byte[]]::new(16); $prb[0]=17
+            $pend = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -Flags 1 -Status 0x103 -MsgId 20 -SessionId 3 -Body $prb)
+            [Smb2Parser]::FormatSmb2Segment($pend, 12345, 445) | Should -Match "File: pending\.dat \($([regex]::Escape((script:FidGuid 0x7 0x8)))\)"
+            # Final (success) response still resolves the name.
+            $frb = [byte[]]::new(16); $frb[0]=17
+            [Array]::Copy((script:U32le 1024), 0, $frb, 4, 4)
+            $fin = script:Frame-Smb2 (script:New-Smb2Msg -Command 8 -Flags 1 -MsgId 20 -SessionId 3 -Body $frb)
+            [Smb2Parser]::FormatSmb2Segment($fin, 12345, 445) | Should -Match "File: pending\.dat \($([regex]::Escape((script:FidGuid 0x7 0x8)))\); Len: 1024"
+        }
+
+        It 'does not record a tree name for a failed TREE_CONNECT response' {
+            $path = [System.Text.Encoding]::Unicode.GetBytes('\\srv\denied')
+            $tb = [byte[]]::new(8); $tb[0]=9; $po=72
+            $tb[4]=$po -band 0xff; $tb[6]=$path.Length -band 0xff; $tb[7]=($path.Length -shr 8) -band 0xff
+            $tc = script:Frame-Smb2 (script:New-Smb2Msg -Command 3 -MsgId 4 -SessionId 8 -Body ($tb + $path))
+            $null = [Smb2Parser]::FormatSmb2Segment($tc, 445, 12345)
+            # Failed response (BAD_NETWORK_NAME) with TreeId 0 must discard the pending path.
+            $trb = [byte[]]::new(16); $trb[0]=16
+            $resp = script:Frame-Smb2 (script:New-Smb2Msg -Command 3 -Flags 1 -Status ([uint32]3221225676) -MsgId 4 -SessionId 8 -TreeId 0 -Body $trb)
+            [Smb2Parser]::FormatSmb2Segment($resp, 12345, 445) | Should -Match '^SMB2 TREE_CONNECT Response, STATUS_BAD_NETWORK_NAME'
         }
     }
 
