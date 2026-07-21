@@ -2625,6 +2625,23 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             { [Smb2Parser]::BuildSmb2DetailTree($resp, ($resp.Length), 12345, 445) } | Should -Not -Throw
         }
 
+        It 'shows a partial name for a truncated (BUFFER_OVERFLOW) FileNormalizedNameInformation' {
+            [Smb2Parser]::ResetState()
+            $qib = [byte[]]::new(40); $qib[0]=41; $qib[2]=1; $qib[3]=0x30   # FileNormalizedNameInformation
+            $null = [Smb2Parser]::FormatSmb2Segment((script:Frame2 (script:New-Smb2Msg2 -Command 16 -MsgId 61 -SessionId 7 -Body $qib)), 445, 12345)
+            # 8-byte output buffer: declared FileNameLength 20, but only 4 bytes of name present.
+            $ni = [byte[]]::new(8)
+            [Array]::Copy([BitConverter]::GetBytes([uint32]20), 0, $ni, 0, 4)          # FileNameLength (full)
+            [Array]::Copy([System.Text.Encoding]::Unicode.GetBytes('ab'), 0, $ni, 4, 4) # partial name "ab"
+            $rib = [byte[]]::new(8); $rib[0]=9
+            [Array]::Copy([BitConverter]::GetBytes([uint16]72), 0, $rib, 2, 2)
+            [Array]::Copy([BitConverter]::GetBytes([uint32]$ni.Length), 0, $rib, 4, 4)
+            $resp = script:Frame2 (script:New-Smb2Msg2 -Command 16 -Flags 1 -Status ([uint32]2147483653) -MsgId 61 -SessionId 7 -Body ($rib + $ni))
+            $txt = script:Smb2TreeText ([Smb2Parser]::BuildSmb2DetailTree($resp, ($resp.Length), 12345, 445))
+            $txt | Should -Match 'FileNormalizedNameInformation'
+            $txt | Should -Match 'Name: ab \(truncated\)'
+        }
+
         It 'parses a SET_INFO request buffer (FileRenameInformation)' {
             [Smb2Parser]::ResetState()
             $newName = [System.Text.Encoding]::Unicode.GetBytes('renamed.txt')

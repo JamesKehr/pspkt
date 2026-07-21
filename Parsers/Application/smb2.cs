@@ -922,6 +922,20 @@ public static class Smb2Parser
         catch { return null; }
     }
 
+    // Like ExtractName, but clamps a declared name length to what's actually present in
+    // [start, rangeEnd) and appends " (truncated)" when the buffer was cut short (e.g. a
+    // STATUS_BUFFER_OVERFLOW response). Returns the partial name instead of failing outright.
+    private static string ExtractNameClamped(byte[] data, int start, int declaredLength, int rangeEnd)
+    {
+        if (start < 0 || start > rangeEnd || rangeEnd > data.Length) return null;
+        int avail = rangeEnd - start;
+        int use = (declaredLength < avail) ? declaredLength : avail;
+        if (use <= 0) return "";
+        string s = ExtractName(data, start, use, start, rangeEnd);
+        if (s == null) return null;
+        return (use < declaredLength) ? s + " (truncated)" : s;
+    }
+
     private static string StatusName(uint status)
     {
         string name;
@@ -1648,7 +1662,7 @@ public static class Smb2Parser
             {
                 if (start + 4 > end) break;
                 uint nl = ReadUInt32LE(data, start);
-                node.AddLeaf("Name: " + (ExtractName(data, start + 4, (int)nl, start + 4, end) ?? "?"));
+                node.AddLeaf("Name: " + (ExtractNameClamped(data, start + 4, (int)nl, end) ?? "?"));
                 break;
             }
             case 0x12: // FileAllInformation — composite
@@ -1664,7 +1678,7 @@ public static class Smb2Parser
                 if (start + 100 <= end)
                 {
                     uint anl = ReadUInt32LE(data, start + 96);
-                    node.AddLeaf("Name: " + (ExtractName(data, start + 100, (int)anl, start + 100, end) ?? "?"));
+                    node.AddLeaf("Name: " + (ExtractNameClamped(data, start + 100, (int)anl, end) ?? "?"));
                 }
                 break;
             // --- SET_INFO classes ---
@@ -1702,7 +1716,7 @@ public static class Smb2Parser
                 node.AddLeaf("Volume Creation Time: " + FileTime(data, start, end));
                 node.AddLeaf("Volume Serial Number: 0x" + ReadUInt32LE(data, start + 8).ToString("x8"));
                 uint vll = ReadUInt32LE(data, start + 12);
-                node.AddLeaf("Volume Label: " + (ExtractName(data, start + 18, (int)vll, start + 18, end) ?? ""));
+                node.AddLeaf("Volume Label: " + (ExtractNameClamped(data, start + 18, (int)vll, end) ?? ""));
                 break;
             case 0x03: // FileFsSizeInformation
                 if (start + 24 > end) break;
@@ -1721,7 +1735,7 @@ public static class Smb2Parser
                 node.AddLeaf("FS Attributes: 0x" + ReadUInt32LE(data, start).ToString("x8"));
                 node.AddLeaf("Max Component Name Length: " + ReadUInt32LE(data, start + 4));
                 uint fsnl = ReadUInt32LE(data, start + 8);
-                node.AddLeaf("File System Name: " + (ExtractName(data, start + 12, (int)fsnl, start + 12, end) ?? ""));
+                node.AddLeaf("File System Name: " + (ExtractNameClamped(data, start + 12, (int)fsnl, end) ?? ""));
                 break;
             case 0x07: // FileFsFullSizeInformation
                 if (start + 32 > end) break;
