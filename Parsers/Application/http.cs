@@ -52,6 +52,28 @@ public struct HttpContext
 }
 
 /// <summary>
+/// Header fields the hot-path <see cref="HttpParser.TryParseHttp(byte[], int, HttpParseFields, out HttpContext)"/>
+/// should extract. The request/response first line (method, path, version, status) is always
+/// parsed; these flags gate the more expensive header-value string extraction so a tier /
+/// predicate that never reads a field doesn't pay to allocate it.
+///
+/// On the capture hot path the one-liner only needs <see cref="Host"/>, and the app-layer
+/// predicate additionally needs <see cref="ContentType"/> only when a Content-Type filter is set;
+/// <see cref="UserAgent"/> and <see cref="ContentLength"/> are consumed solely by the Analysis
+/// Details tree, which does its own <see cref="All"/> parse off the hot path.
+/// </summary>
+[Flags]
+public enum HttpParseFields
+{
+    None          = 0,
+    Host          = 1,
+    UserAgent     = 2,
+    ContentType   = 4,
+    ContentLength = 8,
+    All           = Host | UserAgent | ContentType | ContentLength
+}
+
+/// <summary>
 /// HTTP/1.x protocol parser. Provides fast C# parsing of the request/response
 /// first line plus the Host, Content-Type, and Content-Length headers.
 /// Bodies are intentionally not parsed — the predicate operates only on fields
@@ -127,6 +149,18 @@ public static class HttpParser
     /// buffer never influence the parse result or an app-layer predicate.
     /// </summary>
     public static bool TryParseHttp(byte[] data, int dataLength, out HttpContext ctx)
+    {
+        return TryParseHttp(data, dataLength, HttpParseFields.All, out ctx);
+    }
+
+    /// <summary>
+    /// Tier/predicate-gated overload. <paramref name="fields"/> selects which header values to
+    /// extract; unselected headers are still scanned past (so terminator/truncation detection is
+    /// unchanged) but their value string is not allocated. The request/response first line is
+    /// always parsed. Hot-path callers pass just the fields the active tier + predicate read;
+    /// the Analysis Details tree passes <see cref="HttpParseFields.All"/>.
+    /// </summary>
+    public static bool TryParseHttp(byte[] data, int dataLength, HttpParseFields fields, out HttpContext ctx)
     {
         ctx = default(HttpContext);
         ctx.ContentLength = -1;
@@ -220,21 +254,27 @@ public static class HttpParser
             {
                 if (MatchesHeader(data, pos, colon, "Host"))
                 {
-                    ctx.Host = TrimmedHeaderValue(data, colon + 1, lineEnd);
+                    if ((fields & HttpParseFields.Host) != 0)
+                        ctx.Host = TrimmedHeaderValue(data, colon + 1, lineEnd);
                 }
                 else if (MatchesHeader(data, pos, colon, "User-Agent"))
                 {
-                    ctx.UserAgent = TrimmedHeaderValue(data, colon + 1, lineEnd);
+                    if ((fields & HttpParseFields.UserAgent) != 0)
+                        ctx.UserAgent = TrimmedHeaderValue(data, colon + 1, lineEnd);
                 }
                 else if (MatchesHeader(data, pos, colon, "Content-Type"))
                 {
-                    ctx.ContentType = TrimmedHeaderValue(data, colon + 1, lineEnd);
+                    if ((fields & HttpParseFields.ContentType) != 0)
+                        ctx.ContentType = TrimmedHeaderValue(data, colon + 1, lineEnd);
                 }
                 else if (MatchesHeader(data, pos, colon, "Content-Length"))
                 {
-                    string v = TrimmedHeaderValue(data, colon + 1, lineEnd);
-                    int parsed;
-                    if (!string.IsNullOrEmpty(v) && int.TryParse(v, out parsed)) ctx.ContentLength = parsed;
+                    if ((fields & HttpParseFields.ContentLength) != 0)
+                    {
+                        string v = TrimmedHeaderValue(data, colon + 1, lineEnd);
+                        int parsed;
+                        if (!string.IsNullOrEmpty(v) && int.TryParse(v, out parsed)) ctx.ContentLength = parsed;
+                    }
                 }
             }
             pos = SkipLineTerminator(data, lineEnd, scanEnd);
@@ -354,7 +394,9 @@ public static class HttpParser
     public static string FormatHttpSegment(byte[] data, int dataLen, string connKey)
     {
         HttpContext ctx;
-        if (!TryParseHttp(data, dataLen, out ctx)) return null;
+        // Default one-liner only shows Host + Request-URI, so skip User-Agent / Content-Type /
+        // Content-Length extraction (predicates run at Detailed+, not here).
+        if (!TryParseHttp(data, dataLen, HttpParseFields.Host, out ctx)) return null;
         return FormatHttpDefaultCorrelated(ref ctx, connKey);
     }
 
