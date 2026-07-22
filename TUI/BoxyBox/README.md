@@ -22,8 +22,11 @@ no dependency on pspkt types — it can be reused anywhere a `netstandard`/.NET 
   region, so the host console never scrolls.
 - **No word wrap.** Lines are truncated to the box's inner width; an ellipsis marks text
   clipped on the left (right-justified) or right (left-justified).
-- **ANSI-aware measurement.** Visible width is measured ignoring SGR (color) escape
-  sequences, so colored text justifies and truncates on printable columns.
+- **ANSI- and width-aware measurement.** Visible width is measured ignoring SGR (color) escape
+  sequences and counting terminal cells (wide East-Asian/emoji glyphs = 2 columns, combining
+  marks = 0, surrogate pairs kept intact), so colored and non-ASCII text justifies and truncates
+  on printable columns. Measurement is codepoint-level (wcwidth-style), not grapheme-cluster —
+  emoji ZWJ/VS16/flag sequences are not composed (pspkt's own content is ASCII).
 - **C# for the hot path.** Formatting and framing are done in C# so the host (e.g. a
   PowerShell consumer loop) does no per-line work beyond `[Console]::Write`.
 
