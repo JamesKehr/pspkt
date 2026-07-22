@@ -49,6 +49,21 @@ At the `Analysis` parsing level (`-pl Analysis`), TLS records are parsed on dema
 
 Expanding the node reveals the Record Layer sub-node plus the handshake / alert body — cipher suites, compression methods, and decoded `server_name` (SNI), `supported_versions`, and ALPN extensions for ClientHello/ServerHello. One root node is emitted per TLS record in the segment. The full field-by-field layout is documented in [TLS_parser_instructions.md](https://github.com/JamesKehr/pspkt/blob/main/Parsers/Application/TLS_parser_instructions.md).
 
+## Split ClientHello / ServerHello (cross-segment reassembly)
+
+A TLS record can be split across several TCP segments — modern ClientHellos (post-quantum key shares + ECH + ALPN) routinely exceed one segment. The trailing segment starts *mid-record*, so on its own it looks like plain TCP.
+
+pspkt reassembles a split **handshake** record across segments. In the live Default capture and the Analysis **Text Box** you'll see:
+
+```
+… : TLS 1.2 ClientHello [reassembling]      <- head / intermediate segments
+… : TLS 1.2 ClientHello                      <- the segment that completes the record
+```
+
+The **completing** segment shows the full parse (including the SNI at Detailed) instead of plain TCP. Only handshake records are reassembled (ApplicationData is encrypted). Reassembly is bounded and is abandoned on a TCP sequence gap (the segment then shows as plain TCP).
+
+**Current scope:** reassembly applies to the Default one-liner (live capture + Analysis Text Box). The `-pl Detailed` one-liner and the Analysis **Details tree** don't reassemble yet — selecting the *head* segment still shows the partial ClientHello tree. See [TLS_parser_instructions.md](https://github.com/JamesKehr/pspkt/blob/main/Parsers/Application/TLS_parser_instructions.md) for details.
+
 > **QUIC / SSH.** QUIC (HTTP/3, UDP 443) carries its TLS 1.3 handshake inside an encrypted UDP packet format, and SSH is not TLS at all — neither is parsed by the TLS parser. Both are tracked as future work in the parser instructions file.
 
 ## Examples

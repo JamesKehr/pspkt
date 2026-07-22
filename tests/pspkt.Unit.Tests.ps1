@@ -960,6 +960,194 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         }
     }
 
+    Context 'TLS cross-segment handshake reassembly' {
+        BeforeAll {
+            # Reuse the canonical 72-byte ClientHello (record version 0x0303, SNI = example.com),
+            # split it across two TCP segments so the tail begins mid-record.
+            function script:U16b([int]$v) { return [byte[]]@([byte](($v -shr 8) -band 0xff), [byte]($v -band 0xff)) }
+            $body = @(0x03, 0x03) + (,0 * 32) + @(
+                0x00, 0x00, 0x02, 0x00, 0x35, 0x01, 0x00, 0x00, 0x14,
+                0x00, 0x00, 0x00, 0x10, 0x00, 0x0e, 0x00, 0x00, 0x0b,
+                0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d
+            )
+            $recBody = @(0x01, 0x00, 0x00, $body.Count) + $body
+            $script:reasmCH = [byte[]](@(0x16, 0x03, 0x03, (($recBody.Count -shr 8) -band 0xff), ($recBody.Count -band 0xff)) + $recBody)
+            $script:reasmHead = [byte[]]($script:reasmCH[0..39])                       # 40 bytes, record incomplete
+            $script:reasmTail = [byte[]]($script:reasmCH[40..($script:reasmCH.Length-1)])   # completes the record
+
+            # An ApplicationData record header that claims a large body but arrives short.
+            $script:reasmAppHead = [byte[]](0x17, 0x03, 0x03, 0x10, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55)
+        }
+        BeforeEach { [TlsParser]::ResetReassembly() }
+        AfterAll  { [TlsParser]::ResetReassembly() }
+
+        It 'reassembles a handshake record split across two segments and shows the SNI on completion' {
+            $fk = [TlsParser]::FlowKey('10.0.0.1', 5000, '10.0.0.2', 443)
+            $head = [TlsParser]::FormatTlsSmart($script:reasmHead, $script:reasmHead.Length, $fk, [uint32]1000, $true, $true)
+            $head | Should -Match 'ClientHello.*\[reassembling\]'
+            [TlsParser]::HasActiveReassembly | Should -BeTrue
+            $tail = [TlsParser]::ContinueReassembly($script:reasmTail, $script:reasmTail.Length, $fk, [uint32](1000 + $script:reasmHead.Length), $true, $true)
+            $tail | Should -Be 'TLS ClientHello; ver: TLS 1.2; len: 67; SNI: example.com'
+            [TlsParser]::HasActiveReassembly | Should -BeFalse   # flow removed on completion
+        }
+
+        It 'a sequence gap abandons reassembly (caller falls back to plain TCP)' {
+            $fk = [TlsParser]::FlowKey('10.0.0.1', 5001, '10.0.0.2', 443)
+            $null = [TlsParser]::FormatTlsSmart($script:reasmHead, $script:reasmHead.Length, $fk, [uint32]2000, $false, $true)
+            [TlsParser]::HasActiveReassembly | Should -BeTrue
+            $gap = [TlsParser]::ContinueReassembly($script:reasmTail, $script:reasmTail.Length, $fk, [uint32]9999, $false, $true)
+            $gap | Should -BeNullOrEmpty
+            [TlsParser]::HasActiveReassembly | Should -BeFalse   # abandoned
+        }
+
+        It 'does not reassemble a record that fits in a single segment' {
+            $fk = [TlsParser]::FlowKey('10.0.0.1', 5002, '10.0.0.2', 443)
+            $line = [TlsParser]::FormatTlsSmart($script:reasmCH, $script:reasmCH.Length, $fk, [uint32]3000, $false, $true)
+            $line | Should -Be 'TLS 1.2 ClientHello'
+            [TlsParser]::HasActiveReassembly | Should -BeFalse
+        }
+
+        It 'does not reassemble a split ApplicationData record (only handshakes)' {
+            $fk = [TlsParser]::FlowKey('10.0.0.1', 5003, '10.0.0.2', 443)
+            $line = [TlsParser]::FormatTlsSmart($script:reasmAppHead, $script:reasmAppHead.Length, $fk, [uint32]4000, $false, $true)
+            $line | Should -Be 'TLS 1.2 ApplicationData, len 10'
+            [TlsParser]::HasActiveReassembly | Should -BeFalse
+        }
+
+        It 'a continuation for an untracked flow returns null (plain TCP)' {
+            $fk = [TlsParser]::FlowKey('10.0.0.9', 6000, '10.0.0.2', 443)
+            [TlsParser]::ContinueReassembly($script:reasmTail, $script:reasmTail.Length, $fk, [uint32]500, $false, $true) | Should -BeNullOrEmpty
+        }
+
+        It 'does not begin reassembly for a truncated head (segment not fully captured)' {
+            # A split handshake head whose wire payload was NOT captured in full (segmentComplete
+            # false) can't be reassembled — its own middle bytes are missing. It shows the normal
+            # partial parse and starts no flow.
+            $fk = [TlsParser]::FlowKey('10.0.0.1', 5004, '10.0.0.2', 443)
+            $line = [TlsParser]::FormatTlsSmart($script:reasmHead, $script:reasmHead.Length, $fk, [uint32]7000, $false, $false)
+            $line | Should -Be 'TLS 1.2 ClientHello'
+            $line | Should -Not -Match 'reassembling'
+            [TlsParser]::HasActiveReassembly | Should -BeFalse
+        }
+
+        It 'abandons reassembly when a continuation is truncated' {
+            $fk = [TlsParser]::FlowKey('10.0.0.1', 5005, '10.0.0.2', 443)
+            $null = [TlsParser]::FormatTlsSmart($script:reasmHead, $script:reasmHead.Length, $fk, [uint32]8000, $false, $true)
+            [TlsParser]::HasActiveReassembly | Should -BeTrue
+            $r = [TlsParser]::ContinueReassembly($script:reasmTail, $script:reasmTail.Length, $fk, [uint32](8000 + $script:reasmHead.Length), $false, $false)
+            $r | Should -BeNullOrEmpty
+            [TlsParser]::HasActiveReassembly | Should -BeFalse
+        }
+
+        It 'ignores a retransmitted head (via continuation-first) without discarding progress' {
+            # Simulates the wired order: when a flow is active, ContinueReassembly is tried first.
+            # A retransmitted head (same seq as the original head) is a pure retransmit — it must
+            # not restart the flow. Then the real tail completes the record.
+            $fk = [TlsParser]::FlowKey('10.0.0.1', 5006, '10.0.0.2', 443)
+            $null = [TlsParser]::FormatTlsSmart($script:reasmHead, $script:reasmHead.Length, $fk, [uint32]9000, $true, $true)
+            # Retransmit of the head: continuation-first sees seq < NextSeq (already buffered) -> retransmit.
+            $rx = [TlsParser]::ContinueReassembly($script:reasmHead, $script:reasmHead.Length, $fk, [uint32]9000, $true, $true)
+            $rx | Should -Match '\[reassembling\]'
+            [TlsParser]::HasActiveReassembly | Should -BeTrue
+            # The real tail still completes the original record.
+            $done = [TlsParser]::ContinueReassembly($script:reasmTail, $script:reasmTail.Length, $fk, [uint32](9000 + $script:reasmHead.Length), $true, $true)
+            $done | Should -Be 'TLS ClientHello; ver: TLS 1.2; len: 67; SNI: example.com'
+        }
+
+        It 'end-to-end: the completing TCP segment shows the ClientHello (not plain TCP) at Default' {
+            [TlsParser]::ResetReassembly()
+            function script:New-TlsFrame([byte[]]$payload, [uint32]$seq) {
+                $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+                $tcp = [byte[]]::new(20)
+                $tcp[0]=0xd3; $tcp[1]=0x2e      # src port 54062
+                $tcp[2]=0x01; $tcp[3]=0xbb      # dst port 443
+                for ($i=0; $i -lt 4; $i++) { $tcp[4+$i]=[byte](($seq -shr (8*(3-$i))) -band 0xff) }  # seq (big-endian)
+                $tcp[12]=0x50; $tcp[13]=0x18
+                $ipLen = 20 + $tcp.Length + $payload.Length
+                $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+                $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+                $ip[12]=10;$ip[13]=24;$ip[14]=0;$ip[15]=72; $ip[16]=4;$ip[17]=153;$ip[18]=185;$ip[19]=250
+                $pkt = $eth + $ip + $tcp + $payload
+                $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+                $data = $meta + $pkt
+                return [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            }
+            $headPd = script:New-TlsFrame $script:reasmHead ([uint32]1000)
+            $tailPd = script:New-TlsFrame $script:reasmTail ([uint32](1000 + $script:reasmHead.Length))
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($headPd, $tailPd), 2, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1; [TlsParser]::ResetReassembly() }
+            $lines = $out -split "`n" | Where-Object { $_ -match '\S' }
+            $lines[0] | Should -Match 'TLS 1\.2 ClientHello \[reassembling\]'
+            $lines[1] | Should -Match ': TLS 1\.2 ClientHello$'   # completing segment, not plain TCP
+            $lines[1] | Should -Not -Match 'TCP \['
+        }
+
+        It 'end-to-end: a truncated head (PacketSize cut) does not engage reassembly' {
+            # Build a head frame whose IP total-length claims a 300-byte payload but only the first
+            # 40 bytes were captured (as a small -PacketSize would do). segmentComplete is derived
+            # from IP total-length vs captured bytes, so reassembly must NOT engage; the head shows
+            # the normal partial parse and no flow lingers.
+            [TlsParser]::ResetReassembly()
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=0xd3; $tcp[1]=0x2e; $tcp[2]=0x01; $tcp[3]=0xbb   # 54062 -> 443
+            $tcp[12]=0x50; $tcp[13]=0x18
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $claimLen = 20 + 20 + 300               # IP total-length claims a 300-byte payload
+            $ip[2]=[byte](($claimLen -shr 8) -band 0xff); $ip[3]=[byte]($claimLen -band 0xff)
+            $ip[12]=10;$ip[13]=24;$ip[14]=0;$ip[15]=72; $ip[16]=4;$ip[17]=153;$ip[18]=185;$ip[19]=250
+            $pkt = $eth + $ip + $tcp + $script:reasmHead    # but only 40 payload bytes are present
+            $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+            $data = $meta + $pkt
+            $pd = [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($pd), 1, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1; [TlsParser]::ResetReassembly() }
+            $out | Should -Match 'TLS 1\.2 ClientHello'
+            $out | Should -Not -Match 'reassembling'
+            [TlsParser]::HasActiveReassembly | Should -BeFalse
+        }
+
+        It 'end-to-end: an HTTP-looking continuation on port 80 stays a TLS continuation (not HTTP)' {
+            # TLS on port 80 (content-detected). A split ClientHello head begins reassembly; the
+            # continuation's bytes are literally an HTTP request. It must be claimed by the TLS flow
+            # (continuation handled BEFORE the port-based HTTP parser), not rendered as HTTP.
+            [TlsParser]::ResetReassembly()
+            function script:New-Tls80Frame([byte[]]$payload, [uint32]$seq) {
+                $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+                $tcp = [byte[]]::new(20)
+                $tcp[0]=0xd3; $tcp[1]=0x36; $tcp[2]=0x00; $tcp[3]=0x50   # 54070 -> 80
+                for ($i=0; $i -lt 4; $i++) { $tcp[4+$i]=[byte](($seq -shr (8*(3-$i))) -band 0xff) }
+                $tcp[12]=0x50; $tcp[13]=0x18
+                $ipLen = 20 + $tcp.Length + $payload.Length
+                $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+                $ip[2]=[byte](($ipLen -shr 8) -band 0xff); $ip[3]=[byte]($ipLen -band 0xff)
+                $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+                $pkt = $eth + $ip + $tcp + $payload
+                $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+                $data = $meta + $pkt
+                return [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            }
+            # Head: TLS1.0 record claiming 199 bytes (fullLen 204) but only 40 bytes present -> split.
+            $head = [byte[]]::new(40); $head[0]=0x16; $head[1]=0x03; $head[2]=0x01
+            $head[3]=0x00; $head[4]=0xc7; $head[5]=0x01                # ClientHello, recLen 199
+            $httpBytes = [System.Text.Encoding]::ASCII.GetBytes("GET / HTTP/1.1`r`nHost: x`r`n`r`n")
+            $headPd = script:New-Tls80Frame $head ([uint32]1000)
+            $contPd = script:New-Tls80Frame $httpBytes ([uint32](1000 + $head.Length))
+            Set-PspktDetailLevel -Level 0
+            try {
+                $out = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($headPd, $contPd), 2, 0).Output)
+            } finally { Set-PspktDetailLevel -Level 1; [TlsParser]::ResetReassembly() }
+            $lines = $out -split "`n" | Where-Object { $_ -match '\S' }
+            $lines[0] | Should -Match 'TLS 1\.0 ClientHello \[reassembling\]'
+            $lines[1] | Should -Match '\[reassembling\]'      # continuation stayed with the TLS flow
+            $lines[1] | Should -Not -Match 'HTTP: GET'         # NOT claimed by the HTTP parser
+        }
+    }
+
     Context 'TlsParser.BuildTlsDetailTree (Analysis Details)' {
         BeforeAll {
             function script:U16b([int]$v) { return [byte[]]@([byte](($v -shr 8) -band 0xff), [byte]($v -band 0xff)) }

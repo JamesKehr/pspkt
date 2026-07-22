@@ -226,6 +226,12 @@ public static class PacketLineFormatter
     // Per-packet direction value (set in FormatSinglePacketInto, read by
     // FormatComponentPrefixInternal). 1=In, 2=Out, 0=unspecified.
     [ThreadStatic] private static int _currentDirection;
+
+    // True TCP wire payload length (from the IP total-length field, independent of capture
+    // truncation), set per packet in FormatSinglePacketInto. TLS reassembly compares it against
+    // the captured payload length: a record can only be reassembled when its segments are captured
+    // in full, and the TCP sequence number advances by the WIRE length. 0 for non-TCP packets.
+    [ThreadStatic] private static int _tcpWirePayloadLen;
     private static byte[] RentPayloadBuffer(int minSize)
     {
         byte[] buf = _payloadBuf;
@@ -1326,9 +1332,22 @@ public static class PacketLineFormatter
             // Detect application layer protocol by port
             string suffix = null;
             int appLayer = 3; // Transport layer by default
+            bool tlsSegmentComplete = (dataLen == _tcpWirePayloadLen && _tcpWirePayloadLen > 0);
+
+            // TLS continuation FIRST — before the port-based SMB2/HTTP parsers. A mid-record
+            // continuation of a split handshake carries arbitrary record bytes that can look like
+            // an HTTP request or an SMB2 header, so a flow already being reassembled owns this
+            // segment (this also correctly ignores a retransmitted head). Returns null for any
+            // flow not under reassembly, so unrelated traffic falls through untouched.
+            if (TlsParser.HasActiveReassembly && udpData != null)
+            {
+                ulong contFlow = TlsParser.FlowKey(srcAddr, srcPort, dstAddr, dstPort);
+                suffix = TlsParser.ContinueReassembly(udpData, dataLen, contFlow, tcpSeq, false, tlsSegmentComplete);
+                if (suffix != null) appLayer = 4;
+            }
 
             // SMB2 detection (port 445)
-            if (srcPort == 445 || dstPort == 445)
+            if (suffix == null && (srcPort == 445 || dstPort == 445))
             {
                 if (Smb2Parser.IsSmb2Packet(udpData, srcPort, dstPort))
                 {
@@ -1345,10 +1364,12 @@ public static class PacketLineFormatter
             }
             if (suffix == null && TlsParser.LooksLikeTls(udpData, dataLen))
             {
-                // Content-based (not port-gated): detect TLS on any TCP stream carrying real TLS
-                // records, so HTTPS and TLS-on-any-port both get the TLS one-liner. LooksLikeTls
-                // is a cheap 4-byte header check that returns false for non-TLS payloads.
-                suffix = DetectTlsContent(udpData, dataLen);
+                // Content-based (not port-gated) TLS. This segment starts a record: parse it, and
+                // begin cross-segment reassembly when it's the head of a handshake record that
+                // overflows the segment. (A continuation of an active flow was already handled
+                // above, before the port-based parsers.)
+                ulong tlsFlow = TlsParser.FlowKey(srcAddr, srcPort, dstAddr, dstPort);
+                suffix = TlsParser.FormatTlsSmart(udpData, dataLen, tlsFlow, tcpSeq, false, tlsSegmentComplete);
                 if (suffix != null) appLayer = 4;
             }
             if (suffix == null && (srcPort == 53 || dstPort == 53))
@@ -2549,6 +2570,7 @@ public static class PacketLineFormatter
         _tlsCtxCacheValid  = false;
         _httpCtxCacheValid = false;
         _dhcpCtxCacheValid = false;
+        _tcpWirePayloadLen = 0;
 
         byte[] data = pkt.Data;
         // Use the packet's valid DataSize (not Data.Length) to avoid leaking pool slack
@@ -2722,6 +2744,12 @@ public static class PacketLineFormatter
                                 tcpFlags = raw[rawOffset + transportOffset + 13];
                                 tcpWin = PacketParseHelper.ReadUInt16BE(raw, rawOffset + transportOffset + 14);
                                 tcpDataOffset = (raw[rawOffset + transportOffset + 12] >> 4) * 4;
+                                // True wire payload length from the IP total-length field (not the
+                                // capture-clamped transportLen), so TLS reassembly can tell a fully
+                                // captured segment from a truncated one and advance the sequence
+                                // number by the on-wire byte count.
+                                int wirePayload = totalLength - ihl - tcpDataOffset;
+                                _tcpWirePayloadLen = wirePayload > 0 ? wirePayload : 0;
                                 dataLen = Math.Max(0, transportLen - tcpDataOffset);
                                 // Only allocate the transport payload if an app-layer detector
                                 // (SMB2/HTTP/TLS) can actually consume it. Saves a per-packet
@@ -2736,7 +2764,8 @@ public static class PacketLineFormatter
                                     {
                                         int copyLen = Math.Min(dataLen, rawLength - payloadStart);
                                         if (NeedsTcpPayload(srcPort, dstPort)
-                                            || TlsParser.LooksLikeTls(raw, rawOffset + payloadStart, copyLen))
+                                            || TlsParser.LooksLikeTls(raw, rawOffset + payloadStart, copyLen)
+                                            || TlsParser.HasActiveReassembly)
                                         {
                                             transportPayload = RentPayloadBuffer(copyLen);
                                             Buffer.BlockCopy(raw, rawOffset + payloadStart, transportPayload, 0, copyLen);

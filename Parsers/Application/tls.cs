@@ -180,6 +180,172 @@ public static class TlsParser
         return versionName + " " + GetContentTypeName(ctx.ContentType) + ", len " + dataLen.ToString();
     }
 
+    // ==================== Cross-segment handshake reassembly ====================
+    //
+    // A TLS record can be split across several TCP segments. Modern ClientHellos (post-quantum
+    // key shares + ECH + ALPN) routinely exceed one segment, so the record's tail segment starts
+    // mid-record and — parsed per-segment — is invisible (LooksLikeTls is false, so it renders as
+    // plain TCP). This reassembler buffers the bytes of a split *handshake* record (ContentType
+    // 22) per directional flow so the completing segment shows the full parse (with SNI), and
+    // intermediate segments show a "[reassembling]" marker instead of plain TCP.
+    //
+    // Only handshake records are reassembled: Alert/ChangeCipherSpec are tiny, and ApplicationData
+    // is encrypted (nothing to parse beyond length), so reassembling them would add no value.
+    //
+    // State lives on the single consumer/formatting thread (the live console path and the Analysis
+    // text-box path never run concurrently for one capture), matching the other lock-free formatter
+    // caches (e.g. HttpParser._connUri). Bounded by record size and flow count; reset per capture.
+
+    private sealed class TlsFlow
+    {
+        public byte[] Buf;          // record accumulation buffer (sized to the full record)
+        public int Len;             // bytes buffered so far
+        public int ExpectedLen;     // 5-byte header + record length
+        public uint NextSeq;        // expected TCP sequence number of the next byte
+        public int Version;         // record-layer version (for the [reassembling] marker)
+        public int HandshakeType;   // 1=ClientHello, 2=ServerHello, ... (from the head segment)
+    }
+
+    private const int TlsMaxRecord = 16389;   // TLS record max payload (16384) + 5-byte header
+    private const int TlsMaxReasmFlows = 256;  // cap concurrent in-progress reassemblies
+
+    private static readonly System.Collections.Generic.Dictionary<ulong, TlsFlow> _flows
+        = new System.Collections.Generic.Dictionary<ulong, TlsFlow>();
+
+    /// <summary>True when at least one handshake record is mid-reassembly. Cheap guard so the
+    /// per-packet continuation check (and its flow-key hash) is skipped on the common path.</summary>
+    public static bool HasActiveReassembly { get { return _flows.Count > 0; } }
+
+    /// <summary>Clears all in-progress reassembly state. Called at capture start.</summary>
+    public static void ResetReassembly() { _flows.Clear(); }
+
+    /// <summary>
+    /// Directional flow key (client-&gt;server and server-&gt;client are distinct byte streams, so
+    /// a ClientHello and a ServerHello reassemble independently). FNV-1a over the ordered 4-tuple.
+    /// </summary>
+    public static ulong FlowKey(string srcAddr, int srcPort, string dstAddr, int dstPort)
+    {
+        ulong h = 14695981039346656037UL;
+        if (srcAddr != null) for (int i = 0; i < srcAddr.Length; i++) { h ^= srcAddr[i]; h *= 1099511628211UL; }
+        h ^= (byte)(srcPort & 0xFF); h *= 1099511628211UL;
+        h ^= (byte)((srcPort >> 8) & 0xFF); h *= 1099511628211UL;
+        if (dstAddr != null) for (int i = 0; i < dstAddr.Length; i++) { h ^= dstAddr[i]; h *= 1099511628211UL; }
+        h ^= (byte)(dstPort & 0xFF); h *= 1099511628211UL;
+        h ^= (byte)((dstPort >> 8) & 0xFF); h *= 1099511628211UL;
+        return h;
+    }
+
+    /// <summary>
+    /// Formats a segment whose payload STARTS with a TLS record header (LooksLikeTls == true),
+    /// beginning reassembly when the record is a handshake that overflows this segment. Returns
+    /// the display string (the normal per-segment parse when the record fits, or a
+    /// "[reassembling]" marker for the head of a split handshake record).
+    /// <paramref name="segmentComplete"/> must be true (the segment's full wire payload was
+    /// captured) to begin reassembly — a truncated head is missing its own bytes, so it can only
+    /// be shown as a partial per-segment parse, never reassembled.
+    /// </summary>
+    public static string FormatTlsSmart(byte[] data, int dataLen, ulong flowKey, uint tcpSeq, bool detailed, bool segmentComplete)
+    {
+        // A new record starts here — any prior partial reassembly for this flow is stale.
+        _flows.Remove(flowKey);
+
+        if (dataLen < 5) return RenderRecord(data, dataLen, detailed);
+        int contentType = data[0];
+        int version     = (data[1] << 8) | data[2];
+        int recLen      = PacketParseHelper.ReadUInt16BE(data, 3);
+        int fullLen     = 5 + recLen;
+
+        // Only split *handshake* records from a fully captured head are reassembled; everything
+        // else parses per-segment.
+        if (segmentComplete && contentType == 22 && recLen > 0 && fullLen > dataLen && fullLen <= TlsMaxRecord)
+        {
+            int hsType = (dataLen >= 6) ? data[5] : 0;
+            if (_flows.Count >= TlsMaxReasmFlows) _flows.Clear();   // bound memory; drop stalled flows
+            TlsFlow f = new TlsFlow
+            {
+                Buf = new byte[fullLen],
+                ExpectedLen = fullLen,
+                Version = version,
+                HandshakeType = hsType
+            };
+            System.Buffer.BlockCopy(data, 0, f.Buf, 0, dataLen);
+            f.Len = dataLen;
+            f.NextSeq = tcpSeq + (uint)dataLen;   // dataLen == wire payload length when segmentComplete
+            _flows[flowKey] = f;
+            return ReasmLabel(version, hsType, detailed);
+        }
+
+        return RenderRecord(data, dataLen, detailed);
+    }
+
+    /// <summary>
+    /// Formats a segment whose payload does NOT start with a TLS record header, when a handshake
+    /// record is mid-reassembly for its flow. Appends the (in-order, fully captured) payload; on
+    /// completion returns the full record parse (now including the SNI), otherwise a
+    /// "[reassembling]" marker. Returns null when this flow isn't being reassembled, the segment
+    /// was truncated, or the stream integrity is lost (caller then renders the plain TCP segment).
+    /// </summary>
+    public static string ContinueReassembly(byte[] data, int dataLen, ulong flowKey, uint tcpSeq, bool detailed, bool segmentComplete)
+    {
+        TlsFlow f;
+        if (!_flows.TryGetValue(flowKey, out f)) return null;
+
+        // A truncated continuation can't contribute the record's missing bytes — abandon so the
+        // record isn't reassembled from an incomplete byte stream.
+        if (!segmentComplete)
+        {
+            _flows.Remove(flowKey);
+            return null;
+        }
+
+        if (tcpSeq == f.NextSeq)
+        {
+            int copy = f.ExpectedLen - f.Len;
+            if (copy > dataLen) copy = dataLen;
+            if (copy > 0) System.Buffer.BlockCopy(data, 0, f.Buf, f.Len, copy);
+            f.Len += copy;
+            f.NextSeq += (uint)dataLen;
+            if (f.Len >= f.ExpectedLen)
+            {
+                string s = RenderRecord(f.Buf, f.ExpectedLen, detailed);
+                _flows.Remove(flowKey);
+                return s != null ? s : ReasmLabel(f.Version, f.HandshakeType, detailed);
+            }
+            return ReasmLabel(f.Version, f.HandshakeType, detailed);
+        }
+
+        // Pure retransmit of already-buffered bytes — ignore, keep waiting for the next segment.
+        if (tcpSeq + (uint)dataLen <= f.NextSeq)
+        {
+            return ReasmLabel(f.Version, f.HandshakeType, detailed);
+        }
+
+        // Sequence gap / overlap — reassembly integrity is lost; abandon and fall back to plain TCP.
+        _flows.Remove(flowKey);
+        return null;
+    }
+
+    // Renders a complete (single-segment or reassembled) record buffer at the requested tier.
+    private static string RenderRecord(byte[] buf, int len, bool detailed)
+    {
+        if (detailed)
+        {
+            TlsContext ctx;
+            if (!TryParseTls(buf, len, out ctx)) return null;
+            return FormatTlsFromContext(ref ctx, len);
+        }
+        return FormatTlsSegment(buf, len);
+    }
+
+    // "[reassembling]" marker for a handshake record still spanning segments.
+    private static string ReasmLabel(int version, int hsType, bool detailed)
+    {
+        string hs = GetHandshakeName(hsType);
+        if (hs == null) hs = "Handshake";
+        if (detailed) return "TLS " + hs + "; ver: " + GetVersionName(version) + "; [reassembling]";
+        return GetVersionName(version) + " " + hs + " [reassembling]";
+    }
+
     /// <summary>Returns a display name for a TLS record content type (e.g. 22 → "Handshake").</summary>
     public static string GetContentTypeName(int contentType)
     {

@@ -3816,13 +3816,16 @@ function Start-Pspkt {
         }
 
         # Analysis mode does just-in-time full parsing of the selected packet in its Details
-        # box, so it needs more than the 128-byte default. Bump PacketSize to a 1500-byte (MTU)
-        # floor unless the user already asked for more, or for full packets (-PacketSize 0).
-        if ($ParsingLevel -eq [PspktParsingLevel]::Analysis -and $Session.PacketSize -ne 0 -and $Session.PacketSize -lt 1500) {
+        # box, so it needs more than the 128-byte default. Bump PacketSize to a 1600-byte floor
+        # unless the user already asked for more, or for full packets (-PacketSize 0). 1600 (not
+        # 1500) so a full standard-MTU Ethernet frame — 1514 bytes for a 1500-byte IP packet, up
+        # to 1518 with a VLAN tag — is captured in full, which cross-segment TLS reassembly
+        # requires (a truncated MSS segment can't be reassembled).
+        if ($ParsingLevel -eq [PspktParsingLevel]::Analysis -and $Session.PacketSize -ne 0 -and $Session.PacketSize -lt 1600) {
             $previousAnalysisSize = $Session.PacketSize
-            $Session.PacketSize = 1500
+            $Session.PacketSize = 1600
             if (-not $NoWarning.IsPresent) {
-                Write-Warning "Analysis mode benefits from a larger -PacketSize; auto-bumping from $previousAnalysisSize to 1500 bytes (use -PacketSize 0 to capture full packets)."
+                Write-Warning "Analysis mode benefits from a larger -PacketSize; auto-bumping from $previousAnalysisSize to 1600 bytes (use -PacketSize 0 to capture full packets)."
             }
         }
 
@@ -4037,6 +4040,8 @@ function Start-Pspkt {
         # Clear the SMB2 TID/FID name tables so discovered tree/file names from a prior
         # capture in the same PS session never leak into this one.
         [Smb2Parser]::ResetState()
+        # Clear any in-progress TLS handshake reassembly from a prior capture.
+        [TlsParser]::ResetReassembly()
         if ($dnsPredicateActive) {
             $dnsPredicate = [DnsAppPredicate]::new()
 
@@ -4656,6 +4661,8 @@ function Start-Pspkt {
             [PacketLineFormatter]::ClearAppPredicates()
             # Free the SMB2 TID/FID name tables (can grow large on long captures).
             [Smb2Parser]::ResetState()
+            # Free any in-progress TLS handshake reassembly buffers.
+            [TlsParser]::ResetReassembly()
 
             # Mark capture inactive (wakes any consumer/writer waiters).
             [PktMonApi]::SetCaptureActive($false)

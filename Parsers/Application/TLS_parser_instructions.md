@@ -59,6 +59,47 @@ Fields decoded:
   DNS-over-TCP, whose ports are likewise not hinted. WinRM on 5985 stays hinted because it is
   cleartext HTTP, not TLS.)
 
+## Cross-segment handshake reassembly
+
+A TLS record can span several TCP segments. Modern ClientHellos (post-quantum key shares + ECH
++ ALPN) routinely exceed one segment, so the record's **tail** segment starts mid-record — and,
+parsed per-segment, would be invisible (it doesn't begin with a record header, so it renders as
+plain TCP).
+
+The parser reassembles a split **handshake** record (ContentType 22) per directional flow:
+
+- The **head** segment (record start that overflows the segment) shows
+  `TLS [Version] [HandshakeName] [reassembling]`.
+- Intermediate segments show the same `[reassembling]` marker.
+- The **completing** segment shows the full parse of the reassembled record — e.g. at the
+  Detailed tier, `TLS ClientHello; ver: [Version]; len: [RecordLen]; SNI: [Sni]` — so the SNI
+  from a split ClientHello is visible.
+
+Only handshake records are reassembled (Alert/ChangeCipherSpec are tiny; ApplicationData is
+encrypted, so there is nothing to parse beyond length). Reassembly is bounded (max one TLS
+record, 16389 bytes; capped concurrent flows) and abandoned on a TCP sequence gap (the segment
+then falls back to plain TCP). State is cleared at capture start.
+
+**Requires full-payload capture.** A record can only be reassembled when *every* segment that
+carries it was captured in full — the sequence number advances by the on-wire payload length, so
+a truncated segment (a small `-PacketSize`) both loses bytes and breaks the sequence math.
+Reassembly therefore engages only for segments whose captured length equals their IP
+total-length payload; a truncated head shows the normal partial parse and starts no reassembly.
+The `Analysis` level auto-raises `-PacketSize` to a **1600-byte** floor — enough to capture a full
+standard-MTU Ethernet frame (1514 bytes for a 1500-byte IP packet, up to 1518 with a VLAN tag),
+which a full-MSS ClientHello head needs; `-PacketSize 0` (full capture) always works. Live Default
+captures keep the small default `-PacketSize`, so reassembly there needs an explicit larger
+`-PacketSize`. Rare unsupported cases: a ClientHello carried in TCP Fast Open SYN data (the SYN
+consumes a sequence number, so the follow-on segment looks like a gap) falls back to plain TCP;
+a handshake spanning the 32-bit sequence-number wrap may retain a stale `[reassembling]` state
+(the wrap can look like a retransmit) until the flow is evicted.
+
+**Scope / limitations (current):** reassembly is applied to the **Default one-liner** — which is
+what the live Default capture *and* the Analysis Text Box render. The **`-pl Detailed` one-liner**
+and the **Analysis Details tree** (JIT-parsed from a single retained packet) do **not** yet
+reassemble across segments; selecting the *head* segment still shows the (partial) ClientHello
+tree. Full Detailed / Details-tree reassembly is tracked as future work.
+
 ## Tree indentation
 
 The Analysis Details tree uses a **plain two-space indent per level** with no `├`/`└`
