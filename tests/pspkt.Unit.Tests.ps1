@@ -4805,6 +4805,48 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
                 Remove-Item $out -Force -ErrorAction SilentlyContinue
             }
         }
+        It 'reuses the slot buffer without leaking stale tail bytes (large then small)' {
+            # seq 5 and seq 21 map to the same slot (both % 16 == 5). Storing a smaller packet
+            # into a slot that held a larger one reuses the buffer; TryGet must return only the
+            # new packet's bytes, never stale bytes from the evicted larger packet.
+            $store = [PacketDetailStore]::new(16)
+            $large = [byte[]]::new(40); for ($i=0; $i -lt 40; $i++) { $large[$i]=0xAA }
+            $store.Store(5, $large, 40, 40, 0, 40, 0, 0, 0, 0)
+            $small = [byte[]]::new(8);  for ($i=0; $i -lt 8;  $i++) { $small[$i]=0xBB }
+            $store.Store(21, $small, 8, 8, 0, 8, 0, 0, 0, 0)   # same slot, smaller packet
+            $pkt = $null; $c = 0; $e = 0; $d = 0
+            $store.TryGet(21, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeTrue
+            $pkt.Length | Should -Be 8
+            ($pkt | Where-Object { $_ -ne 0xBB }).Count | Should -Be 0   # no 0xAA stale tail
+            # The evicted larger packet is gone.
+            $store.TryGet(5, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeFalse
+            # A later larger packet grows the reused buffer correctly.
+            $large2 = [byte[]]::new(40); for ($i=0; $i -lt 40; $i++) { $large2[$i]=0xCC }
+            $store.Store(37, $large2, 40, 40, 0, 40, 0, 0, 0, 0)   # slot 5 again (37 % 16 == 5)
+            $store.TryGet(37, [ref]$pkt, [ref]$c, [ref]$e, [ref]$d) | Should -BeTrue
+            $pkt.Length | Should -Be 40
+            ($pkt | Where-Object { $_ -ne 0xCC }).Count | Should -Be 0
+        }
+        It 'WritePcapng serializes the small packet, not the reused buffer''s stale tail' {
+            # Store a large (0xAA) packet then a smaller (0xBB) one in the SAME slot so the writer
+            # sees an oversized reused buffer. The serialized pcapng must contain only the small
+            # packet's valid bytes, never the 32-byte 0xAA stale tail beyond DataSize.
+            $store = [PacketDetailStore]::new(16)
+            $large = [byte[]]::new(40); for ($i=0; $i -lt 40; $i++) { $large[$i]=0xAA }
+            $store.Store(5, $large, 40, 40, 0, 40, 0, 0, 0, 0)
+            $small = [byte[]]::new(8);  for ($i=0; $i -lt 8;  $i++) { $small[$i]=0xBB }
+            $store.Store(21, $small, 8, 8, 0, 8, 0, 0, 0, 0)   # same slot; reuses the 40-byte buffer
+            $out = Join-Path $env:TEMP ("pspkt-unit-reuse-{0}.pcapng" -f ([guid]::NewGuid().ToString('N')))
+            try {
+                $store.WritePcapng($out) | Should -Be 1        # only seq 21 remains (seq 5 evicted)
+                $bytes = [System.IO.File]::ReadAllBytes($out)
+                $bytes -contains 0xBB | Should -BeTrue          # the real packet bytes were written
+                # The stale tail (32 x 0xAA) must never appear; check for no long 0xAA run.
+                $maxRun = 0; $run = 0
+                foreach ($b in $bytes) { if ($b -eq 0xAA) { $run++; if ($run -gt $maxRun) { $maxRun = $run } } else { $run = 0 } }
+                $maxRun | Should -BeLessThan 16
+            } finally { Remove-Item $out -Force -ErrorAction SilentlyContinue }
+        }
         It 'WritePcapng returns 0 when nothing is retained' {
             $store = [PacketDetailStore]::new(16)
             $out = Join-Path $env:TEMP ("pspkt-unit-empty-{0}.pcapng" -f ([guid]::NewGuid().ToString('N')))

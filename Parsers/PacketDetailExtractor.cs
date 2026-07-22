@@ -18,7 +18,10 @@ using System.Text;
 /// <summary>
 /// Bounded ring buffer of raw packet copies keyed by absolute sequence number. Used by the
 /// Analysis Details box to reparse a selected packet on demand. O(1) store/lookup; the oldest
-/// packet is silently evicted when a slot is reused.
+/// packet is silently evicted when a slot is reused. Each slot's backing byte[] is reused (grown
+/// on demand) across evictions, so a steady capture allocates nothing per packet after warmup;
+/// only the stored valid length (DataSize) is read back and every reader bounds by it. All access
+/// is on the single Analysis-loop thread (drain/store, detail navigation, and save are sequential).
 /// </summary>
 public sealed class PacketDetailStore
 {
@@ -59,10 +62,16 @@ public sealed class PacketDetailStore
         if (data == null || dataSize <= 0 || dataSize > data.Length) return;
         if (pktOffset < 0 || pktLength <= 0 || pktOffset + pktLength > dataSize) return;
         int slot = (int)((seq % _capacity + _capacity) % _capacity);
-        byte[] copy = new byte[dataSize];
-        Buffer.BlockCopy(data, 0, copy, 0, dataSize);
+        // Reuse the slot's existing buffer when it's large enough. The ring overwrites the oldest
+        // packet in this slot regardless, so growing-then-reusing avoids a fresh byte[] (and the
+        // garbage from the evicted one) on every store once each slot reaches its high-water size.
+        // Only DataSize bytes are valid; every reader (TryGet, WritePcapng -> WritePacketDirect)
+        // bounds by DataSize / PktOffset+PktLength, so the oversized tail is never read.
+        byte[] buf = _ring[slot].Data;
+        if (buf == null || buf.Length < dataSize) buf = new byte[dataSize];
+        Buffer.BlockCopy(data, 0, buf, 0, dataSize);
         _ring[slot].Seq = seq;
-        _ring[slot].Data = copy;
+        _ring[slot].Data = buf;
         _ring[slot].DataSize = dataSize;
         _ring[slot].MetaOffset = metaOffset;
         _ring[slot].PktOffset = pktOffset;
