@@ -121,8 +121,22 @@ public static class DnsParser
     /// </summary>
     public static string ReadName(byte[] data, int offset, out int bytesRead)
     {
+        return ReadName(data, offset, data != null ? data.Length : 0, out bytesRead);
+    }
+
+    /// <summary>
+    /// Length-bounded overload: reads/pointer-follows are confined to the first
+    /// <paramref name="dataLength"/> bytes (the valid DNS message) rather than the whole
+    /// buffer, so a caller passing an over-sized reused/pooled buffer never lets a label or
+    /// compression pointer wander into stale bytes past the real message. The 3-argument
+    /// overload delegates here with <c>dataLength = data.Length</c> (unchanged behavior).
+    /// </summary>
+    public static string ReadName(byte[] data, int offset, int dataLength, out int bytesRead)
+    {
         bytesRead = 0;
-        if (data == null || offset >= data.Length) return ".";
+        if (data == null) return ".";
+        int limit = (dataLength < data.Length) ? dataLength : data.Length;
+        if (offset >= limit) return ".";
 
         StringBuilder sb = new StringBuilder(64);
         int pos = offset;
@@ -131,7 +145,7 @@ public static class DnsParser
 
         while (maxIter-- > 0)
         {
-            if (pos >= data.Length) break;
+            if (pos >= limit) break;
             int labelLen = data[pos];
 
             if (labelLen == 0)
@@ -143,7 +157,7 @@ public static class DnsParser
             // Compression pointer (top 2 bits set).
             if ((labelLen & 0xC0) == 0xC0)
             {
-                if (pos + 1 >= data.Length) break;
+                if (pos + 1 >= limit) break;
                 int pointer = ((labelLen & 0x3F) << 8) | data[pos + 1];
                 if (!followed) bytesRead += 2;
                 followed = true;
@@ -153,7 +167,7 @@ public static class DnsParser
 
             pos++;
             if (!followed) bytesRead += 1 + labelLen;
-            if (pos + labelLen > data.Length) break;
+            if (pos + labelLen > limit) break;
 
             if (sb.Length > 0) sb.Append('.');
             // Append label chars directly — DNS labels are ASCII-only so
@@ -199,7 +213,11 @@ public static class DnsParser
     public static bool TryParseDns(byte[] data, int dataLength, int srcPort, int dstPort, out DnsContext ctx)
     {
         ctx = default(DnsContext);
-        if (data == null || dataLength < 12) return false;
+        if (data == null) return false;
+        // Clamp an out-of-contract over-sized dataLength so the fixed-offset header/QTYPE reads
+        // below (and the downstream ReadName/ExtractFirstAnswer bounds) never index past the buffer.
+        if (dataLength > data.Length) dataLength = data.Length;
+        if (dataLength < 12) return false;
 
         ctx.IsMdns  = (srcPort == 5353 || dstPort == 5353);
         ctx.TxId    = PacketParseHelper.ReadUInt16BE(data, 0);
@@ -223,7 +241,7 @@ public static class DnsParser
         if (ctx.QdCount > 0 && pos < dataLength)
         {
             int nameBytes;
-            ctx.QName = ReadName(data, pos, out nameBytes);
+            ctx.QName = ReadName(data, pos, dataLength, out nameBytes);
             pos += nameBytes;
             if (pos + 4 <= dataLength)
             {
@@ -243,7 +261,7 @@ public static class DnsParser
         // For responses, try to extract the first answer record for display.
         if (ctx.Qr == 1 && ctx.AnCount > 0 && pos < dataLength)
         {
-            ctx.FirstAnswer = ExtractFirstAnswer(data, pos);
+            ctx.FirstAnswer = ExtractFirstAnswer(data, pos, dataLength);
         }
 
         ctx.Valid = true;
@@ -665,10 +683,12 @@ public static class DnsParser
     /// Example: "www.example.com. CNAME cdn.example.net. A 93.184.216.34"
     /// Cap: walks at most 16 answer records to bound loop time.
     /// </summary>
-    private static string ExtractFirstAnswer(byte[] data, int offset)
+    private static string ExtractFirstAnswer(byte[] data, int offset, int dataLength)
     {
         int pos = offset;
-        int dataLength = data.Length;
+        // Bound the record walk to the DNS message (not the whole buffer) so an over-sized
+        // reused/pooled buffer's stale tail is never mis-parsed as an extra answer record.
+        if (dataLength > data.Length) dataLength = data.Length;
         if (pos >= dataLength) return null;
 
         string cnameResult = null;
@@ -677,7 +697,7 @@ public static class DnsParser
         while (maxRecords-- > 0 && pos < dataLength)
         {
             int nameBytes;
-            string rrName = ReadName(data, pos, out nameBytes);
+            string rrName = ReadName(data, pos, dataLength, out nameBytes);
             pos += nameBytes;
 
             if (pos + 10 > dataLength) break;
@@ -717,7 +737,7 @@ public static class DnsParser
 
                 case 5: // CNAME — record it and keep walking for the A/AAAA that follows
                     int cnameBytes;
-                    string target = ReadName(data, pos, out cnameBytes);
+                    string target = ReadName(data, pos, dataLength, out cnameBytes);
                     cnameResult = rrName + " " + typeName + " " + target;
                     pos += rdLength;
                     continue;
@@ -725,7 +745,7 @@ public static class DnsParser
                 case 12: // PTR
                 case 2:  // NS
                     int ptrBytes;
-                    string ptrTarget = ReadName(data, pos, out ptrBytes);
+                    string ptrTarget = ReadName(data, pos, dataLength, out ptrBytes);
                     string ptrResult = rrName + " " + typeName + " " + ptrTarget;
                     return cnameResult != null ? cnameResult + " " + ptrResult : ptrResult;
             }

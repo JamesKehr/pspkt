@@ -264,6 +264,24 @@ public static class PacketLineFormatter
         return buf;
     }
 
+    // Dedicated thread-static scratch for the DNS-over-TCP length-prefix strip. It must be a
+    // separate buffer from _payloadBuf: DetectTcpDns is handed the rented transport payload
+    // (which IS _payloadBuf), so reusing _payloadBuf here would alias the BlockCopy source and
+    // destination. Grown to max observed size and reused across packets (single consumer thread).
+    [ThreadStatic] private static byte[] _dnsTcpScratch;
+    private static byte[] RentDnsTcpScratch(int minSize)
+    {
+        byte[] buf = _dnsTcpScratch;
+        if (buf == null || buf.Length < minSize)
+        {
+            int cap = 256;
+            while (cap < minSize) cap <<= 1;
+            buf = new byte[cap];
+            _dnsTcpScratch = buf;
+        }
+        return buf;
+    }
+
     // Sentinel returned by DetectUdpAppDetailed when an app-layer predicate rejects
     // the packet. Reference-equality compared in callers so an actual DNS response
     // that happens to render as the same characters won't collide.
@@ -1862,9 +1880,12 @@ public static class PacketLineFormatter
         int msgLen = PacketParseHelper.ReadUInt16BE(tcpPayload, 0);
         int dnsLen = Math.Min(msgLen, avail - 2);
         if (dnsLen < 12) return null;
-        byte[] dnsMsg = new byte[dnsLen];
+        // Strip the 2-byte TCP length prefix into a reusable scratch buffer (zero per-packet
+        // allocation) and parse only the valid dnsLen bytes via the length-bounded overload —
+        // the same rent+copy+length-bounded pattern the UDP DNS paths already use.
+        byte[] dnsMsg = RentDnsTcpScratch(dnsLen);
         Buffer.BlockCopy(tcpPayload, 2, dnsMsg, 0, dnsLen);
-        return DnsParser.FormatDnsSegment(dnsMsg, srcPort, dstPort, detailed);
+        return DnsParser.FormatDnsSegment(dnsMsg, dnsLen, srcPort, dstPort, detailed);
     }
 
     private static string DetectUdpApp(int srcPort, int dstPort, byte[] data)
