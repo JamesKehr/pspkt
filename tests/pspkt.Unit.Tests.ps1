@@ -5075,6 +5075,99 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             }
             $out | Should -Match 'DNS: 0x94f0 1/0/0 example\.com\. A 150\.171\.109\.117'
         }
+        It 'reuses the DNS-over-TCP scratch buffer without leaking a prior packet''s stale tail' {
+            # DetectTcpDns strips the 2-byte TCP length prefix into a grown-on-demand thread-static
+            # scratch buffer. After a large TCP DNS message, the scratch holds those bytes; a later
+            # smaller message must parse only its own (shorter) length and never read the stale tail.
+            # Builds a framed Eth+IPv4/TCP(:53,PSH+ACK) packet around a raw DNS message.
+            function script:New-TcpDnsPd([byte[]]$dnsBytes) {
+                $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+                $prefix = [byte[]]( ($dnsBytes.Length -shr 8), ($dnsBytes.Length -band 0xff) )
+                $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6
+                $tot = 20 + 20 + 2 + $dnsBytes.Length; $ip[2]=($tot -shr 8); $ip[3]=($tot -band 0xff)
+                $ip[12]=1;$ip[13]=1;$ip[14]=1;$ip[15]=1; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=72
+                $tcp = [byte[]](0,53, 0xe2,0x01, 0,0,0,1, 0,0,0,2, 0x50,0x18, 0,16, 0xaa,0xc8, 0,0)
+                $pkt = $eth + $ip + $tcp + $prefix + $dnsBytes
+                $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+                $data = $meta + $pkt
+                return [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            }
+            # Large response for "longexamplename.example.com" (A 1.2.3.4) — grows the scratch.
+            $bigName = [System.Collections.Generic.List[byte]]::new()
+            $bigName.AddRange([byte[]](0x11,0x22, 0x81,0x80, 0,1, 0,1, 0,0, 0,0))
+            $bigName.Add(15); 'longexamplename'.ToCharArray() | ForEach-Object { $bigName.Add([byte][char]$_) }
+            $bigName.Add(7); 'example'.ToCharArray() | ForEach-Object { $bigName.Add([byte][char]$_) }
+            $bigName.Add(3); 'com'.ToCharArray() | ForEach-Object { $bigName.Add([byte][char]$_) }
+            $bigName.Add(0); $bigName.AddRange([byte[]](0,1, 0,1))
+            $bigName.AddRange([byte[]](0xc0,0x0c, 0,1, 0,1, 0,0,0,60, 0,4, 1,2,3,4))
+            $bigPd = New-TcpDnsPd ([byte[]]$bigName.ToArray())
+            # Small query for "a.io" — shorter than the scratch's grown length.
+            $smallName = [System.Collections.Generic.List[byte]]::new()
+            $smallName.AddRange([byte[]](0x33,0x44, 0x01,0x00, 0,1, 0,0, 0,0, 0,0))
+            $smallName.Add(1); $smallName.Add([byte][char]'a')
+            $smallName.Add(2); 'io'.ToCharArray() | ForEach-Object { $smallName.Add([byte][char]$_) }
+            $smallName.Add(0); $smallName.AddRange([byte[]](0,1, 0,1))
+            $smallPd = New-TcpDnsPd ([byte[]]$smallName.ToArray())
+
+            Set-PspktDetailLevel -Level 0
+            try {
+                # Same thread => same thread-static scratch. Format big first (grows it), then small.
+                $bigOut = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($bigPd), 1, 1).Output)
+                $smallOut = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($smallPd), 1, 2).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $bigOut | Should -Match 'DNS: 0x1122 1/0/0 longexamplename\.example\.com\. A 1\.2\.3\.4'
+            # The small query must be clean: correct content and no leftover from the big packet.
+            $smallOut | Should -Match 'DNS: 0x3344 0/0/0 a\.io\. A'
+            $smallOut | Should -Not -Match 'longexamplename'
+            $smallOut | Should -Not -Match '0x1122'
+        }
+        It 'bounds a CNAME-only response to the DNS message so no stale-tail record is parsed' {
+            # A valid response whose single (AnCount=1) answer is a CNAME ends right after that
+            # record. ExtractFirstAnswer records the CNAME and keeps walking for a following
+            # A/AAAA — so it must stop at the DNS message length, not the (over-sized reused)
+            # buffer length, or it mis-parses a prior packet's stale bytes as a bogus record.
+            function script:New-TcpDnsPd2([byte[]]$dnsBytes) {
+                $eth = [byte[]](0x7c,0x1e,0x52,0x97,0xb1,0x46, 0x68,0xbf,0x6c,0x64,0xf6,0x00, 0x08,0x00)
+                $prefix = [byte[]]( ($dnsBytes.Length -shr 8), ($dnsBytes.Length -band 0xff) )
+                $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6
+                $tot = 20 + 20 + 2 + $dnsBytes.Length; $ip[2]=($tot -shr 8); $ip[3]=($tot -band 0xff)
+                $ip[12]=1;$ip[13]=1;$ip[14]=1;$ip[15]=1; $ip[16]=10;$ip[17]=24;$ip[18]=0;$ip[19]=72
+                $tcp = [byte[]](0,53, 0xe2,0x01, 0,0,0,1, 0,0,0,2, 0x50,0x18, 0,16, 0xaa,0xc8, 0,0)
+                $pkt = $eth + $ip + $tcp + $prefix + $dnsBytes
+                $meta = [byte[]]::new(40); $meta[12]=1; $meta[16]=200; $meta[18]=2
+                $data = $meta + $pkt
+                return [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            }
+            # Large response first, to grow and dirty the reused scratch with non-zero tail bytes.
+            $big = [System.Collections.Generic.List[byte]]::new()
+            $big.AddRange([byte[]](0xab,0xcd, 0x81,0x80, 0,1, 0,1, 0,0, 0,0))
+            $big.Add(15); 'longexamplename'.ToCharArray() | ForEach-Object { $big.Add([byte][char]$_) }
+            $big.Add(3); 'net'.ToCharArray() | ForEach-Object { $big.Add([byte][char]$_) }
+            $big.Add(0); $big.AddRange([byte[]](0,1, 0,1))
+            $big.AddRange([byte[]](0xc0,0x0c, 0,1, 0,1, 0,0,0,60, 0,4, 9,9,9,9))
+            $bigPd = New-TcpDnsPd2 ([byte[]]$big.ToArray())
+            # CNAME-only response: question "a" A, one answer "a" CNAME "b". Message ends here.
+            $cn = [System.Collections.Generic.List[byte]]::new()
+            $cn.AddRange([byte[]](0x55,0x66, 0x81,0x80, 0,1, 0,1, 0,0, 0,0))
+            $cn.Add(1); $cn.Add([byte][char]'a'); $cn.Add(0); $cn.AddRange([byte[]](0,1, 0,1))
+            $cn.AddRange([byte[]](0xc0,0x0c, 0,5, 0,1, 0,0,0,60))
+            $cn.AddRange([byte[]](0,3, 1)); $cn.Add([byte][char]'b'); $cn.Add(0)   # rdlen=3, target "b."
+            $cnPd = New-TcpDnsPd2 ([byte[]]$cn.ToArray())
+
+            Set-PspktDetailLevel -Level 0
+            try {
+                $null = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($bigPd), 1, 1).Output)
+                $cnOut = [BoxyBox.AnsiText]::StripAnsi([PacketLineFormatter]::FormatBatch([PSPacketData[]]@($cnPd), 1, 2).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            # Clean CNAME line ending exactly at "b." — a stale-tail mis-parse would append a
+            # bogus record after it, so the (trimmed) line must terminate at the CNAME target.
+            $cnOut | Should -Match 'DNS: 0x5566 1/0/0 a\. CNAME b\.'
+            $cnOut.TrimEnd() | Should -Match 'CNAME b\.$'
+        }
         It 'shows a contentless TCP:53 segment as plain TCP, not a DNS hint line' {
             # A FIN/ACK segment on port 53 carries no DNS message; it must render at the
             # transport layer ("TCP [.F] ...") rather than being labeled "DNS: TCP [.F] ...".
