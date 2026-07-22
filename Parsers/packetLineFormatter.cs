@@ -2683,7 +2683,15 @@ public static class PacketLineFormatter
                 dstAddr = PacketParseHelper.FormatIPv4(raw, rawOffset + ipOffset + 16);
 
                 transportOffset = ipOffset + ihl;
-                int transportLen = Math.Min(totalLength - ihl, rawLength - transportOffset);
+                // IP Total Length 0 = a hardware segmentation-offload (TSO/LSO/GSO) packet — the
+                // NIC fills the length field after pktmon captures the frame, so the field reads 0
+                // even though the payload is present. Fall back to the captured frame length (the
+                // same thing the Analysis Details tree does) instead of parsing a bogus 0-length
+                // transport, which otherwise renders the segment as "TCP [none], seq 0, len 0" and
+                // hides the payload (e.g. a ClientHello) from the one-liner.
+                int transportLen = (totalLength == 0)
+                    ? (rawLength - transportOffset)
+                    : Math.Min(totalLength - ihl, rawLength - transportOffset);
                 if (transportLen < 0) transportLen = 0;
 
                 switch (protocol)

@@ -4970,6 +4970,40 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             (EmitLine $pkt 0) | Should -Match 'ICMP\.Destination Unreachable -  Destination port unreachable \(3\)'
             (EmitLine $pkt 1) | Should -Match 'ICMP\.Destination Unreachable -  Destination port unreachable \(3\)'
         }
+        It 'parses a TCP/TLS segment whose IP Total Length is 0 (TSO/LSO offload)' {
+            # A hardware segmentation-offload frame reports IP Total Length 0 (the NIC fills it in
+            # after capture). The parser must fall back to the captured frame length instead of
+            # rendering "TCP [none], seq 0, len 0" and hiding the payload.
+            $tls = [byte[]]::new(80); $tls[0]=0x16; $tls[1]=0x03; $tls[2]=0x01; $tls[3]=0x00; $tls[4]=0x4b; $tls[5]=0x01
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=0xc6; $tcp[1]=0xee; $tcp[2]=0x01; $tcp[3]=0xbb    # 50926 -> 443
+            $tcp[4]=0x0b; $tcp[5]=0x36; $tcp[6]=0x3a; $tcp[7]=0x74    # seq
+            $tcp[12]=0x50; $tcp[13]=0x18                              # data offset 5, PSH+ACK
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=0x00; $ip[3]=0x00                                  # Total Length = 0 (offload)
+            $ip[12]=10;$ip[13]=24;$ip[14]=0;$ip[15]=72; $ip[16]=104;$ip[17]=20;$ip[18]=23;$ip[19]=154
+            $pkt = $eth + $ip + $tcp + $tls
+            $out = EmitLine $pkt 0
+            $out | Should -Match 'IPv4\.TCP 10\.24\.0\.72\.50926 > 104\.20\.23\.154\.443: TLS 1\.0 ClientHello'
+            $out | Should -Not -Match 'TCP \[none\]'
+        }
+        It 'shows real TCP fields for a payload-less TSO segment (not zeros)' {
+            # A plain (non-app) TCP segment with IP Total Length 0 must still show its real ports
+            # and sequence number, not the zeroed "TCP [none], seq 0" fallback.
+            $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+            $tcp = [byte[]]::new(20)
+            $tcp[0]=0x23; $tcp[1]=0x28; $tcp[2]=0x23; $tcp[3]=0x29    # 9000 -> 9001 (no app parser)
+            $tcp[4]=0x00; $tcp[5]=0x00; $tcp[6]=0x04; $tcp[7]=0xd2    # seq 1234
+            $tcp[12]=0x50; $tcp[13]=0x10                             # ACK only, no payload
+            $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+            $ip[2]=0x00; $ip[3]=0x00                                  # Total Length = 0 (offload)
+            $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+            $pkt = $eth + $ip + $tcp
+            $out = EmitLine $pkt 0
+            $out | Should -Match 'IPv4\.TCP 10\.0\.0\.1\.9000 > 10\.0\.0\.2\.9001: TCP \[\.\], seq 1234,'
+            $out | Should -Not -Match 'seq 0,'
+        }
         It 'ICMPv6 NDP Router Solicitation uses the spec format with the sender MAC' {
             $eth = [byte[]](0x33,0x33,0,0,0,2, 0x54,0x0f,0x2c,0x72,0x5e,0x1c, 0x86,0xdd)
             $rs = [byte[]](133,0,0,0, 0,0,0,0) + [byte[]](1,1,0x54,0x0f,0x2c,0x72,0x5e,0x1c)
