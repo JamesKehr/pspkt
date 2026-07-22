@@ -4293,6 +4293,75 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
     }
 
+    Context 'AnsiText cell width (wcwidth)' {
+        BeforeAll {
+            $script:cjk    = [char]::ConvertFromUtf32(0x4E2D) + [char]::ConvertFromUtf32(0x6587)  # 中文, 2 wide glyphs
+            $script:emoji  = [char]::ConvertFromUtf32(0x1F600)                                    # grinning face (surrogate pair)
+            $script:combo  = 'e' + [char]0x0301                                                   # e + combining acute
+        }
+        It 'CharWidth returns 1 for ASCII, 2 for wide/emoji, 0 for combining/zero-width' {
+            [BoxyBox.AnsiText]::CharWidth(0x41)    | Should -Be 1   # 'A'
+            [BoxyBox.AnsiText]::CharWidth(0x4E2D)  | Should -Be 2   # CJK
+            [BoxyBox.AnsiText]::CharWidth(0xFF21)  | Should -Be 2   # fullwidth 'A'
+            [BoxyBox.AnsiText]::CharWidth(0xAC00)  | Should -Be 2   # Hangul syllable
+            [BoxyBox.AnsiText]::CharWidth(0x1F600) | Should -Be 2   # emoji
+            [BoxyBox.AnsiText]::CharWidth(0x0301)  | Should -Be 0   # combining acute
+            [BoxyBox.AnsiText]::CharWidth(0x200D)  | Should -Be 0   # zero-width joiner
+        }
+        It 'VisibleLength counts terminal cells, not UTF-16 units' {
+            [BoxyBox.AnsiText]::VisibleLength($script:cjk)   | Should -Be 4   # 2 glyphs x 2 cells
+            [BoxyBox.AnsiText]::VisibleLength($script:emoji) | Should -Be 2   # 1 emoji, 2 cells (2 UTF-16 units)
+            [BoxyBox.AnsiText]::VisibleLength($script:combo) | Should -Be 1   # base + zero-width mark
+        }
+        It 'TakeVisiblePrefix never splits a surrogate pair' {
+            # Two emoji (4 UTF-16 units, 4 cells). Ask for 3 cells: the second emoji straddles the
+            # boundary, so only the first (whole) emoji is kept -> 2 cells, 2 units (no lone surrogate).
+            $two = $script:emoji + $script:emoji
+            $p = [BoxyBox.AnsiText]::TakeVisiblePrefix($two, 3)
+            [BoxyBox.AnsiText]::VisibleLength($p) | Should -Be 2
+            $p.Length | Should -Be 2                                  # exactly one surrogate pair
+            [System.Char]::IsHighSurrogate($p[0]) | Should -BeTrue
+            [System.Char]::IsLowSurrogate($p[1])  | Should -BeTrue
+        }
+        It 'FitToWidth pads a straddling wide glyph to the exact width' {
+            # 3 CJK glyphs = 6 cells, fit to 5: keep 2 glyphs (4 cells) + 1 pad space = exactly 5.
+            $three = $script:cjk + [char]::ConvertFromUtf32(0x6D4B)
+            $fit = [BoxyBox.AnsiText]::FitToWidth($three, 5)
+            [BoxyBox.AnsiText]::VisibleLength($fit) | Should -Be 5
+            $fit[$fit.Length - 1] | Should -Be ([char]' ')           # padded trailing cell
+        }
+        It 'TextJustify.Fit measures wide text in cells' {
+            # 2 CJK glyphs = 4 cells; pad to width 6 -> 2 trailing spaces (left justify).
+            $r = [BoxyBox.TextJustify]::Fit($script:cjk, 6, [BoxyBox.Justify]::Left)
+            [BoxyBox.AnsiText]::VisibleLength($r) | Should -Be 6
+            $r.EndsWith('  ') | Should -BeTrue
+        }
+        It 'is byte-identical to prior behavior for pure-ASCII text' {
+            [BoxyBox.AnsiText]::VisibleLength('hello world')            | Should -Be 11
+            [BoxyBox.AnsiText]::TakeVisiblePrefix('hello world', 5)     | Should -Be 'hello'
+            [BoxyBox.AnsiText]::FitToWidth('abcdef', 3)                 | Should -Be 'abc'
+            [BoxyBox.TextJustify]::Fit('abcdef', 4, [BoxyBox.Justify]::Left) | Should -Be 'a...'
+        }
+        It 'TakeVisiblePrefix keeps a trailing combining mark attached to its base' {
+            # "e" + combining acute + "x", clip to 1 cell: the accent stays with the "e".
+            $p = [BoxyBox.AnsiText]::TakeVisiblePrefix($script:combo + 'x', 1)
+            $p | Should -Be $script:combo
+            [BoxyBox.AnsiText]::VisibleLength($p) | Should -Be 1
+        }
+        It 'TextJustify.Fit truncation pads a straddling wide glyph to exact width (no border shift)' {
+            # 3 CJK glyphs (6 cells), fit to width 4 -> "..." keeps 1 cell of head budget which a
+            # wide glyph can't fill; result must still be exactly 4 cells so a border stays put.
+            $three = $script:cjk + [char]::ConvertFromUtf32(0x6D4B)
+            $r = [BoxyBox.TextJustify]::Fit($three, 4, [BoxyBox.Justify]::Left)
+            [BoxyBox.AnsiText]::VisibleLength($r) | Should -Be 4
+        }
+        It 'emoji skin-tone modifier is zero-width so a modified emoji measures 2 cells' {
+            $modified = [char]::ConvertFromUtf32(0x1F44D) + [char]::ConvertFromUtf32(0x1F3FD)  # thumbs-up + medium skin tone
+            [BoxyBox.AnsiText]::CharWidth(0x1F3FD) | Should -Be 0
+            [BoxyBox.AnsiText]::VisibleLength($modified) | Should -Be 2
+        }
+    }
+
     Context 'FrameBuffer row diffing' {
         It 'first Diff emits every row; an unchanged Diff emits nothing' {
             $fb = [BoxyBox.FrameBuffer]::new(1, 1, 10, 3)
