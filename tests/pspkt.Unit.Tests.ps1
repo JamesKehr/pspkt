@@ -3727,6 +3727,56 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         }
     }
 
+    Context 'FormatBatch drop counting and triggers' {
+        BeforeAll {
+            # Descriptor: metadata(40) at offset 0, packet after. Drop reason/location are UInt32
+            # LE at meta+22 / meta+26 (0 = not dropped). Component id (UInt16 LE) at meta+16.
+            function script:New-DropPd([uint32]$dropReason, [uint32]$dropLoc, [int]$compId) {
+                $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+                $ip = [byte[]]::new(20); $ip[0]=0x45; $ip[9]=6; $ip[3]=40; $ip[8]=64
+                $ip[12]=10;$ip[13]=0;$ip[14]=0;$ip[15]=1; $ip[16]=10;$ip[17]=0;$ip[18]=0;$ip[19]=2
+                $pkt = $eth + $ip
+                $meta = [byte[]]::new(40)
+                $meta[12]=1
+                $meta[16]=[byte]($compId -band 0xff); $meta[17]=[byte](($compId -shr 8) -band 0xff)
+                $meta[18]=2
+                for ($i=0; $i -lt 4; $i++) { $meta[22+$i]=[byte](($dropReason -shr (8*$i)) -band 0xff) }
+                for ($i=0; $i -lt 4; $i++) { $meta[26+$i]=[byte](($dropLoc -shr (8*$i)) -band 0xff) }
+                $data = $meta + $pkt
+                return [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0, [uint32]40, [uint32]$pkt.Length, [uint32]0, [uint32]0)
+            }
+        }
+        AfterEach { [PacketLineFormatter]::SetDropTriggers($false,$false,0,0,0,0) }
+
+        It 'counts only packets whose dropReason != 0' {
+            $res = [PacketLineFormatter]::FormatBatch([PSPacketData[]]@((script:New-DropPd 5 3 100), (script:New-DropPd 0 0 100)), 2, 0)
+            $res.DroppedCount | Should -Be 1
+        }
+        It 'stop-on-drop sets TriggerAction 2; pause-on-drop sets 1' {
+            [PacketLineFormatter]::SetDropTriggers($true,$false,0,0,0,0)
+            ([PacketLineFormatter]::FormatBatch([PSPacketData[]]@((script:New-DropPd 5 3 100)), 1, 0)).TriggerAction | Should -Be 2
+            [PacketLineFormatter]::SetDropTriggers($false,$true,0,0,0,0)
+            ([PacketLineFormatter]::FormatBatch([PSPacketData[]]@((script:New-DropPd 5 3 100)), 1, 0)).TriggerAction | Should -Be 1
+            # No trigger configured -> no action even on a drop.
+            [PacketLineFormatter]::SetDropTriggers($false,$false,0,0,0,0)
+            ([PacketLineFormatter]::FormatBatch([PSPacketData[]]@((script:New-DropPd 5 3 100)), 1, 0)).TriggerAction | Should -Be 0
+        }
+        It 'stop-on-reason and stop-on-location match only the configured value' {
+            [PacketLineFormatter]::SetDropTriggers($false,$false,5,0,0,0)   # stopOnReason=5
+            ([PacketLineFormatter]::FormatBatch([PSPacketData[]]@((script:New-DropPd 5 3 100)), 1, 0)).TriggerAction | Should -Be 2
+            ([PacketLineFormatter]::FormatBatch([PSPacketData[]]@((script:New-DropPd 6 3 100)), 1, 0)).TriggerAction | Should -Be 0
+            [PacketLineFormatter]::SetDropTriggers($false,$false,0,7,0,0)   # stopOnLocation=7
+            ([PacketLineFormatter]::FormatBatch([PSPacketData[]]@((script:New-DropPd 5 7 100)), 1, 0)).TriggerAction | Should -Be 2
+            ([PacketLineFormatter]::FormatBatch([PSPacketData[]]@((script:New-DropPd 5 8 100)), 1, 0)).TriggerAction | Should -Be 0
+        }
+        It 'FormatBatchToLines counts drops and honors triggers too' {
+            [PacketLineFormatter]::SetDropTriggers($true,$false,0,0,0,0)
+            $res = [PacketLineFormatter]::FormatBatchToLines([PSPacketData[]]@((script:New-DropPd 5 3 100)), 1, 0)
+            $res.DroppedCount  | Should -Be 1
+            $res.TriggerAction | Should -Be 2
+        }
+    }
+
     Context 'WriteBatch matches FormatBatch (LOH-free console path)' {
         BeforeAll {
             # Self-contained Ethernet + IPv4 + ICMP packet builder (metadata offset past the
