@@ -233,6 +233,17 @@ public static class PacketLineFormatter
     // FormatComponentPrefixInternal). 1=In, 2=Out, 0=unspecified.
     [ThreadStatic] private static int _currentDirection;
 
+    // Per-packet metadata stash, decoded once in FormatSinglePacketInto and reused by the batch
+    // loops (FormatBatchInternal / FormatBatchToLines) for component tracking, drop counting, and
+    // drop triggers — avoiding a second decode of the same metadata bytes. _currentMetaValid is
+    // set every call (true when the 40-byte metadata block was present), so the loops never read a
+    // stale stash. Single consumer/formatting thread, matching the other per-packet thread-statics.
+    [ThreadStatic] private static bool _currentMetaValid;
+    [ThreadStatic] private static int _currentCompId;
+    [ThreadStatic] private static int _currentEdgeId;
+    [ThreadStatic] private static int _currentDropReason;
+    [ThreadStatic] private static int _currentDropLocation;
+
     // True TCP wire payload length (from the IP total-length field, independent of capture
     // truncation), set per packet in FormatSinglePacketInto. TLS reassembly compares it against
     // the captured payload length: a record can only be reassembled when its segments are captured
@@ -656,19 +667,14 @@ public static class PacketLineFormatter
         // --- ARP detection (EtherType 0x0806, no IPv4 data) ---
         if (etherType == 0x0806 && protoKind == 0 && rawPacketData != null && rawLength >= 28)
         {
-            string dlSeg = FormatDataLinkInternal(linkKind, srcMac, dstMac, etherType, rawLen);
             string arpSeg = FormatArpInternal(rawPacketData, rawOffset, rawLength, linkKind);
-            if (dlSeg != null)
+            if (PacketFormatter.AppendDataLinkInto(sb, _textBoxMode, linkKind, srcMac, dstMac, rawLen, lineCounter))
             {
-                PacketFormatter.AppendColorized(sb, dlSeg, 1, lineCounter);
                 sb.Append(": ");
             }
             PacketFormatter.AppendColorized(sb, arpSeg, 2, lineCounter);
             return true;
         }
-
-        // --- Data Link segment ---
-        string dlSegment = FormatDataLinkInternal(linkKind, srcMac, dstMac, etherType, rawLen);
 
         // --- IPv6 handling (no IPv4 data, EtherType 0x86DD) ---
         if (protoKind == 0 && etherType == 0x86DD && rawPacketData != null)
@@ -676,20 +682,15 @@ public static class PacketLineFormatter
             string ipv6Seg = FormatIPv6Segment(rawPacketData, rawOffset, rawLength, linkKind, lineCounter);
             if (ipv6Seg != null)
             {
-                if (dlSegment != null)
+                if (PacketFormatter.AppendDataLinkInto(sb, _textBoxMode, linkKind, srcMac, dstMac, rawLen, lineCounter))
                 {
-                    PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
                     sb.Append(": ");
                 }
                 sb.Append(ipv6Seg);
                 return true;
             }
-            if (dlSegment != null)
-            {
-                PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
-                return true;
-            }
-            return false;
+            // No IPv6 segment content: emit just the data-link prefix when present.
+            return PacketFormatter.AppendDataLinkInto(sb, _textBoxMode, linkKind, srcMac, dstMac, rawLen, lineCounter);
         }
 
         // --- Network + Transport segment ---
@@ -697,9 +698,9 @@ public static class PacketLineFormatter
         // segment is appended directly into sb (no intermediate per-line string).
         if (srcAddr != null && dstAddr != null)
         {
-            if (dlSegment != null)
+            // AppendDataLinkInto already wrote the (colored) data-link segment when present.
+            if (PacketFormatter.AppendDataLinkInto(sb, _textBoxMode, linkKind, srcMac, dstMac, rawLen, lineCounter))
             {
-                PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
                 sb.Append(": ");
             }
             AppendNetworkTransportInto(
@@ -709,12 +710,8 @@ public static class PacketLineFormatter
             return true;
         }
 
-        if (dlSegment != null)
-        {
-            PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
-            return true;
-        }
-        return false;
+        // No IPv4/IPv6 network content: emit just the data-link prefix when present.
+        return PacketFormatter.AppendDataLinkInto(sb, _textBoxMode, linkKind, srcMac, dstMac, rawLen, lineCounter);
     }
 
     /// <summary>
@@ -984,9 +981,11 @@ public static class PacketLineFormatter
             return true;
         }
 
-        // Build dlSegment FIRST so we can fall back without having appended anything to sb.
-        string dlSegment = FormatDataLinkInternal(linkKind, srcMac, dstMac, etherType, rawLen);
-        if (dlSegment == null)
+        // Fall back to the Default formatter when there is no data-link segment (so nothing has
+        // been appended to sb yet). This mirrors AppendDataLinkInto's "returns false" condition
+        // (no linkKind, or an unknown linkKind in text-box mode) so the later AppendDataLinkInto
+        // call below always produces the segment.
+        if (linkKind == 0 || (_textBoxMode && linkKind != 1 && linkKind != 2))
         {
             if (!FormatDefaultLineInto(sb,
                 lineCounter, streamTimestamp,
@@ -1211,7 +1210,7 @@ public static class PacketLineFormatter
         }
         sb.Append(FormatComponentPrefixInternal(compId, edgeId, lineCounter));
         sb.Append(": ");
-        PacketFormatter.AppendColorized(sb, dlSegment, 1, lineCounter);
+        PacketFormatter.AppendDataLinkInto(sb, _textBoxMode, linkKind, srcMac, dstMac, rawLen, lineCounter);
         sb.Append('\n');
         sb.Append(_detailIndent);
         PacketFormatter.AppendColorized(sb, networkDetail, 2, lineCounter);
@@ -1264,27 +1263,6 @@ public static class PacketLineFormatter
         }
 
         return PacketFormatter.FormatComponentPrefix(parentId, compId, compName, lineCounter, edgeId, _currentDirection, includeName);
-    }
-
-    private static string FormatDataLinkInternal(int linkKind, string srcMac, string dstMac, int etherType, int rawLen)
-    {
-        if (linkKind == 0) return null;
-
-        // Analysis Text Box uses the Minimal-level data link representation ("Eth" / "802.11")
-        // instead of the full "src > dst, type X, len N" form, keeping each scrolling line
-        // compact. The full MAC/type/length breakdown is available in the Details box.
-        if (_textBoxMode)
-        {
-            if (linkKind == 1) return "Eth";
-            if (linkKind == 2) return "802.11";
-            return null;
-        }
-
-        string src = srcMac ?? "??-??-??-??-??-??";
-        string dst = dstMac ?? "??-??-??-??-??-??";
-        StringBuilder sb = new StringBuilder(64);
-        sb.Append(src).Append(" > ").Append(dst).Append(", len ").Append(rawLen);
-        return sb.ToString();
     }
 
     // Appends the colored network+transport segment directly into outSb (append-only variant of
@@ -2398,28 +2376,21 @@ public static class PacketLineFormatter
                 sb.Length = lenBefore;
             }
 
-            // Walk metadata once per packet for: (1) seen-component-ID tracking, moved
-            // off the producer callback to avoid a per-packet lock; and (2) drop counts /
-            // drop-trigger checks. Single read, single bounds check, both on the consumer
-            // thread.
-            int metaOffset = (int)buffer[i].MetadataOffset;
-            // Use DataSize (valid length) instead of Data.Length to avoid reading pool slack.
-            byte[] mdata = buffer[i].Data;
-            if (mdata != null && (int)buffer[i].DataSize >= metaOffset + 30)
+            // Component-ID tracking + drop counts / drop-trigger checks, using the metadata
+            // FormatSinglePacketInto already decoded for this packet (no second decode). The stash
+            // is set on every FormatSinglePacketInto call, so it always reflects buffer[i].
+            if (_currentMetaValid)
             {
-                // Inline LE UInt16 read for component ID — avoids BitConverter and a
-                // method-call frame per packet.
-                int compId = mdata[metaOffset + 16] | (mdata[metaOffset + 17] << 8);
-                if (compId != 0) PktMonApi.NoteComponentId(compId);
+                if (_currentCompId != 0) PktMonApi.NoteComponentId(_currentCompId);
 
-                int dropReason = (int)BitConverter.ToUInt32(mdata, metaOffset + 22);
+                int dropReason = _currentDropReason;
                 if (dropReason != 0)
                 {
                     droppedCount++;
 
                     if (checkTriggers)
                     {
-                        int dropLocation = (int)BitConverter.ToUInt32(mdata, metaOffset + 26);
+                        int dropLocation = _currentDropLocation;
 
                         // Stop triggers — highest priority
                         if (_stopOnDrop ||
@@ -2505,25 +2476,23 @@ public static class PacketLineFormatter
                 lines.Add(scratch.ToString());
             }
 
-            // Walk metadata once for seen-component tracking + drop counting/triggers, and
-            // to source the compId/edge/direction for the detail store.
-            int metaOffset = (int)buffer[i].MetadataOffset;
-            byte[] mdata = buffer[i].Data;
-            int mCompId = 0, mEdgeId = 0, mDirection = 0;
-            if (mdata != null && (int)buffer[i].DataSize >= metaOffset + 30)
+            // Seen-component tracking + drop counting/triggers + the compId/edge/direction for the
+            // detail store, using the metadata FormatSinglePacketInto already decoded (no second
+            // decode). mDirection comes from _currentDirection (also set by FormatSinglePacketInto).
+            int mCompId = _currentMetaValid ? _currentCompId : 0;
+            int mEdgeId = _currentMetaValid ? _currentEdgeId : 0;
+            int mDirection = _currentMetaValid ? _currentDirection : 0;
+            if (_currentMetaValid)
             {
-                mCompId = mdata[metaOffset + 16] | (mdata[metaOffset + 17] << 8);
-                mEdgeId = mdata[metaOffset + 18] | (mdata[metaOffset + 19] << 8);
-                mDirection = mdata[metaOffset + 12] | (mdata[metaOffset + 13] << 8);
                 if (mCompId != 0) PktMonApi.NoteComponentId(mCompId);
 
-                int dropReason = (int)BitConverter.ToUInt32(mdata, metaOffset + 22);
+                int dropReason = _currentDropReason;
                 if (dropReason != 0)
                 {
                     droppedCount++;
                     if (checkTriggers)
                     {
-                        int dropLocation = (int)BitConverter.ToUInt32(mdata, metaOffset + 26);
+                        int dropLocation = _currentDropLocation;
                         if (_stopOnDrop ||
                             (_stopOnReason != 0 && dropReason == _stopOnReason) ||
                             (_stopOnLocation != 0 && dropLocation == _stopOnLocation))
@@ -2589,18 +2558,19 @@ public static class PacketLineFormatter
         // Use the packet's valid DataSize (not Data.Length) to avoid leaking pool slack
         // when Data is an oversized buffer rented from PacketBytePool.
         int pktDataSize = (int)pkt.DataSize;
-        if (data == null || pktDataSize < 14) return false;
-
         int metaOffset = (int)pkt.MetadataOffset;
-        int packetOffset = (int)pkt.PacketOffset;
 
         // --- Extract metadata ---
+        // Decoded BEFORE the short-packet reject below so the stash is valid even for a packet we
+        // then reject: the batch loops reuse it for component tracking / drop counting / triggers
+        // instead of decoding the same bytes a second time.
         int compId = 0, edgeId = 0, dropReason = 0, dropLocation = 0;
         int packetType = 0; // 0=Ethernet, 1=WiFi
         int direction = 0;  // 1=In, 2=Out
         long metaTimestamp = 0;
 
-        if (pktDataSize >= metaOffset + 40)
+        bool metaValid = data != null && pktDataSize >= metaOffset + 40;
+        if (metaValid)
         {
             compId = BitConverter.ToUInt16(data, metaOffset + 16);
             edgeId = BitConverter.ToUInt16(data, metaOffset + 18);
@@ -2611,8 +2581,18 @@ public static class PacketLineFormatter
             metaTimestamp = BitConverter.ToInt64(data, metaOffset + 32);
         }
 
-        // Store direction for the component prefix formatter.
+        // Store direction for the component prefix formatter, and stash the metadata for the
+        // batch-loop dedup (set every call, so the loops never read a stale stash).
         _currentDirection = direction;
+        _currentMetaValid = metaValid;
+        _currentCompId = compId;
+        _currentEdgeId = edgeId;
+        _currentDropReason = dropReason;
+        _currentDropLocation = dropLocation;
+
+        if (data == null || pktDataSize < 14) return false;
+
+        int packetOffset = (int)pkt.PacketOffset;
 
         // --- Compute timestamp ---
         long streamTimestamp;

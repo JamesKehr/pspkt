@@ -454,8 +454,36 @@ public static class PacketFormatter
     }
 
     /// <summary>
-    /// Formats and caches the component prefix string for a given component ID.
-    /// Returns the ANSI-colored prefix like "001:005 (ComponentName     )[ In]".
+    /// Appends the colored data-link segment directly into <paramref name="sb"/> — an append-only
+    /// formatter that builds no intermediate per-packet string. Text-box mode uses the compact
+    /// "Eth" / "802.11" label; full mode uses "src &gt; dst, len N". Returns false (appending
+    /// nothing) when there is no data-link segment (linkKind 0, or an unknown linkKind in text-box
+    /// mode). Color handling matches <see cref="AppendColorized"/> exactly, including the uncolored
+    /// case (a null layer prefix yields no prefix AND no reset).
+    /// </summary>
+    public static bool AppendDataLinkInto(StringBuilder sb, bool textBoxMode, int linkKind, string srcMac, string dstMac, int rawLen, int lineCounter)
+    {
+        if (linkKind == 0) return false;
+        int variant = (lineCounter % 2 == 0) ? 0 : 1;
+        string prefix = _prefixes[LAYER_DATALINK, variant];
+
+        if (textBoxMode)
+        {
+            string label = linkKind == 1 ? "Eth" : (linkKind == 2 ? "802.11" : null);
+            if (label == null) return false;
+            if (prefix == null) { sb.Append(label); return true; }
+            sb.Append(prefix).Append(label).Append(_reset);
+            return true;
+        }
+
+        string src = srcMac ?? "??-??-??-??-??-??";
+        string dst = dstMac ?? "??-??-??-??-??-??";
+        if (prefix != null) sb.Append(prefix);
+        sb.Append(src).Append(" > ").Append(dst).Append(", len ").Append(rawLen);
+        if (prefix != null) sb.Append(_reset);
+        return true;
+    }
+
     /// </summary>
     public static string FormatComponentPrefix(int parentId, int compId, string compName, int lineCounter, int edgeId)
     {
