@@ -264,7 +264,8 @@ public static class PacketDetailExtractor
             case "DHCP":
             case "HTTP":
             case "SMB2":
-            case "TLS":        return 4; // LAYER_APPLICATION
+            case "TLS":
+            case "SSH":        return 4; // LAYER_APPLICATION
             default:          return -1;
         }
     }
@@ -659,12 +660,17 @@ public static class PacketDetailExtractor
         // HTTP request lines (ASCII) and the SMB2 NetBIOS header (0x00) can't match LooksLikeTls;
         // a DNS-over-TCP length-prefix collision is possible but rare (needs a ~5120-6143 byte
         // message) and affects only the detail dispatch, so the port-based branches keep working.
-        // (QUIC embeds TLS 1.3 in its own UDP packet format and SSH is not TLS — neither is
-        // handled here; see TLS_parser_instructions.md "Future work".)
+        // QUIC embeds TLS 1.3 in its own UDP packet format and is not handled here; see
+        // TLS_parser_instructions.md "Future work".
         if (!udp && TlsParser.LooksLikeTls(payload, len))
         {
             List<BoxyBox.TreeNode> tlsRoots = TlsParser.BuildTlsDetailTree(payload, len, sp, dp);
             for (int i = 0; i < tlsRoots.Count; i++) roots.Add(tlsRoots[i]);
+        }
+        else if (!udp && SshParser.LooksLikeSsh(payload, len, sp, dp))
+        {
+            List<BoxyBox.TreeNode> sshRoots = SshParser.BuildSshDetailTree(payload, len, sp, dp);
+            for (int i = 0; i < sshRoots.Count; i++) roots.Add(sshRoots[i]);
         }
         else if (sp == 53 || dp == 53 || sp == 5353 || dp == 5353)
         {

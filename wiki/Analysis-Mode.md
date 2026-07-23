@@ -34,6 +34,9 @@ line is the compact summary:
 The data-link layer is shown at Minimal level (`Eth:`); the rest is the Default parse. Your
 active [color profile](./Color-Profiles.md) is preserved.
 
+SSH payloads show their parsed summary here, such as `SSH Protocol: SSH-2.0-OpenSSH_9.6` or
+`SSH Version 2: Key Exchange Init`. Payloadless port-22 segments remain plain TCP.
+
 ### Focus view (Text Box + Details Box)
 
 Pressing **`f`** freezes scrolling and splits the screen: the focused Text Box on top
@@ -55,6 +58,11 @@ the Details Box.
 Section nodes are expanded; the verbose `Flags` node and each resource-record one-liner are
 collapsed by default — expand what you need. Expand/collapse state persists as you step
 between packets.
+
+SSH identification strings and binary packets on TCP 22/29418 receive their own Details tree.
+The parser covers SSHv1 and SSHv2 framing plus SSHv2 KEXINIT algorithm proposals. It is
+stateless and does not decrypt post-NEWKEYS traffic or select a negotiated DH/GEX/ECDH decoder;
+such bytes display as `SSH Encrypted or unparsed payload`.
 
 ---
 
@@ -137,7 +145,7 @@ into view or collapsed.
 
 ## Capture size and runtime warnings
 
-- **PacketSize** is automatically raised to a **1500-byte (MTU) floor** in Analysis mode so the
+- **PacketSize** is automatically raised to a **1600-byte floor** in Analysis mode so the
   just-in-time Details parse has enough payload to work with. An explicit larger `-PacketSize`
   is left as-is, and `-PacketSize 0` (full packets) is preserved.
 - Because the TUI owns the screen, **warnings are shown *inside* the UI instead of being

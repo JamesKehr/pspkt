@@ -54,6 +54,17 @@ public static class PacketParseHelper
         return (uint)((data[offset] << 24) | (data[offset+1] << 16) | (data[offset+2] << 8) | data[offset+3]);
     }
 
+    internal static string FormatHexPreview(byte[] data, int offset, int count, int maximumBytes)
+    {
+        if (data == null || offset < 0 || offset >= data.Length || count <= 0 || maximumBytes <= 0) return "";
+        int available = Math.Min(count, data.Length - offset);
+        int shown = Math.Min(available, maximumBytes);
+        StringBuilder builder = new StringBuilder(shown * 2 + 3);
+        for (int i = 0; i < shown; i++) builder.Append(HexBytes[data[offset + i]]);
+        if (shown < available) builder.Append("...");
+        return builder.ToString();
+    }
+
     /// <summary>
     /// Formats an IPv4 address from 4 bytes at the given offset.
     /// Uses a precomputed decimal lookup to avoid per-octet ToString allocations.

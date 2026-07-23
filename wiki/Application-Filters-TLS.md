@@ -64,7 +64,7 @@ The **completing** segment shows the full parse (including the SNI at Detailed) 
 
 **Current scope:** reassembly applies to the Default one-liner (live capture + Analysis Text Box). The `-pl Detailed` one-liner and the Analysis **Details tree** don't reassemble yet — selecting the *head* segment still shows the partial ClientHello tree. See [TLS_parser_instructions.md](https://github.com/JamesKehr/pspkt/blob/main/Parsers/Application/TLS_parser_instructions.md) for details.
 
-> **QUIC / SSH.** QUIC (HTTP/3, UDP 443) carries its TLS 1.3 handshake inside an encrypted UDP packet format, and SSH is not TLS at all — neither is parsed by the TLS parser. Both are tracked as future work in the parser instructions file.
+> **QUIC / SSH.** QUIC (HTTP/3, UDP 443) carries its TLS 1.3 handshake inside an encrypted UDP packet format and remains future work. SSH is not TLS; Analysis mode parses it through the dedicated SSH Details parser instead.
 
 ## Examples
 

@@ -1156,10 +1156,11 @@ public static class PacketLineFormatter
                 if (ipv6DataLen > 0 && ipv6TransportOffset + ipv6DataOffset < rawEnd)
                 {
                     int payloadLen = Math.Min(ipv6DataLen, rawEnd - ipv6TransportOffset - ipv6DataOffset);
-                    // Port-based detectors, or a zero-copy TLS peek so content-based TLS on any
-                    // port is picked up without copying every TCP payload (mirrors the IPv4 path).
+                    // Port-based detectors, or zero-copy TLS/SSH peeks so content-based protocols
+                    // on any port are picked up without copying every TCP payload.
                     if (NeedsTcpPayload(ipv6SrcPort, ipv6DstPort)
-                        || TlsParser.LooksLikeTls(rawPacketData, ipv6TransportOffset + ipv6DataOffset, payloadLen))
+                        || TlsParser.LooksLikeTls(rawPacketData, ipv6TransportOffset + ipv6DataOffset, payloadLen)
+                        || SshParser.LooksLikeSshIdentification(rawPacketData, ipv6TransportOffset + ipv6DataOffset, payloadLen))
                     {
                         ipv6Payload = RentPayloadBuffer(payloadLen);
                         Buffer.BlockCopy(rawPacketData, ipv6TransportOffset + ipv6DataOffset, ipv6Payload, 0, payloadLen);
@@ -1377,6 +1378,11 @@ public static class PacketLineFormatter
                 // above, before the port-based parsers.)
                 ulong tlsFlow = TlsParser.FlowKey(srcAddr, srcPort, dstAddr, dstPort);
                 suffix = TlsParser.FormatTlsSmart(udpData, dataLen, tlsFlow, tcpSeq, false, tlsSegmentComplete);
+                if (suffix != null) appLayer = 4;
+            }
+            if (suffix == null && SshParser.LooksLikeSsh(udpData, dataLen, srcPort, dstPort))
+            {
+                suffix = SshParser.FormatSshSegment(udpData, dataLen, srcPort, dstPort);
                 if (suffix != null) appLayer = 4;
             }
             if (suffix == null && (srcPort == 53 || dstPort == 53))
@@ -1597,8 +1603,25 @@ public static class PacketLineFormatter
                     }
                 }
 
+                if (nextHeader == 6 && rawOffset + rawLength >= transOff + 20)
+                {
+                    int sshTcpDataOff = (data[transOff + 12] >> 4) * 4;
+                    int sshPayloadStart = transOff + sshTcpDataOff;
+                    int sshLen = (rawOffset + rawLength) - sshPayloadStart;
+                    if (sshTcpDataOff >= 20 && sshLen > 0
+                        && (SshParser.IsSshPort(sp) || SshParser.IsSshPort(dp)
+                            || SshParser.LooksLikeSshIdentification(data, sshPayloadStart, sshLen)))
+                    {
+                        byte[] sshPayload = RentPayloadBuffer(sshLen);
+                        Buffer.BlockCopy(data, sshPayloadStart, sshPayload, 0, sshLen);
+                        string sshStr = SshParser.FormatSshSegment(sshPayload, sshLen, sp, dp);
+                        if (sshStr != null)
+                            return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, sshStr, 4, lineCounter);
+                    }
+                }
+
                 // App protocol hint for traffic on well-known ports that no active
-                // parser handled (e.g. SSH, SMTP, LDAP).
+                // parser handled (e.g. SMTP, LDAP).
                 string v6Hint = GetAppProtocolHint(nextHeader, sp, dp);
                 if (v6Hint != null)
                     return PacketFormatter.FormatTransportLine(netSrc, sp, dst, dp, v6Hint + ": " + protoName, 4, lineCounter);
@@ -1733,10 +1756,11 @@ public static class PacketLineFormatter
         return TlsParser.IsTlsPort(port);
     }
 
-    // True when a TCP src/dst pair could match an app-layer detector (SMB2/HTTP/TLS).
+    // True when a TCP src/dst pair could match an app-layer detector (SSH/SMB2/HTTP/TLS).
     // Used to skip the per-packet transport-payload allocation when no detector will use it.
     private static bool NeedsTcpPayload(int srcPort, int dstPort)
     {
+        if (SshParser.IsSshPort(srcPort) || SshParser.IsSshPort(dstPort)) return true;
         if (srcPort == 445 || dstPort == 445) return true;
         if (srcPort == 53 || dstPort == 53) return true;   // DNS over TCP
         if (IsHttpPort(srcPort) || IsHttpPort(dstPort)) return true;
@@ -1782,17 +1806,17 @@ public static class PacketLineFormatter
         }
         else if (transportProto == 6) // TCP
         {
-            // Note: parsed TCP app protocols (TLS on 443/8443/993/995/465/636/853/5986, DNS over
-            // TCP on 53, HTTP on 80/8080/8000/8888, SMB2 on 445) are intentionally NOT hinted
+            // Note: parsed TCP app protocols (SSH on 22/29418, TLS on
+            // 443/8443/993/995/465/636/853/5986, DNS over TCP on 53,
+            // HTTP on 80/8080/8000/8888, SMB2 on 445) are intentionally NOT hinted
             // here. A packet on one of those ports only reaches this hint fallback when it carries
             // no app-layer message (handshake / ACK / FIN segments), which is a pure transport
             // event and must render as a plain "TCP [flags] ..." segment rather than
-            // "HTTPS: TCP [flags] ..." / "IMAPS: TCP ..." / "SMB: TCP ..." / "HTTP: TCP ...".
+            // "SSH: TCP [flags] ..." / "HTTPS: TCP ..." / "SMB: TCP ..." / "HTTP: TCP ...".
             // TLS records (on any port) are detected by content and shown by the TLS parser; a
             // payload-less segment on a TLS-wrapped port is pure transport, and the port number
             // already identifies the tunneled service (443=HTTPS, 993=IMAPS, 5986=WinRM-S, etc.).
             // WinRM (5985) stays hinted because it is cleartext HTTP, not TLS.
-            if (srcPort == 22    || dstPort == 22)    return "SSH";
             if (srcPort == 23    || dstPort == 23)    return "Telnet";
             if (srcPort == 25    || dstPort == 25)    return "SMTP";
             if (srcPort == 88    || dstPort == 88)    return "Kerberos";
@@ -1988,6 +2012,11 @@ public static class PacketLineFormatter
             }
 
             return FormatTlsDetailed(data, dataLen);
+        }
+
+        if (SshParser.LooksLikeSsh(data, dataLen, srcPort, dstPort))
+        {
+            return SshParser.FormatSshSegment(data, dataLen, srcPort, dstPort);
         }
 
         // DNS over TCP (port 53): 2-byte length prefix + DNS message.
@@ -2779,6 +2808,7 @@ public static class PacketLineFormatter
                                         int copyLen = Math.Min(dataLen, rawLength - payloadStart);
                                         if (NeedsTcpPayload(srcPort, dstPort)
                                             || TlsParser.LooksLikeTls(raw, rawOffset + payloadStart, copyLen)
+                                            || SshParser.LooksLikeSshIdentification(raw, rawOffset + payloadStart, copyLen)
                                             || TlsParser.HasActiveReassembly)
                                         {
                                             transportPayload = RentPayloadBuffer(copyLen);
