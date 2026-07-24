@@ -87,6 +87,11 @@ Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture 
 | `-Timestamp` (`-t`) | `switch` | — | Prefixes each line with the high-resolution local timestamp. |
 | `-NoWarning` | `switch` | — | Suppresses non-fatal setup warnings (auto-bumps from application-layer filters, missing-MAC vmNIC skip, non-numeric component value). Does **not** suppress pcapng data-loss / writer-error warnings — those indicate actual data loss. For full suppression of every `Write-Warning` use `-WarningAction SilentlyContinue`. |
 
+SSH identification and binary packets are parsed at `Default`, `Detailed`, and in the Analysis
+Text Box. `Minimal` and payloadless ACK/FIN segments show plain TCP without a port-only `SSH`
+prefix. Identification strings are content-detected on any TCP port; binary framing is parsed
+on TCP 22 and 29418.
+
 ### Capture scope
 
 | Parameter | Type | Default | Description |

@@ -612,14 +612,14 @@ public static class TlsParser
         int legacyVer = (data[pos] << 8) | data[pos + 1];
         parent.AddLeaf("Version: " + GetVersionName(legacyVer) + " (0x" + legacyVer.ToString("x4") + ")");
         pos += 2;
-        parent.AddLeaf("Random: " + HexPreview(data, pos, 32, 32));
+        parent.AddLeaf("Random: " + PacketParseHelper.FormatHexPreview(data, pos, 32, 32));
         pos += 32;
 
         if (pos + 1 > end) return;
         int sidLen = data[pos]; pos += 1;
         parent.AddLeaf("Session ID Length: " + sidLen);
         if (pos + sidLen > end) return;
-        if (sidLen > 0) parent.AddLeaf("Session ID: " + HexPreview(data, pos, sidLen, 32));
+        if (sidLen > 0) parent.AddLeaf("Session ID: " + PacketParseHelper.FormatHexPreview(data, pos, sidLen, 32));
         pos += sidLen;
 
         if (pos + 2 > end) return;
@@ -662,14 +662,14 @@ public static class TlsParser
         int legacyVer = (data[pos] << 8) | data[pos + 1];
         parent.AddLeaf("Version: " + GetVersionName(legacyVer) + " (0x" + legacyVer.ToString("x4") + ")");
         pos += 2;
-        parent.AddLeaf("Random: " + HexPreview(data, pos, 32, 32));
+        parent.AddLeaf("Random: " + PacketParseHelper.FormatHexPreview(data, pos, 32, 32));
         pos += 32;
 
         if (pos + 1 > end) return;
         int sidLen = data[pos]; pos += 1;
         parent.AddLeaf("Session ID Length: " + sidLen);
         if (pos + sidLen > end) return;
-        if (sidLen > 0) parent.AddLeaf("Session ID: " + HexPreview(data, pos, sidLen, 32));
+        if (sidLen > 0) parent.AddLeaf("Session ID: " + PacketParseHelper.FormatHexPreview(data, pos, sidLen, 32));
         pos += sidLen;
 
         if (pos + 2 > end) return;
@@ -788,17 +788,6 @@ public static class TlsParser
             node.AddLeaf("(encrypted or truncated)");
         }
         return node;
-    }
-
-    // Lowercase hex of up to maxBytes bytes; appends "..." when the field is longer.
-    private static string HexPreview(byte[] data, int off, int count, int maxBytes)
-    {
-        if (count < 0) count = 0;
-        int show = Math.Min(count, maxBytes);
-        var sb = new StringBuilder(show * 2 + 4);
-        for (int i = 0; i < show && off + i < data.Length; i++) sb.Append(data[off + i].ToString("x2"));
-        if (count > show) sb.Append("...");
-        return sb.ToString();
     }
 
     /// <summary>Returns a display name for a TLS extension type, or a hex form when unknown.</summary>

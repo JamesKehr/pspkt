@@ -63,6 +63,7 @@ if ($null -eq $typeCheck) {
         [TlsParser]
         [TlsContext]
         [TlsAppPredicate]
+        [SshParser]
         [HttpParser]
         [HttpContext]
         [HttpAppPredicate]

@@ -226,10 +226,10 @@ extension carries a single selected version — the true negotiated TLS version)
 
 ---
 
-# Future work — QUIC and SSH
+# Future work - QUIC
 
-The parser deliberately covers only **TLS records carried directly over TCP**. Two related
-"secure" protocols are out of scope in this revision and are tracked here as future work:
+The parser deliberately covers only **TLS records carried directly over TCP**. QUIC is out of
+scope for this parser:
 
 - **QUIC (HTTP/3, UDP 443):** QUIC negotiates TLS 1.3, but the handshake is carried inside
   QUIC's own UDP packet format. The `Initial` packet is header-protected and payload-encrypted
@@ -238,10 +238,6 @@ The parser deliberately covers only **TLS records carried directly over TCP**. T
   much larger effort than the TLS-over-TCP record parser and is **not** implemented. A QUIC
   parser would live alongside this one and reuse `TlsParser.BuildTlsDetailTree` for the CRYPTO
   frame contents once the QUIC layer is stripped.
-- **SSH (TCP 22):** SSH is **not** TLS. It has its own binary transport (identification string
-  exchange, then the SSH binary packet protocol with its own key exchange). It shares nothing
-  with the TLS record layer, so the TLS parser does not — and should not — apply to it. A
-  dedicated SSH parser would be required.
-
-Both are excluded by the content-based detection naturally: a QUIC UDP payload and an SSH banner
-do not match `LooksLikeTls`, so they fall through to the transport-layer display unchanged.
+SSH is also not TLS and does not match `LooksLikeTls`. Analysis mode now routes SSH
+identification strings and TCP 22/29418 binary payloads to the dedicated `SshParser`; see
+`SSH_parser_instructions.md`.

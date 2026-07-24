@@ -1443,6 +1443,350 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         }
     }
 
+    Context 'SshParser.BuildSshDetailTree (Analysis Details)' {
+        BeforeAll {
+            $script:sshBanner = [System.Text.Encoding]::ASCII.GetBytes("SSH-2.0-OpenSSH_9.6 comment`r`n")
+            function script:SshU32([uint32]$value) {
+                return [byte[]]@(
+                    [byte](($value -shr 24) -band 0xff),
+                    [byte](($value -shr 16) -band 0xff),
+                    [byte](($value -shr 8) -band 0xff),
+                    [byte]($value -band 0xff)
+                )
+            }
+            function script:SshNameList([string]$value) {
+                $bytes = [System.Text.Encoding]::ASCII.GetBytes($value)
+                return (script:SshU32 $bytes.Length) + $bytes
+            }
+            function script:New-Ssh2Packet([byte[]]$payload) {
+                $paddingLength = 8 - ((5 + $payload.Length) % 8)
+                if ($paddingLength -lt 4) { $paddingLength += 8 }
+                $packetLength = 1 + $payload.Length + $paddingLength
+                return (script:SshU32 $packetLength) + [byte[]]@($paddingLength) + $payload + [byte[]]::new($paddingLength)
+            }
+            function script:New-AppTcpFrame([byte[]]$payload, [int]$srcPort, [int]$dstPort, [byte]$flags = 0x18) {
+                $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+                $tcp = [byte[]]::new(20)
+                $tcp[0]=[byte](($srcPort -shr 8) -band 0xff); $tcp[1]=[byte]($srcPort -band 0xff)
+                $tcp[2]=[byte](($dstPort -shr 8) -band 0xff); $tcp[3]=[byte]($dstPort -band 0xff)
+                $tcp[12]=0x50; $tcp[13]=$flags
+                $ipLength = 20 + $tcp.Length + $payload.Length
+                $ip = [byte[]]::new(20)
+                $ip[0]=0x45; $ip[8]=64; $ip[9]=6
+                $ip[2]=[byte](($ipLength -shr 8) -band 0xff); $ip[3]=[byte]($ipLength -band 0xff)
+                $ip[12]=10; $ip[13]=0; $ip[14]=0; $ip[15]=1
+                $ip[16]=10; $ip[17]=0; $ip[18]=0; $ip[19]=2
+                return $eth + $ip + $tcp + $payload
+            }
+            function script:New-AppUdpFrame([byte[]]$payload, [int]$srcPort, [int]$dstPort) {
+                $eth = [byte[]](0x11,0x11,0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22,0x22,0x22, 0x08,0x00)
+                $udpLength = 8 + $payload.Length
+                $udp = [byte[]]@(
+                    [byte](($srcPort -shr 8) -band 0xff), [byte]($srcPort -band 0xff),
+                    [byte](($dstPort -shr 8) -band 0xff), [byte]($dstPort -band 0xff),
+                    [byte](($udpLength -shr 8) -band 0xff), [byte]($udpLength -band 0xff), 0, 0
+                )
+                $ipLength = 20 + $udpLength
+                $ip = [byte[]]::new(20)
+                $ip[0]=0x45; $ip[8]=64; $ip[9]=17
+                $ip[2]=[byte](($ipLength -shr 8) -band 0xff); $ip[3]=[byte]($ipLength -band 0xff)
+                $ip[12]=10; $ip[13]=0; $ip[14]=0; $ip[15]=1
+                $ip[16]=10; $ip[17]=0; $ip[18]=0; $ip[19]=2
+                return $eth + $ip + $udp + $payload
+            }
+            function script:New-AppIpv6TcpFrame([byte[]]$payload, [int]$srcPort, [int]$dstPort, [byte]$flags) {
+                $eth = [byte[]](0,1,2,3,4,5, 6,7,8,9,10,11, 0x86,0xdd)
+                $ip = [byte[]]::new(40)
+                $ip[0]=0x60
+                $payloadLength = 20 + $payload.Length
+                $ip[4]=[byte](($payloadLength -shr 8) -band 0xff); $ip[5]=[byte]($payloadLength -band 0xff)
+                $ip[6]=6; $ip[7]=64
+                $ip[8]=0xfe; $ip[9]=0x80; $ip[23]=1
+                $ip[24]=0xfe; $ip[25]=0x80; $ip[39]=2
+                $tcp = [byte[]]::new(20)
+                $tcp[0]=[byte](($srcPort -shr 8) -band 0xff); $tcp[1]=[byte]($srcPort -band 0xff)
+                $tcp[2]=[byte](($dstPort -shr 8) -band 0xff); $tcp[3]=[byte]($dstPort -band 0xff)
+                $tcp[12]=0x50; $tcp[13]=$flags; $tcp[14]=0x20
+                return $eth + $ip + $tcp + $payload
+            }
+            function script:New-FormatterPacketData([byte[]]$packet) {
+                $metadata = [byte[]]::new(40)
+                $metadata[12]=1; $metadata[16]=26; $metadata[18]=45
+                $data = $metadata + $packet
+                return [PSPacketData]::new($data, [uint32]$data.Length, 0, 40, [uint32]$packet.Length, 0, 0)
+            }
+        }
+
+        It 'parses an SSHv2 identification line into version, software, comments, and flow direction' {
+            [SshParser]::LooksLikeSsh($script:sshBanner, $script:sshBanner.Length, 50000, 22) | Should -BeTrue
+            $roots = [SshParser]::BuildSshDetailTree($script:sshBanner, $script:sshBanner.Length, 50000, 22)
+            $roots.Count | Should -Be 1
+            $roots[0].Key | Should -Be 'SSH'
+            $roots[0].IsExpanded | Should -BeFalse
+            $roots[0].Text | Should -Be 'SSH Protocol: SSH-2.0-OpenSSH_9.6 comment'
+            $leaves = $roots[0].Children | ForEach-Object { $_.Text }
+            $leaves | Should -Contain 'Protocol Version: 2.0'
+            $leaves | Should -Contain 'Software Version: OpenSSH_9.6'
+            $leaves | Should -Contain 'Comments: comment'
+            $leaves | Should -Contain 'Flow direction (by service port): client-to-server'
+        }
+
+        It 'treats a commentless SSH-1.99 identification line as SSHv2' {
+            $banner = [System.Text.Encoding]::ASCII.GetBytes("SSH-1.99-legacy-server`r`n")
+            $roots = [SshParser]::BuildSshDetailTree($banner, $banner.Length, 22, 50000)
+            $roots.Count | Should -Be 1
+            $leaves = $roots[0].Children | ForEach-Object { $_.Text }
+            $leaves | Should -Contain 'Protocol Version: 1.99'
+            $leaves | Should -Contain 'SSH Version: 2'
+            @($leaves | Where-Object { $_ -like 'Comments:*' }).Count | Should -Be 0
+            $leaves | Should -Contain 'Flow direction (by service port): server-to-client'
+        }
+
+        It 'parses an SSHv2 KEXINIT packet including all ten name-lists' {
+            $cookie = [byte[]](1..16)
+            $payload = [byte[]]@(20) + $cookie
+            $payload += script:SshNameList 'curve25519-sha256'
+            $payload += script:SshNameList 'ssh-ed25519'
+            $payload += script:SshNameList 'aes128-ctr'
+            $payload += script:SshNameList 'aes128-ctr'
+            $payload += script:SshNameList 'hmac-sha2-256'
+            $payload += script:SshNameList 'hmac-sha2-256'
+            $payload += script:SshNameList 'none'
+            $payload += script:SshNameList 'none'
+            $payload += script:SshNameList ''
+            $payload += script:SshNameList ''
+            $payload += [byte[]]@(0,0,0,0,0)
+            $packet = script:New-Ssh2Packet $payload
+
+            $root = [SshParser]::BuildSshDetailTree($packet, $packet.Length, 50000, 22)[0]
+            $root.Text | Should -Be 'SSH Version 2: Key Exchange Init'
+            $packetNode = $root.Children | Where-Object { $_.Key -eq 'SSH.Packet' }
+            $packetNode | Should -Not -BeNullOrEmpty
+            ($packetNode.Children | Where-Object { $_.Text -eq 'Message Code: Key Exchange Init (20)' }).Count | Should -Be 1
+            $kex = $root.Children | Where-Object { $_.Key -eq 'SSH.KexInit' }
+            $kex | Should -Not -BeNullOrEmpty
+            ($kex.Children | Where-Object { $_.Text -eq 'Cookie: 0102030405060708090a0b0c0d0e0f10' }).Count | Should -Be 1
+            @($kex.Children | Where-Object { $_.Key -like 'SSH.KexInit.*' }).Count | Should -Be 10
+            $kexAlgorithms = $kex.Children | Where-Object { $_.Key -eq 'SSH.KexInit.KexAlgorithms' }
+            ($kexAlgorithms.Children | Where-Object { $_.Text -eq 'Algorithms: curve25519-sha256' }).Count | Should -Be 1
+            $languages = $kex.Children | Where-Object { $_.Key -eq 'SSH.KexInit.LanguagesClientToServer' }
+            ($languages.Children | Where-Object { $_.Text -eq 'Algorithms: (empty)' }).Count | Should -Be 1
+            ($kex.Children | Where-Object { $_.Text -eq 'First KEX Packet Follows: False (0)' }).Count | Should -Be 1
+            ($kex.Children | Where-Object { $_.Text -eq 'Reserved: 0' }).Count | Should -Be 1
+        }
+
+        It 'renders key-exchange code 30 generically without guessing the negotiated method' {
+            $packet = script:New-Ssh2Packet ([byte[]](30,1,2,3,4))
+            $root = [SshParser]::BuildSshDetailTree($packet, $packet.Length, 50000, 22)[0]
+            $root.Text | Should -Be 'SSH Version 2: Key exchange method-specific (30)'
+            $root.Text | Should -Not -Match 'DH|ECDH|Group Exchange'
+            ($root.Children | Where-Object { $_.Text -like 'Payload: 4 bytes; Data:*' }).Count | Should -Be 1
+        }
+
+        It 'parses an SSHv1 packet after an explicit SSHv1 identification line' {
+            $banner = [System.Text.Encoding]::ASCII.GetBytes("SSH-1.5-legacy-server`r`n")
+            $body = [System.Text.Encoding]::ASCII.GetBytes('user')
+            $packetLength = 1 + $body.Length
+            $paddingLength = 8 - ($packetLength % 8)
+            $packet = (script:SshU32 $packetLength) + [byte[]]::new($paddingLength) + [byte[]]@(4) + $body
+            $roots = [SshParser]::BuildSshDetailTree(($banner + $packet), $banner.Length + $packet.Length, 50000, 22)
+            $roots.Count | Should -Be 2
+            $roots[1].Text | Should -Be 'SSH Version 1: User'
+            $packetNode = $roots[1].Children | Where-Object { $_.Key -eq 'SSH.Packet' }
+            ($packetNode.Children | Where-Object { $_.Text -eq 'Packet Length: 5' }).Count | Should -Be 1
+            ($packetNode.Children | Where-Object { $_.Text -eq 'Padding Length: 3' }).Count | Should -Be 1
+            ($packetNode.Children | Where-Object { $_.Text -eq 'Message Code: User (4)' }).Count | Should -Be 1
+            ($roots[1].Children | Where-Object { $_.Text -eq 'Payload: 4 bytes; Data: 75736572' }).Count | Should -Be 1
+        }
+
+        It 'recognizes a strict standalone SSHv1 frame on an SSH service port' {
+            $body = [System.Text.Encoding]::ASCII.GetBytes('user')
+            $packetLength = 1 + $body.Length
+            $paddingLength = 8 - ($packetLength % 8)
+            $packet = (script:SshU32 $packetLength) + [byte[]]::new($paddingLength) + [byte[]]@(4) + $body
+            $roots = [SshParser]::BuildSshDetailTree($packet, $packet.Length, 50000, 22)
+            $roots.Count | Should -Be 1
+            $roots[0].Text | Should -Be 'SSH Version 1: User'
+        }
+
+        It 'adds an SSH root through PacketDetailExtractor for a TCP port 22 banner' {
+            $packet = script:New-AppTcpFrame $script:sshBanner 50000 22
+            $roots = [PacketDetailExtractor]::BuildTree($packet, $packet.Length, 9, 1, 1)
+            @($roots | ForEach-Object { $_.Key }) | Should -Be @('Component','Eth','IPv4','TCP','SSH')
+            [BoxyBox.AnsiText]::StripAnsi($roots[4].Text) | Should -Be 'SSH Protocol: SSH-2.0-OpenSSH_9.6 comment'
+        }
+
+        It 'maps known, generic authentication, and unknown SSHv2 messages across multiple packets' {
+            $newKeys = script:New-Ssh2Packet ([byte[]](21))
+            $auth = script:New-Ssh2Packet ([byte[]](60,1,2))
+            $unknown = script:New-Ssh2Packet ([byte[]](40))
+            $roots = [SshParser]::BuildSshDetailTree(($newKeys + $auth + $unknown), $newKeys.Length + $auth.Length + $unknown.Length, 50000, 29418)
+            @($roots | ForEach-Object { $_.Text }) | Should -Be @(
+                'SSH Version 2: New Keys',
+                'SSH Version 2: Authentication method-specific (60)',
+                'SSH Version 2: Unknown (40)'
+            )
+            @($roots[0].Children | Where-Object { $_.Text -like 'Payload:*' }).Count | Should -Be 0
+        }
+
+        It 'uses bounded truncation nodes for incomplete outer and nested KEXINIT lengths' {
+            $outer = (script:SshU32 20) + [byte[]](4,20,1,2)
+            $outerRoot = [SshParser]::BuildSshDetailTree($outer, $outer.Length, 50000, 22)[0]
+            $outerRoot.Text | Should -Be 'SSH Version 2: Truncated packet'
+            $payload = [byte[]]@(20) + [byte[]](1..16) + (script:SshU32 100) + [byte[]](1,2)
+            $nested = script:New-Ssh2Packet $payload
+            $nestedRoot = [SshParser]::BuildSshDetailTree($nested, $nested.Length, 50000, 22)[0]
+            $kex = $nestedRoot.Children | Where-Object { $_.Key -eq 'SSH.KexInit' }
+            ($kex.Children | Where-Object { $_.Text -like 'Truncated: Key Exchange Algorithms*' }).Count | Should -Be 1
+        }
+
+        It 'uses the unparsed fallback for invalid block, padding, and maximum-length boundaries' {
+            $badAlignment = (script:SshU32 11) + [byte[]]@(4) + [byte[]]::new(10)
+            $badPadding = (script:SshU32 12) + [byte[]]@(3) + [byte[]]::new(11)
+            $tooLarge = (script:SshU32 0x10000) + [byte[]]::new(12)
+            $zeroMessageCode = script:New-Ssh2Packet ([byte[]](0))
+            foreach ($packet in @($badAlignment, $badPadding, $tooLarge, $zeroMessageCode)) {
+                $root = [SshParser]::BuildSshDetailTree($packet, $packet.Length, 50000, 22)[0]
+                $root.Text | Should -Be 'SSH Encrypted or unparsed payload'
+            }
+            $zeroPayload = (script:SshU32 12) + [byte[]](11,21) + [byte[]]::new(10)
+            [SshParser]::FormatSshSegment($zeroPayload, $zeroPayload.Length, 50000, 22) |
+                Should -Be 'SSH Encrypted or unparsed payload'
+            $truncatedZeroPayload = (script:SshU32 12) + [byte[]](11,21)
+            [SshParser]::BuildSshDetailTree(
+                $truncatedZeroPayload, $truncatedZeroPayload.Length, 50000, 22)[0].Text |
+                Should -Be 'SSH Encrypted or unparsed payload'
+        }
+
+        It 'requires an offset-zero complete bounded banner and omits unknown flow direction' {
+            $nonstandard = [System.Text.Encoding]::ASCII.GetBytes("SSH-2.0-server`r`n")
+            $root = [SshParser]::BuildSshDetailTree($nonstandard, $nonstandard.Length, 40000, 40001)[0]
+            @($root.Children | Where-Object { $_.Text -like 'Flow direction*' }).Count | Should -Be 0
+            $embedded = [System.Text.Encoding]::ASCII.GetBytes("xxSSH-2.0-server`r`n")
+            [SshParser]::LooksLikeSsh($embedded, $embedded.Length, 40000, 40001) | Should -BeFalse
+            $bare = [System.Text.Encoding]::ASCII.GetBytes("SSH-`r`n")
+            [SshParser]::LooksLikeSsh($bare, $bare.Length, 40000, 40001) | Should -BeFalse
+            $overlong = [System.Text.Encoding]::ASCII.GetBytes("SSH-2.0-" + ('a' * 300) + "`r`n")
+            [SshParser]::LooksLikeSsh($overlong, $overlong.Length, 40000, 40001) | Should -BeFalse
+        }
+
+        It 'preserves HTTP sibling dispatch and excludes SSH parsing for UDP port 22' {
+            $httpPayload = [System.Text.Encoding]::ASCII.GetBytes("GET / HTTP/1.1`r`nHost: example.com`r`n`r`n")
+            $httpPacket = script:New-AppTcpFrame $httpPayload 50000 80
+            $httpRoots = [PacketDetailExtractor]::BuildTree($httpPacket, $httpPacket.Length, 9, 1, 1)
+            @($httpRoots | ForEach-Object { $_.Key }) | Should -Contain 'HTTP'
+            @($httpRoots | ForEach-Object { $_.Key }) | Should -Not -Contain 'SSH'
+            $udpPacket = script:New-AppUdpFrame $script:sshBanner 50000 22
+            $udpRoots = [PacketDetailExtractor]::BuildTree($udpPacket, $udpPacket.Length, 9, 1, 1)
+            @($udpRoots | ForEach-Object { $_.Key }) | Should -Not -Contain 'SSH'
+        }
+
+        It 'formats an IPv6 SSH banner in the Text Box instead of SSH colon TCP' {
+            $packet = script:New-AppIpv6TcpFrame $script:sshBanner 22 54559 0x18
+            $packetData = script:New-FormatterPacketData $packet
+            Set-PspktDetailLevel -Level 0
+            try {
+                $output = [BoxyBox.AnsiText]::StripAnsi(
+                    [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($packetData), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $output | Should -Match 'SSH Protocol: SSH-2\.0-OpenSSH_9\.6 comment'
+            $output | Should -Not -Match 'SSH: TCP'
+        }
+
+        It 'formats an IPv4 SSHv2 binary message in the Text Box' {
+            $sshPacket = script:New-Ssh2Packet ([byte[]](21))
+            $packet = script:New-AppTcpFrame $sshPacket 50000 22
+            $packetData = script:New-FormatterPacketData $packet
+            Set-PspktDetailLevel -Level 0
+            try {
+                $output = [BoxyBox.AnsiText]::StripAnsi(
+                    [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($packetData), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $output | Should -Match 'SSH Version 2: New Keys'
+            $output | Should -Not -Match 'SSH: TCP'
+        }
+
+        It 'renders a payloadless TCP ACK on port 22 without an SSH hint' {
+            $packet = script:New-AppTcpFrame ([byte[]]::new(0)) 50000 22 0x10
+            $packetData = script:New-FormatterPacketData $packet
+            Set-PspktDetailLevel -Level 0
+            try {
+                $output = [BoxyBox.AnsiText]::StripAnsi(
+                    [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($packetData), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $output | Should -Match 'TCP \[\.\], seq 0, ack 0, win 0, len 0'
+            $output | Should -Not -Match 'SSH'
+        }
+
+        It 'formats an IPv6 SSHv2 binary message in the Text Box' {
+            $sshPacket = script:New-Ssh2Packet ([byte[]](21))
+            $packet = script:New-AppIpv6TcpFrame $sshPacket 22 54559 0x18
+            $packetData = script:New-FormatterPacketData $packet
+            Set-PspktDetailLevel -Level 0
+            try {
+                $output = [BoxyBox.AnsiText]::StripAnsi(
+                    [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($packetData), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $output | Should -Match 'SSH Version 2: New Keys'
+            $output | Should -Not -Match 'SSH: TCP'
+        }
+
+        It 'content-detects SSH banners on nonstandard IPv4 and IPv6 ports' {
+            $ipv4 = script:New-FormatterPacketData (script:New-AppTcpFrame $script:sshBanner 40000 40001)
+            $ipv6 = script:New-FormatterPacketData (script:New-AppIpv6TcpFrame $script:sshBanner 40000 40001 0x18)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $output = [BoxyBox.AnsiText]::StripAnsi(
+                    [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($ipv4,$ipv6), 2, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            @($output -split "`n" | Where-Object { $_ -match 'SSH Protocol: SSH-2\.0' }).Count | Should -Be 2
+        }
+
+        It 'claims an SSH banner on TCP port 53 before DNS in Default and Detailed output' {
+            $packetData = script:New-FormatterPacketData (script:New-AppTcpFrame $script:sshBanner 40000 53)
+            foreach ($level in @(0,1)) {
+                Set-PspktDetailLevel -Level $level
+                $output = [BoxyBox.AnsiText]::StripAnsi(
+                    [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($packetData), 1, 0).Output)
+                $output | Should -Match 'SSH Protocol: SSH-2\.0-OpenSSH_9\.6 comment'
+                $output | Should -Not -Match 'DNS'
+            }
+            Set-PspktDetailLevel -Level 1
+        }
+
+        It 'keeps Minimal port 22 output free of a port-only SSH label' {
+            $packetData = script:New-FormatterPacketData (
+                script:New-AppTcpFrame ([byte[]]::new(0)) 50000 22 0x10)
+            Set-PspktDetailLevel -Level -1
+            try {
+                $output = [BoxyBox.AnsiText]::StripAnsi(
+                    [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($packetData), 1, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $output | Should -Not -Match 'SSH'
+        }
+
+        It 'uses the same generic SSHv2 message suffix in Detailed output' {
+            $sshPacket = script:New-Ssh2Packet ([byte[]](30,1,2))
+            $packetData = script:New-FormatterPacketData (script:New-AppTcpFrame $sshPacket 50000 22)
+            Set-PspktDetailLevel -Level 1
+            $output = [BoxyBox.AnsiText]::StripAnsi(
+                [PacketLineFormatter]::FormatBatch([PSPacketData[]]@($packetData), 1, 0).Output)
+            $output | Should -Match 'SSH Version 2: Key exchange method-specific \(30\)'
+        }
+    }
+
     Context 'HTTP application-layer predicate' {
         BeforeAll {
             $script:httpStartCmd = Get-Command -Name Start-Pspkt -ErrorAction Stop
