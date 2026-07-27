@@ -1,5 +1,3 @@
-First off, credit goes to Ekky's [PSPktmon project](https://github.com/Ekky-PS/PSPktmon) for building the C# foundation I used as a template for pspkt. My first iteration was a wrapper for pktmon.exe, that was honestly not great, but seeing a pktmonapi implementation for PowerShell helped get the new version working. So a huge thank you goes out to Ekky!
-
 PowerShell Packet Monitor (pspkt) is a network analysis tool built for PowerShell. The project is coded in PowerShell and C#. pspkt is built for Windows PowerShell 5.1 and PowerShell 7 compatibility, and will work on Windows Server 2019, Windows 10 22H2, and newer.
 
 Think of pspkt as a merger of tcpdump from Linux, plus pktmon.exe and netsh.exe in Windows, with a sprinkle of color and awesome new features for networking nerds.
@@ -160,6 +158,6 @@ This is a pspkt specific statistic that equals the number of packets that pspkt 
 
 # Credit
 
-(Ekky_PS PSPktmon)[https://github.com/Ekky-PS/PSPktmon] for providing the C# basis that kickstarted this project.
+[Ekky_PS PSPktmon](https://github.com/Ekky-PS/PSPktmon) for providing the C# basis that kickstarted this project.
 
 The Wireshark and Wireshark dissector community for their continuous efforts making network analysis viable for the world. Many of the parsers, especially in `Analysis` mode, are based directly on the Wireshark dissectors.
