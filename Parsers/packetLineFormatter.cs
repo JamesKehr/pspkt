@@ -2870,7 +2870,8 @@ public static class PacketLineFormatter
                 transportPayload, raw, rawOffset, rawLength);
         }
 
-        // App-layer display predicate gate — Detailed/+ only.
+        // App-layer display predicate gates. ICMP also runs at level 0 because Analysis
+        // renders its Text Box through the Default formatter internally.
         // IPv4 UDP DNS fast path: srcPort/dstPort/transportPayload are already populated
         // by the IPv4 transport switch above (NeedsUdpPayload returns true for port 53/5353).
         // Rejecting here short-circuits all detail-format work for the packet; accepted
@@ -3000,7 +3001,7 @@ public static class PacketLineFormatter
         // user-supplied predicate can mix -IcmpType and -Icmpv6Type. Non-ICMP
         // packets pass — the predicate is intentionally scoped to its protocol
         // and doesn't drop e.g. TCP traffic merely because an ICMP filter is set.
-        if (_detailLevel >= 1 && _icmpPredicate != null)
+        if (_detailLevel >= 0 && _icmpPredicate != null)
         {
             if (etherType == 0x0800 && protoKind == 1)
             {
