@@ -64,6 +64,12 @@ The parser covers SSHv1 and SSHv2 framing plus SSHv2 KEXINIT algorithm proposals
 stateless and does not decrypt post-NEWKEYS traffic or select a negotiated DH/GEX/ECDH decoder;
 such bytes display as `SSH Encrypted or unparsed payload`.
 
+ICMPv6 Neighbor Discovery packets provide Wireshark-style message fields, flag bit rows, and
+direct ICMPv6 option nodes (link-layer addresses, Prefix Information, MTU, Route Information,
+RDNSS, DNSSL, Redirected Header, and unknown options). The ICMPv6 root starts expanded; its
+flag and option nodes start collapsed. `-Icmpv6Type` and `-Icmpv6NdpTarget` filter the
+Analysis Text Box before lines are added.
+
 ---
 
 ## Keys

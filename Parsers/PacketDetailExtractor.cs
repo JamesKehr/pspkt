@@ -565,7 +565,8 @@ public static class PacketDetailExtractor
 
         if (v6 && type >= 133 && type <= 137)
         {
-            return BuildNdpNode(p, off, len, code, checksum, src);
+            BoxyBox.TreeNode ndp = NdpParser.BuildNdpDetailNode(p, off, len);
+            if (ndp != null) return ndp;
         }
 
         // Fallback: generic type/code breakdown.
@@ -576,74 +577,6 @@ public static class PacketDetailExtractor
         return generic;
     }
 
-    // Builds the ICMPv6 NDP (types 133-137) Details node: the spec one-liner header plus
-    // Type/Code/Checksum and the message-specific fields + options extracted by NdpParser.
-    private static BoxyBox.TreeNode BuildNdpNode(byte[] p, int off, int len, int code, int checksum, string src)
-    {
-        int type = p[off];
-        string name = NdpTypeName(type);
-        string header = NdpParser.FormatNdpSpec(p, off, len, false);
-        string targetAddr = (type == 135 || type == 136) && len >= 24 ? PacketParseHelper.FormatIPv6(p, off + 8) : null;
-
-        var node = new BoxyBox.TreeNode(header, "ICMPv6", true);
-        node.AddLeaf("Type".PadRight(10) + " : " + name + " (" + type + ")");
-        node.AddLeaf("Code".PadRight(10) + " : " + code);
-        node.AddLeaf("Checksum".PadRight(10) + " : 0x" + checksum.ToString("x4"));
-
-        if (type == 134 && len >= 16) // Router Advertisement
-        {
-            byte flags = p[off + 5];
-            node.AddLeaf("Cur Hop Limit".PadRight(16) + " : " + p[off + 4]);
-            node.AddLeaf("Flags".PadRight(16) + " : M=" + ((flags >> 7) & 1) + " O=" + ((flags >> 6) & 1));
-            node.AddLeaf("Router Lifetime".PadRight(16) + " : " + PacketParseHelper.ReadUInt16BE(p, off + 6) + "s");
-            node.AddLeaf("Reachable Time".PadRight(16) + " : " + PacketParseHelper.ReadUInt32BE(p, off + 8) + "ms");
-            node.AddLeaf("Retrans Timer".PadRight(16) + " : " + PacketParseHelper.ReadUInt32BE(p, off + 12) + "ms");
-        }
-        else if ((type == 135 || type == 136) && targetAddr != null)
-        {
-            node.AddLeaf("Target Address : " + targetAddr);
-            if (type == 136)
-            {
-                byte naFlags = p[off + 4];
-                node.AddLeaf("Router".PadRight(9) + " : " + SetState(((naFlags >> 7) & 1) != 0));
-                node.AddLeaf("Solicited".PadRight(9) + " : " + SetState(((naFlags >> 6) & 1) != 0));
-                node.AddLeaf("Override".PadRight(9) + " : " + SetState(((naFlags >> 5) & 1) != 0));
-            }
-        }
-
-        // NDP options (Prefix/MTU/RDNSS/etc.): rendered as an expandable "Options" node whose
-        // header carries the one-liner summary and whose children break out each option.
-        List<string> optSegs = NdpOptionSegments(p, off, len);
-        if (optSegs.Count > 0)
-        {
-            var opts = new BoxyBox.TreeNode("Options : " + string.Join(", ", optSegs.ToArray()), "ICMPv6.Options", true);
-            for (int i = 0; i < optSegs.Count; i++) opts.AddLeaf(optSegs[i]);
-            node.Add(opts);
-        }
-        return node;
-    }
-
-    // Extracts the parsed NDP option segments (Prefix/MTU/RDNSS/DNSSL/Route/etc.) from the
-    // NdpParser one-liner, dropping the message-specific fields that are broken out
-    // structurally (and the Source/Target Link-layer addresses folded into the header).
-    private static List<string> NdpOptionSegments(byte[] p, int off, int len)
-    {
-        var kept = new List<string>();
-        string detail = NdpParser.FormatNdpDetailed(p, off, len);
-        if (string.IsNullOrEmpty(detail)) return kept;
-        string[] segs = detail.Split(';');
-        for (int i = 1; i < segs.Length; i++)
-        {
-            string seg = segs[i].Trim();
-            if (seg.StartsWith("Prefix") || seg.StartsWith("MTU") || seg.StartsWith("RDNSS")
-                || seg.StartsWith("DNSSL") || seg.StartsWith("Route") || seg.StartsWith("RedirHdr")
-                || seg.StartsWith("Opt"))
-            {
-                kept.Add(seg);
-            }
-        }
-        return kept;
-    }
 
 
     private static void BuildAppNode(byte[] p, int off, int len, int sp, int dp, bool udp, string src, string dst, List<BoxyBox.TreeNode> roots)
@@ -872,20 +805,6 @@ public static class PacketDetailExtractor
             case 6: return "Reject route to destination";
             case 7: return "Error in Source Routing Header";
             default: return "Unknown";
-        }
-    }
-
-    /// <summary>Human-readable ICMPv6 NDP message name (types 133-137).</summary>
-    internal static string NdpTypeName(int type)
-    {
-        switch (type)
-        {
-            case 133: return "Router Solicitation";
-            case 134: return "Router Advertisement";
-            case 135: return "Neighbor Solicitation";
-            case 136: return "Neighbor Advertisement";
-            case 137: return "Redirect";
-            default: return "NDP type " + type;
         }
     }
 

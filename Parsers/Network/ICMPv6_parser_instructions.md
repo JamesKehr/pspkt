@@ -129,42 +129,78 @@ https://gitlab.com/wireshark/wireshark/-/blob/master/epan/dissectors/packet-icmp
 
 ####	Router Solicitation, Router Advertisement, Neighbor Solicitation, Neighbor Advertisement (Network Discovery Protocol)
 
-The collapsed header is the Default one-liner (e.g. `ICMPv6.Router Advertisement from [mac]`).
-The expanded node shows Type/Code/Checksum, the message-specific fields (RA timers + M/O
-flags; NS/NA Target Address; NA Router/Solicited/Override flags), and an expandable `Options`
-node (Prefix / MTU / RDNSS / DNSSL / Route). The `Options` node's header is the one-liner
-summary; expanding it breaks out one child per option. Source/Target Link-layer addresses are
-folded into the `from` / `is at` header.
+The Analysis Details root is `ICMPv6`. It expands to Type/Code/Checksum, message-specific
+fields, Wireshark-style flag subtrees, and one direct node per ICMPv6 option. Flag and option
+nodes are collapsed by default.
+Source/Target Link-layer addresses remain folded into the Text Box one-liner and also appear
+as full option nodes in Details.
 
 ```
-ICMPv6.Neighbor Advertisement [Target addr] ([NA Flags]) is at [Target MAC]
-  Type       : Neighbor Advertisement (136)
-  Code       : [n]
-  Checksum   : 0x[Checksum]
-  Target Address : [Target addr]
-  Router    : [Set|Not set]
-  Solicited : [Set|Not set]
-  Override  : [Set|Not set]
+ICMPv6
+  Type: Neighbor Advertisement (136)
+  Code: [n]
+  Checksum: 0x[Checksum]
+  +Flags: 0x[8 hex digits][, Router][, Solicited][, Override]
+      B... .... .... .... .... .... .... .... = Router: [Set|Not set]
+      .B.. .... .... .... .... .... .... .... = Solicited: [Set|Not set]
+      ..B. .... .... .... .... .... .... .... = Override: [Set|Not set]
+      ...B BBBB BBBB BBBB BBBB BBBB BBBB BBBB = Reserved: [n]
+  Target Address: [Target addr]
+  +ICMPv6 Option (Target link-layer address : [colon MAC])
+      Type: Target link-layer address (2)
+      Length: 1 (8 bytes)
+      Link-layer address: [colon MAC]
 ```
 
-Router Advertisement options are broken out under the expandable `Options` node:
+Router Advertisement options are direct children:
 
 ```
-ICMPv6.Router Advertisement from [mac]
-  Type            : Router Advertisement (134)
-  Code            : [n]
-  Checksum        : 0x[Checksum]
-  Cur Hop Limit   : [n]
-  Flags           : M=[0|1] O=[0|1]
-  Router Lifetime : [n]s
-  Reachable Time  : [n]ms
-  Retrans Timer   : [n]ms
-  [+|-]Options : [one-liner summary]
-    [Prefix ...]
-    [MTU ...]
-    [RDNSS ...]
+ICMPv6
+  Type: Router Advertisement (134)
+  Code: [n]
+  Checksum: 0x[Checksum]
+  Current Hop Limit: [n]
+  +Flags: 0x[2 hex digits], Router Preference [name]
+      B... .... = Managed address configuration: [Set|Not set]
+      .B.. .... = Other configuration: [Set|Not set]
+      ..B. .... = Home Agent: [Set|Not set]
+      ...B B... = Router Preference: [name]
+      .... .B.. = Proxy: [Set|Not set]
+      .... ..B. = Reserved: [n]
+  Router Lifetime: [n]s
+  Reachable Time: [n]ms
+  Retrans Timer: [n]ms
+  +ICMPv6 Option (Prefix information : [prefix]/[length])
+      Type: Prefix information (3)
+      Length: 4 (32 bytes)
+      Prefix Length: [n]
+      +Flags: 0x[2 hex digits]
+          B... .... = On-link: [Set|Not set]
+          .B.. .... = Autonomous address configuration: [Set|Not set]
+          ..B. .... = Router address: [Set|Not set]
+          ...B BBBB = Reserved: [n]
+      Valid Lifetime: [value]
+      Preferred Lifetime: [value]
+      Reserved: [n]
+      Prefix: [prefix]
+  +ICMPv6 Option (MTU : [n])
+      Type: MTU (5)
+      Length: 1 (8 bytes)
+      Reserved: [n]
+      MTU: [n]
+  +ICMPv6 Option (Recursive DNS server)
+      Type: Recursive DNS server (25)
+      Length: [units] ([bytes] bytes)
+      Reserved: [n]
+      Lifetime: [value]
+      Recursive DNS Server: [address]
 ```
+
+Supported option nodes include Source/Target Link-Layer Address, Prefix Information,
+Redirected Header, MTU, Route Information, RDNSS, DNSSL, and an unknown-option fallback.
+Malformed zero-length and truncated options stop safely; malformed option content is isolated
+so later valid options can still be decoded.
 
 Deeper option/protocol dissection follows the Wireshark ICMPv6 dissector:
 
-https://gitlab.com/wireshark/wireshark/-/blob/master/epan/dissectors/packet-icmpv6.c?ref_type=heads
+https://gitlab.com/wireshark/wireshark/-/blob/v3.6.2/epan/dissectors/packet-icmpv6.c?ref_type=tags

@@ -3648,6 +3648,24 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $script:icmpV6Ra = [IcmpContext]::new()
             $script:icmpV6Ra.Valid = $true; $script:icmpV6Ra.IsV6 = $true
             $script:icmpV6Ra.Type = 134; $script:icmpV6Ra.Code = 0
+
+            function script:New-Icmpv6PredicatePd([byte[]]$icmpv6) {
+                $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+                $ipv6 = [byte[]]::new(40)
+                $ipv6[0] = 0x60
+                $ipv6[4] = [byte](($icmpv6.Length -shr 8) -band 0xff)
+                $ipv6[5] = [byte]($icmpv6.Length -band 0xff)
+                $ipv6[6] = 58
+                $ipv6[7] = 255
+                $ipv6[8] = 0xfe; $ipv6[9] = 0x80; $ipv6[23] = 1
+                $ipv6[24] = 0xff; $ipv6[25] = 0x02; $ipv6[39] = 1
+                $packet = [byte[]]($eth + $ipv6 + $icmpv6)
+                $metadata = [byte[]]::new(40)
+                $metadata[12] = 1; $metadata[16] = 114; $metadata[18] = 13
+                $data = [byte[]]($metadata + $packet)
+                return [PSPacketData]::new($data, [uint32]$data.Length, [uint32]0,
+                    [uint32]40, [uint32]$packet.Length, [uint32]0, [uint32]0)
+            }
         }
 
         AfterEach {
@@ -3750,6 +3768,28 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             [PacketLineFormatter]::HasAppPredicate | Should -BeTrue
             [PacketLineFormatter]::ClearAppPredicates()
             [PacketLineFormatter]::HasAppPredicate | Should -BeFalse
+        }
+
+        It 'applies Icmpv6Type filtering at the Analysis Text Box internal level 0' {
+            $ra = [byte[]](134,0, 0,0, 64,0, 0,0, 0,0,0,0, 0,0,0,0)
+            $ns = [byte[]](135,0, 0,0, 0,0,0,0) +
+                  [System.Net.IPAddress]::Parse('2600:1700:5aa0:30ce::61').GetAddressBytes()
+            $predicate = [IcmpAppPredicate]::new()
+            $predicate.V6Types = [int[]]@(134)
+            [PacketLineFormatter]::SetIcmpPredicate($predicate)
+            Set-PspktDetailLevel -Level 0
+            try {
+                $output = [BoxyBox.AnsiText]::StripAnsi(
+                    [PacketLineFormatter]::FormatBatch(
+                        [PSPacketData[]]@(
+                            (script:New-Icmpv6PredicatePd $ra),
+                            (script:New-Icmpv6PredicatePd $ns)),
+                        2, 0).Output)
+            } finally {
+                Set-PspktDetailLevel -Level 1
+            }
+            $output | Should -Match 'ICMPv6\.Router Advertisement'
+            $output | Should -Not -Match 'Neighbor Solicitation'
         }
     }
 
@@ -5722,45 +5762,252 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
         It 'ICMPv6 Neighbor Advertisement renders header, target and NA flags' {
             $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
-            $na = [byte[]](136,0, 0,0, 0xE0,0,0,0)
+            $na = [byte[]](136,0, 0,0, 0xE0,0,0,5)
             $na += ([byte[]](0x20,0x01) + [byte[]]::new(13) + [byte[]](0x0a))
             $na += [byte[]](2, 1, 0x54,0x0f,0x2c,0x72,0x5e,0x1c)
             $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,($na.Length),58,255) + ([byte[]](0x20,0x01)+[byte[]]::new(14)) + ([byte[]](0xff,0x02)+[byte[]]::new(13)+[byte[]](1))
             $pkt = $eth + $ip6 + $na
             $node = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'ICMPv6'
-            $node.Text | Should -Be 'ICMPv6.Neighbor Advertisement 2001::a (rtr, sol, ovr) is at 54-0f-2c-72-5e-1c'
-            $kids = $node.Children | ForEach-Object { $_.Text }
-            ($kids | Where-Object { $_ -eq 'Type       : Neighbor Advertisement (136)' }).Count | Should -Be 1
-            ($kids | Where-Object { $_ -eq 'Target Address : 2001::a' }).Count | Should -Be 1
-            ($kids | Where-Object { $_ -eq 'Solicited : Set' }).Count | Should -Be 1
+            $node.Text | Should -Be 'ICMPv6'
+            $node.IsExpanded | Should -BeTrue
+            ($node.Children | Where-Object { $_.Text -eq 'Type: Neighbor Advertisement (136)' }).Count | Should -Be 1
+            $flags = $node.Children | Where-Object { $_.Text -eq 'Flags: 0xe0000005, Router, Solicited, Override' }
+            $flags | Should -Not -BeNullOrEmpty
+            $flags.IsExpanded | Should -BeFalse
+            ($flags.Children | Where-Object { $_.Text -eq '1... .... .... .... .... .... .... .... = Router: Set' }).Count | Should -Be 1
+            ($flags.Children | Where-Object { $_.Text -eq '.1.. .... .... .... .... .... .... .... = Solicited: Set' }).Count | Should -Be 1
+            ($flags.Children | Where-Object { $_.Text -eq '..1. .... .... .... .... .... .... .... = Override: Set' }).Count | Should -Be 1
+            ($flags.Children | Where-Object { $_.Text -eq '...0 0000 0000 0000 0000 0000 0000 0101 = Reserved: 5' }).Count | Should -Be 1
+            ($node.Children | Where-Object { $_.Text -eq 'Target Address: 2001::a' }).Count | Should -Be 1
+            $option = $node.Children | Where-Object {
+                $_.Text -eq 'ICMPv6 Option (Target link-layer address : 54:0f:2c:72:5e:1c)'
+            }
+            $option | Should -Not -BeNullOrEmpty
+            $option.IsExpanded | Should -BeFalse
+            ($option.Children | Where-Object { $_.Text -eq 'Length: 1 (8 bytes)' }).Count | Should -Be 1
+            ($option.Children | Where-Object { $_.Text -eq 'Link-layer address: 54:0f:2c:72:5e:1c' }).Count | Should -Be 1
         }
-        It 'ICMPv6 Router Advertisement expands the options (Prefix/MTU/RDNSS) into children' {
+        It 'ICMPv6 Neighbor Solicitation renders a direct Source link-layer option tree' {
             $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
-            # RA header: type 134, code 0, checksum, CurHopLimit 64, flags 0, RtrLifetime 1800, Reach 0, Retrans 0
-            $ra = [byte[]](134,0, 0,0, 64, 0, 0x07,0x08, 0,0,0,0, 0,0,0,0)
-            # Prefix Info option: /64, L+A (0xC0), valid 2745, pref 2745, prefix 2600:1700:5aa0:30cf::
-            $ra += [byte[]](3,4, 64, 0xC0, 0,0,0x0A,0xB9, 0,0,0x0A,0xB9, 0,0,0,0)
+            $target = [System.Net.IPAddress]::Parse('2600:1700:5aa0:30ce::61').GetAddressBytes()
+            $ns = [byte[]](135,0, 0xcf,0x12, 0,0,0,0) + $target +
+                  [byte[]](1,1, 0x70,0x85,0xc2,0x86,0xc7,0x20)
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,$ns.Length,58,255) +
+                   ([byte[]](0xfe,0x80)+[byte[]]::new(14)) +
+                   ([byte[]](0xff,0x02)+[byte[]]::new(13)+[byte[]](1))
+            $node = GetNode ([PacketDetailExtractor]::BuildTree(
+                ($eth+$ip6+$ns), ($eth+$ip6+$ns).Length, 9, 1, 1)) 'ICMPv6'
+            $node.Text | Should -Be 'ICMPv6'
+            ($node.Children | Where-Object { $_.Text -eq 'Type: Neighbor Solicitation (135)' }).Count | Should -Be 1
+            ($node.Children | Where-Object { $_.Text -eq 'Checksum: 0xcf12' }).Count | Should -Be 1
+            ($node.Children | Where-Object { $_.Text -eq 'Reserved: 0' }).Count | Should -Be 1
+            ($node.Children | Where-Object { $_.Text -eq 'Target Address: 2600:1700:5aa0:30ce::61' }).Count | Should -Be 1
+            $option = $node.Children | Where-Object {
+                $_.Text -eq 'ICMPv6 Option (Source link-layer address : 70:85:c2:86:c7:20)'
+            }
+            $option | Should -Not -BeNullOrEmpty
+            $option.Key | Should -BeNullOrEmpty
+            $option.IsExpanded | Should -BeFalse
+            ($option.Children | Where-Object { $_.Text -eq 'Type: Source link-layer address (1)' }).Count | Should -Be 1
+            ($option.Children | Where-Object { $_.Text -eq 'Length: 1 (8 bytes)' }).Count | Should -Be 1
+            ($option.Children | Where-Object { $_.Text -eq 'Link-layer address: 70:85:c2:86:c7:20' }).Count | Should -Be 1
+        }
+        It 'ICMPv6 Router Solicitation renders reserved and Source link-layer option fields' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            $rs = [byte[]](133,0, 0x12,0x34, 0,0,0,5) +
+                  [byte[]](1,1, 0xaa,0xbb,0xcc,0xdd,0xee,0xff)
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,$rs.Length,58,255) +
+                   ([byte[]](0xfe,0x80)+[byte[]]::new(14)) +
+                   ([byte[]](0xff,0x02)+[byte[]]::new(13)+[byte[]](2))
+            $node = GetNode ([PacketDetailExtractor]::BuildTree(
+                ($eth+$ip6+$rs), ($eth+$ip6+$rs).Length, 9, 1, 1)) 'ICMPv6'
+            ($node.Children | Where-Object { $_.Text -eq 'Reserved: 5' }).Count | Should -Be 1
+            $option = $node.Children | Where-Object {
+                $_.Text -eq 'ICMPv6 Option (Source link-layer address : aa:bb:cc:dd:ee:ff)'
+            }
+            $option | Should -Not -BeNullOrEmpty
+            $option.IsExpanded | Should -BeFalse
+        }
+        It 'ICMPv6 Redirect renders addresses and direct Target LLA and Redirected Header options' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            $target = [System.Net.IPAddress]::Parse('fe80::1').GetAddressBytes()
+            $destination = [System.Net.IPAddress]::Parse('2001:db8::1').GetAddressBytes()
+            $redirect = [byte[]](137,0, 0xab,0xcd, 0,0,0,0) + $target + $destination
+            $redirect += [byte[]](2,1, 1,2,3,4,5,6)
+            $redirect += [byte[]](4,2, 0,0,0,0,0,0, 0x60,0,0,0,0,0,0,0)
+            $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,$redirect.Length,58,255) +
+                   ([byte[]](0xfe,0x80)+[byte[]]::new(14)) +
+                   ([byte[]](0xfe,0x80)+[byte[]]::new(13)+[byte[]](2))
+            $node = GetNode ([PacketDetailExtractor]::BuildTree(
+                ($eth+$ip6+$redirect), ($eth+$ip6+$redirect).Length, 9, 1, 1)) 'ICMPv6'
+            ($node.Children | Where-Object { $_.Text -eq 'Target Address: fe80::1' }).Count | Should -Be 1
+            ($node.Children | Where-Object { $_.Text -eq 'Destination Address: 2001:db8::1' }).Count | Should -Be 1
+            ($node.Children | Where-Object {
+                $_.Text -eq 'ICMPv6 Option (Target link-layer address : 01:02:03:04:05:06)'
+            }).IsExpanded | Should -BeFalse
+            $redirected = $node.Children | Where-Object { $_.Text -eq 'ICMPv6 Option (Redirected header)' }
+            $redirected.IsExpanded | Should -BeFalse
+            ($redirected.Children | Where-Object { $_.Text -eq 'Redirected packet: 8 bytes; Data: 6000000000000000' }).Count | Should -Be 1
+        }
+        It 'ICMPv6 Router Advertisement renders collapsed option nodes (Prefix/MTU/RDNSS)' {
+            $eth = [byte[]](0x33,0x33,0,0,0,1, 0x22,0x22,0x22,0x22,0x22,0x22, 0x86,0xdd)
+            $ra = [byte[]](134,0, 0,0, 64, 0x07, 0x07,0x08, 0,0,0,0, 0,0,0,0)
+            $ra += [byte[]](3,4, 64, 0x3F, 0,0,0x0A,0xB9, 0,0,0x0A,0xB9, 0,0,0,0)
             $ra += [byte[]](0x26,0x00,0x17,0x00,0x5a,0xa0,0x30,0xcf, 0,0,0,0,0,0,0,0)
-            # MTU option: 9216 (0x2400)
             $ra += [byte[]](5,1, 0,0, 0,0,0x24,0x00)
-            # RDNSS option: lifetime 1800, two servers ::60 and ::61
             $ra += [byte[]](25,5, 0,0, 0,0,0x07,0x08)
             $ra += [byte[]](0x26,0x00,0x17,0x00,0x5a,0xa0,0x30,0xcf, 0,0,0,0,0,0,0,0x60)
             $ra += [byte[]](0x26,0x00,0x17,0x00,0x5a,0xa0,0x30,0xcf, 0,0,0,0,0,0,0,0x61)
             $ip6 = [byte[]](0x60,0,0,0) + [byte[]](0,($ra.Length),58,255) + ([byte[]](0xfe,0x80)+[byte[]]::new(14)) + ([byte[]](0xff,0x02)+[byte[]]::new(13)+[byte[]](1))
             $pkt = $eth + $ip6 + $ra
             $node = GetNode ([PacketDetailExtractor]::BuildTree($pkt, $pkt.Length, 9, 1, 1)) 'ICMPv6'
-            $opts = $node.Children | Where-Object { $_.Key -eq 'ICMPv6.Options' }
-            $opts | Should -Not -BeNullOrEmpty
-            $opts.IsExpanded | Should -BeTrue
-            # Header keeps the one-liner summary.
-            [BoxyBox.AnsiText]::StripAnsi($opts.Text) | Should -Be 'Options : Prefix 2600:1700:5aa0:30cf::/64 L=1 A=1 Valid 2745s Pref 2745s, MTU 9216, RDNSS Lifetime 1800s 2600:1700:5aa0:30cf::60 2600:1700:5aa0:30cf::61'
-            # Each option is broken out as a child.
-            $kids = $opts.Children | ForEach-Object { [BoxyBox.AnsiText]::StripAnsi($_.Text) }
-            $kids.Count | Should -Be 3
-            $kids[0] | Should -Be 'Prefix 2600:1700:5aa0:30cf::/64 L=1 A=1 Valid 2745s Pref 2745s'
-            $kids[1] | Should -Be 'MTU 9216'
-            $kids[2] | Should -Be 'RDNSS Lifetime 1800s 2600:1700:5aa0:30cf::60 2600:1700:5aa0:30cf::61'
+            $node.Text | Should -Be 'ICMPv6'
+            $flags = $node.Children | Where-Object { $_.Text -eq 'Flags: 0x07, Router Preference Medium, Proxy, Reserved' }
+            $flags | Should -Not -BeNullOrEmpty
+            $flags.IsExpanded | Should -BeFalse
+            ($flags.Children | Where-Object { $_.Text -eq '.... .1.. = Proxy: Set' }).Count | Should -Be 1
+            ($flags.Children | Where-Object { $_.Text -eq '.... ..1. = Reserved: 2' }).Count | Should -Be 1
+            @($flags.Children | Where-Object { $_.Text -match 'bit 0' }).Count | Should -Be 0
+
+            $prefix = $node.Children | Where-Object { $_.Text -eq 'ICMPv6 Option (Prefix information : 2600:1700:5aa0:30cf::/64)' }
+            $prefix | Should -Not -BeNullOrEmpty
+            $prefix.IsExpanded | Should -BeFalse
+            $prefixFlags = $prefix.Children | Where-Object { $_.Text -eq 'Flags: 0x3f, Router address' }
+            $prefixFlags.IsExpanded | Should -BeFalse
+            ($prefixFlags.Children | Where-Object { $_.Text -eq '..1. .... = Router address: Set' }).Count | Should -Be 1
+            ($prefixFlags.Children | Where-Object { $_.Text -eq '...1 1111 = Reserved: 31' }).Count | Should -Be 1
+            ($prefix.Children | Where-Object { $_.Text -eq 'Valid Lifetime: 2745s' }).Count | Should -Be 1
+
+            $mtu = $node.Children | Where-Object { $_.Text -eq 'ICMPv6 Option (MTU : 9216)' }
+            $mtu.IsExpanded | Should -BeFalse
+            ($mtu.Children | Where-Object { $_.Text -eq 'MTU: 9216' }).Count | Should -Be 1
+            $rdnss = $node.Children | Where-Object { $_.Text -eq 'ICMPv6 Option (Recursive DNS server)' }
+            $rdnss.IsExpanded | Should -BeFalse
+            ($rdnss.Children | Where-Object { $_.Text -eq 'Recursive DNS Server: 2600:1700:5aa0:30cf::60' }).Count | Should -Be 1
+            ($rdnss.Children | Where-Object { $_.Text -eq 'Recursive DNS Server: 2600:1700:5aa0:30cf::61' }).Count | Should -Be 1
+        }
+        It 'NDP options decode Route lengths, multiple DNSSL domains, and unknown data at a nonzero offset' {
+            function script:RouteOption([byte]$length, [byte]$prefixLength, [byte]$flags,
+                [uint32]$lifetime, [byte[]]$prefixBytes) {
+                $option = [byte[]](24,$length,$prefixLength,$flags,
+                    [byte](($lifetime -shr 24) -band 0xff),
+                    [byte](($lifetime -shr 16) -band 0xff),
+                    [byte](($lifetime -shr 8) -band 0xff),
+                    [byte]($lifetime -band 0xff))
+                $remaining = $length * 8 - $option.Length
+                return $option + $prefixBytes + [byte[]]::new($remaining - $prefixBytes.Length)
+            }
+
+            $ra = [byte[]](134,0,0,0,64,0,0,0,0,0,0,0,0,0,0,0)
+            $ra += script:RouteOption 1 0 0x00 60 ([byte[]]::new(0))
+            $ra += script:RouteOption 2 64 0x08 120 ([byte[]](0x20,0x01,0x0d,0xb8,0,0,0,0))
+            $ra += script:RouteOption 3 128 0x18 180 (
+                [System.Net.IPAddress]::Parse('2001:db8::1234').GetAddressBytes())
+            $ra += script:RouteOption 1 0 0xF7 200 ([byte[]]::new(0))
+            $ra += script:RouteOption 4 64 0x10 240 ([byte[]]::new(24))
+            $ra += [byte[]](5,1,0,0,0,0,0x05,0xdc)
+            $domains = [byte[]](7) + [Text.Encoding]::ASCII.GetBytes('example') +
+                       [byte[]](3) + [Text.Encoding]::ASCII.GetBytes('com') + [byte[]](0) +
+                       [byte[]](3) + [Text.Encoding]::ASCII.GetBytes('lab') +
+                       [byte[]](5) + [Text.Encoding]::ASCII.GetBytes('local') + [byte[]](0)
+            $ra += [byte[]](31,4,0,0,0,0,0,60) + $domains
+            $ra += [byte[]](99,1,1,2,3,4,5,6)
+
+            $buffer = [byte[]]([byte[]](0xaa,0xbb) + $ra + [byte[]](100,1,9,9,9,9,9,9))
+            $method = [NdpParser].GetMethod('BuildNdpDetailNode',
+                [Reflection.BindingFlags]'Static,NonPublic')
+            $node = $method.Invoke($null, @($buffer,2,$ra.Length))
+            $routes = @($node.Children | Where-Object { $_.Text -like 'ICMPv6 Option (Route information*' })
+            $routes.Count | Should -Be 5
+            @($routes | Where-Object { $_.Key }).Count | Should -Be 0
+            @($routes | Where-Object { $_.IsExpanded }).Count | Should -Be 0
+            foreach ($route in $routes[0..3]) {
+                ($route.Children | Where-Object { $_.Text -like 'Flags: 0x*' }).IsExpanded |
+                    Should -BeFalse
+            }
+            ($routes[0].Children | Where-Object { $_.Text -eq 'Prefix: ::' }).Count | Should -Be 1
+            (($routes[0].Children | Where-Object { $_.Text -eq 'Flags: 0x00, Route Preference Medium' }).Children |
+                Where-Object { $_.Text -eq '...0 0... = Route Preference: Medium' }).Count | Should -Be 1
+            ($routes[1].Children | Where-Object { $_.Text -eq 'Prefix: 2001:db8::' }).Count | Should -Be 1
+            (($routes[1].Children | Where-Object { $_.Text -eq 'Flags: 0x08, Route Preference High' }).Children |
+                Where-Object { $_.Text -eq '...0 1... = Route Preference: High' }).Count | Should -Be 1
+            (($routes[2].Children | Where-Object { $_.Text -eq 'Flags: 0x18, Route Preference Low' }).Children |
+                Where-Object { $_.Text -eq '...1 1... = Route Preference: Low' }).Count | Should -Be 1
+            (($routes[3].Children | Where-Object { $_.Text -eq 'Flags: 0xf7, Route Preference Reserved' }).Children |
+                Where-Object { $_.Text -eq '...1 0... = Route Preference: Reserved' }).Count | Should -Be 1
+            (($routes[3].Children | Where-Object { $_.Text -eq 'Flags: 0xf7, Route Preference Reserved' }).Children |
+                Where-Object { $_.Text -eq '111. .111 = Reserved: 231' }).Count | Should -Be 1
+            ($routes[4].Children | Where-Object { $_.Text -eq 'Malformed: Expected length 1, 2, or 3' }).Count | Should -Be 1
+            ($node.Children | Where-Object { $_.Text -eq 'ICMPv6 Option (MTU : 1500)' }).Count | Should -Be 1
+
+            $dnssl = $node.Children | Where-Object { $_.Text -eq 'ICMPv6 Option (DNS search list)' }
+            $dnssl.IsExpanded | Should -BeFalse
+            ($dnssl.Children | Where-Object { $_.Text -eq 'Domain Name: example.com' }).Count | Should -Be 1
+            ($dnssl.Children | Where-Object { $_.Text -eq 'Domain Name: lab.local' }).Count | Should -Be 1
+            $unknown = $node.Children | Where-Object { $_.Text -eq 'ICMPv6 Option (Unknown : 99)' }
+            $unknown.IsExpanded | Should -BeFalse
+            ($unknown.Children | Where-Object { $_.Text -eq 'Data: 010203040506' }).Count | Should -Be 1
+            @($node.Children | Where-Object { $_.Text -like '*100*' }).Count | Should -Be 0
+        }
+        It 'NDP option field bounds isolate undersized, zero-length, and truncated options' {
+            $header = [byte[]](134,0,0,0,64,0,0,0,0,0,0,0,0,0,0,0)
+            $undersized = [byte[]]($header +
+                [byte[]](3,1,64,0,0,0,0,0) +
+                [byte[]](25,1,0,0,0,0,0,0) +
+                [byte[]](31,1,0,0,0,0,0,0) +
+                [byte[]](5,1,0,0,0,0,0x05,0xdc))
+            $method = [NdpParser].GetMethod('BuildNdpDetailNode',
+                [Reflection.BindingFlags]'Static,NonPublic')
+            $node = $method.Invoke($null, @($undersized,0,$undersized.Length))
+            @($node.Children | Where-Object { $_.Text -like 'ICMPv6 Option (*malformed)' }).Count |
+                Should -Be 3
+            @($node.Children | Where-Object { $_.Text -like 'ICMPv6 Option (*malformed)' -and
+                $_.IsExpanded }).Count | Should -Be 0
+            $validMtu = $node.Children | Where-Object { $_.Text -eq 'ICMPv6 Option (MTU : 1500)' }
+            $validMtu.IsExpanded | Should -BeFalse
+
+            $zeroLength = [byte[]]($header + [byte[]](3,0) +
+                [byte[]](5,1,0,0,0,0,0x05,0xdc))
+            $zeroNode = $method.Invoke($null, @($zeroLength,0,$zeroLength.Length))
+            ($zeroNode.Children | Where-Object {
+                $_.Text -eq 'ICMPv6 Option (Malformed: Length 0)'
+            }).IsExpanded | Should -BeFalse
+            @($zeroNode.Children | Where-Object { $_.Text -like '*MTU*' }).Count | Should -Be 0
+
+            $truncated = [byte[]]($header + [byte[]](25,3,0,0,0,0,0,1))
+            $truncatedNode = $method.Invoke($null, @($truncated,0,$truncated.Length))
+            ($truncatedNode.Children | Where-Object {
+                $_.Text -eq 'ICMPv6 Option (Truncated: Recursive DNS server)'
+            }).IsExpanded | Should -BeFalse
+
+            $unterminated = [byte[]]($header +
+                [byte[]](31,2,0,0,0,0,0,1, 7) +
+                [Text.Encoding]::ASCII.GetBytes('example'))
+            $unterminatedNode = $method.Invoke($null, @($unterminated,0,$unterminated.Length))
+            $unterminatedDnssl = $unterminatedNode.Children | Where-Object {
+                $_.Text -eq 'ICMPv6 Option (DNS search list)'
+            }
+            $unterminatedDnssl.IsExpanded | Should -BeFalse
+            ($unterminatedDnssl.Children | Where-Object { $_.Text -eq 'Malformed Domain Name' }).Count |
+                Should -Be 1
+
+            $manyLabels = [System.Collections.Generic.List[byte]]::new()
+            1..65 | ForEach-Object {
+                $manyLabels.Add(1)
+                $manyLabels.Add([byte][char]'a')
+            }
+            $manyLabels.Add(0)
+            while (($manyLabels.Count + 8) % 8 -ne 0) { $manyLabels.Add(0) }
+            $units = ($manyLabels.Count + 8) / 8
+            $labelCap = [byte[]]($header + [byte[]](31,$units,0,0,0,0,0,1) +
+                [byte[]]$manyLabels.ToArray())
+            $labelCapNode = $method.Invoke($null, @($labelCap,0,$labelCap.Length))
+            $labelCapDnssl = $labelCapNode.Children | Where-Object {
+                $_.Text -eq 'ICMPv6 Option (DNS search list)'
+            }
+            $labelCapDnssl.IsExpanded | Should -BeFalse
+            ($labelCapDnssl.Children | Where-Object { $_.Text -eq 'Malformed Domain Name' }).Count |
+                Should -Be 1
         }
         It 'Component node renders the Group/Component/Edge/Direction format' {
             [PacketLineFormatter]::ClearComponents()

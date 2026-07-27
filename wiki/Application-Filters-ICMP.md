@@ -4,6 +4,10 @@ This page documents the ICMP, ICMPv6, and NDP application-layer display filter p
 
 These filters narrow ICMP traffic by type (per family) or by the NDP target address (NS / NA only). Non-ICMP packets are unaffected — the predicate is intentionally protocol-scoped. To also drop non-ICMP traffic, combine with a transport / IP capture filter (the auto-imply behavior handles the common case automatically).
 
+The predicates apply to the Analysis Text Box as well as Detailed output. Analysis renders its
+compact Text Box through the Default formatter internally, but the ICMP predicate still runs
+before the line is emitted.
+
 ## Parameters
 
 | Parameter | Type | Description |
