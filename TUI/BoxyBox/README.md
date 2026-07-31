@@ -65,7 +65,7 @@ All types live in the `BoxyBox` namespace.
 | `TreeNode` | A node with `Text`, a stable `Key` (for expand/collapse persistence), `IsExpanded`, and `Children`. `Add(child)` / `AddLeaf(text)`. |
 | `TreeRow` | One flattened visible row: display string + originating node + depth. |
 | `TreeFlattener` | `Flatten(roots)` honors each node's expanded state; `FlattenAll(roots)` ignores collapse (used for "copy everything"). Every node reserves one column for its `+`/`-` marker immediately left of its text, so a leaf's text (blank marker slot) aligns with sibling expandable nodes' text. Set `UseConnectors = true` to draw `├`/`└` tree connectors instead. |
-| `DetailsBox` | Wraps a `Box` around a tree: selection, scrolling, expand/collapse (`MoveUp/Down`, `PageUp/Down`, `ExpandSelected/CollapseSelected`, `ExpandAll/CollapseAll`), per-`Key` expand-state persistence across trees, `Resize`, `GetVisibleText()` (viewport) and `GetAllText()` (whole tree). |
+| `DetailsBox` | Wraps a `Box` around a tree: selection, scrolling, boundary movement (`MoveToFirstRow/MoveToLastRow`), expand/collapse (`MoveUp/Down`, `PageUp/Down`, `ExpandSelected/CollapseSelected`, `ExpandAll/CollapseAll`), per-`Key` expand-state persistence across trees, `Resize`, `GetVisibleText()` (viewport) and `GetAllText()` (whole tree). |
 
 ### Overlays and menus
 
@@ -135,7 +135,7 @@ Its use of BoxyBox is a good end-to-end example:
   `DetailsBox` (bottom), merged on a shared `Cap.Mid` divider. The selected packet's detail
   tree is parsed **just-in-time** and shown in the Details box.
 - **Pause** (`p`) additionally stops ingesting new packets, then enters Focus.
-- Arrow keys navigate; `Tab` switches the active box; the selected row gets a background
+- Arrow keys navigate; `Home` / `End` move to box boundaries; `Tab` switches the active box; the selected row gets a background
   highlight that preserves the parsing colors (`AnsiText.ApplyBackground`).
 - **Save** (`w`) opens an `OverlayBox` prompt and writes a pcapng of the retained packets;
   **Copy** (`Shift+Ctrl+C`) copies the selected line plus the full detail tree

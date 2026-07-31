@@ -99,6 +99,16 @@ Set-PspktSession -Session <pspktSession> [-Name <string>] [-Active <bool>]
 | `-FileName` | `string` | No | Log file name (for log-mode sessions). |
 | `-CountersOnly` | `bool` | No | Capture counters only without packet logging. |
 
+## Native failure recovery
+
+If a native configuration call fails after session mutation begins, the supplied session is marked
+faulted. Forward configuration and activation calls then fail with a recreate-required error.
+Deactivate and close the session; create a new session rather than retrying the faulted handle.
+
+Session close is best-effort across all attached streams and the native session handle. Managed
+handles and owner registries are invalidated even when a native close reports an error, and all
+cleanup errors are surfaced after the remaining cleanup steps run.
+
 ### Output
 `pspktSession`
 

@@ -538,9 +538,125 @@ public struct PACKETMONITOR_PROTOCOL_CONSTRAINT
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 public delegate void PACKETMONITOR_STREAM_DATA_CALLBACK(IntPtr zeroPtr, PACKETMONITOR_STREAM_DATA_DESCRIPTOR descriptor);
 
+public enum PspktNativeOperation
+{
+    Initialize = 0,
+    Uninitialize = 1,
+    EnumDataSources = 2,
+    CreateLiveSession = 3,
+    CloseSessionHandle = 4,
+    CreateRealtimeStream = 5,
+    CloseRealtimeStream = 6,
+    SetSessionActive = 7,
+    AddSingleDataSource = 8,
+    AddCaptureConstraint = 9,
+    AttachOutput = 10
+}
+
+public interface IPspktNativeApi
+{
+    int PacketMonitorInitialize(uint apiVersion, IntPtr reserved, out IntPtr handle);
+    void PacketMonitorUninitialize(IntPtr handle);
+    int PacketMonitorEnumDataSources(
+        IntPtr handle,
+        uint sourceKind,
+        bool showHidden,
+        ulong bufferCapacity,
+        out ulong bytesNeeded,
+        IntPtr buffer);
+    int PacketMonitorCreateLiveSession(IntPtr handle, string sessionName, out IntPtr session);
+    void PacketMonitorCloseSessionHandle(IntPtr handle);
+    int PacketMonitorCreateRealtimeStream(
+        IntPtr handle,
+        ref PACKETMONITOR_REALTIME_STREAM_CONFIGURATION configuration,
+        out IntPtr realtimeStream);
+    void PacketMonitorCloseRealtimeStream(IntPtr realtimeStream);
+    int PacketMonitorSetSessionActive(IntPtr session, bool active);
+    int PacketMonitorAddSingleDataSourceToSession(IntPtr session, IntPtr dataSourceSpec);
+    int PacketMonitorAddCaptureConstraint(IntPtr session, IntPtr captureConstraint);
+    int PacketMonitorAttachOutputToSession(IntPtr session, IntPtr realtimeStream);
+}
+
+public sealed class PspktNativeApi : IPspktNativeApi
+{
+    public int PacketMonitorInitialize(uint apiVersion, IntPtr reserved, out IntPtr handle)
+    {
+        return PktMonApi.PacketMonitorInitialize(apiVersion, reserved, out handle);
+    }
+
+    public void PacketMonitorUninitialize(IntPtr handle)
+    {
+        PktMonApi.PacketMonitorUninitialize(handle);
+    }
+
+    public int PacketMonitorEnumDataSources(
+        IntPtr handle,
+        uint sourceKind,
+        bool showHidden,
+        ulong bufferCapacity,
+        out ulong bytesNeeded,
+        IntPtr buffer)
+    {
+        return PktMonApi.PacketMonitorEnumDataSources(
+            handle,
+            sourceKind,
+            showHidden,
+            bufferCapacity,
+            out bytesNeeded,
+            buffer);
+    }
+
+    public int PacketMonitorCreateLiveSession(IntPtr handle, string sessionName, out IntPtr session)
+    {
+        return PktMonApi.PacketMonitorCreateLiveSession(handle, sessionName, out session);
+    }
+
+    public void PacketMonitorCloseSessionHandle(IntPtr handle)
+    {
+        PktMonApi.PacketMonitorCloseSessionHandle(handle);
+    }
+
+    public int PacketMonitorCreateRealtimeStream(
+        IntPtr handle,
+        ref PACKETMONITOR_REALTIME_STREAM_CONFIGURATION configuration,
+        out IntPtr realtimeStream)
+    {
+        return PktMonApi.PacketMonitorCreateRealtimeStream(
+            handle,
+            ref configuration,
+            out realtimeStream);
+    }
+
+    public void PacketMonitorCloseRealtimeStream(IntPtr realtimeStream)
+    {
+        PktMonApi.PacketMonitorCloseRealtimeStream(realtimeStream);
+    }
+
+    public int PacketMonitorSetSessionActive(IntPtr session, bool active)
+    {
+        return PktMonApi.PacketMonitorSetSessionActive(session, active);
+    }
+
+    public int PacketMonitorAddSingleDataSourceToSession(IntPtr session, IntPtr dataSourceSpec)
+    {
+        return PktMonApi.PacketMonitorAddSingleDataSourceToSession(session, dataSourceSpec);
+    }
+
+    public int PacketMonitorAddCaptureConstraint(IntPtr session, IntPtr captureConstraint)
+    {
+        return PktMonApi.PacketMonitorAddCaptureConstraint(session, captureConstraint);
+    }
+
+    public int PacketMonitorAttachOutputToSession(IntPtr session, IntPtr realtimeStream)
+    {
+        return PktMonApi.PacketMonitorAttachOutputToSession(session, realtimeStream);
+    }
+}
+
 public static class PktMonApi
 {
-    public static PACKETMONITOR_STREAM_DATA_CALLBACK DataCallback;
+    public static readonly PACKETMONITOR_STREAM_DATA_CALLBACK DataCallback =
+        new PACKETMONITOR_STREAM_DATA_CALLBACK(PacketDataCallBack);
     private static SpscPacketRingBuffer _ringBuffer = new SpscPacketRingBuffer(1048576);
     private static volatile bool _captureActive;
 
@@ -915,10 +1031,15 @@ public static class PktMonApi
         catch { }
     }
     
+    public static void PrepareRealtimeStreamConfiguration(
+        ref PACKETMONITOR_REALTIME_STREAM_CONFIGURATION configuration)
+    {
+        configuration.DataCallback = Marshal.GetFunctionPointerForDelegate(DataCallback);
+    }
+
     public static IntPtr CreateRealtimeStream(IntPtr pktmonHandle, PACKETMONITOR_REALTIME_STREAM_CONFIGURATION cfg)
     {
-        DataCallback = new PACKETMONITOR_STREAM_DATA_CALLBACK(PacketDataCallBack);
-        cfg.DataCallback = Marshal.GetFunctionPointerForDelegate(DataCallback);
+        PrepareRealtimeStreamConfiguration(ref cfg);
         IntPtr streamHandle = IntPtr.Zero;
         
         var hr = PacketMonitorCreateRealtimeStream(pktmonHandle, ref cfg, out streamHandle);

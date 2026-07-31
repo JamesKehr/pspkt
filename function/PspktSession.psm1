@@ -855,7 +855,8 @@ object via Get-VM so fallbacks 2 and 3 are available.
 Hyper-V returns '000000000000' for dynamic MACs that have never been
 allocated (a brand-new VM that has never been started); those NICs are
 skipped with a warning (suppress via -NoWarning) so callers don't add a
-useless all-zeroes filter.
+useless all-zeroes filter. If no usable MAC remains, Start-Pspkt setup
+fails instead of starting an unscoped capture.
 
 If the Hyper-V PowerShell module is not installed on the host the function
 throws — pspkt cannot scope to a VM that the host cannot enumerate.
@@ -1391,6 +1392,177 @@ function Get-PspktTuiMenu {
 
 <#
 .SYNOPSIS
+Resolves Home or End to the oldest or newest retained Text Box sequence.
+
+.OUTPUTS
+A boundary action with HasSelection and SelectedSeq, or no output for other keys.
+#>
+function Get-PspktTuiTextBoundaryAction {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ConsoleKey]
+        $Key,
+
+        [Parameter(Mandatory = $true)]
+        [long]
+        $BaseSeq,
+
+        [Parameter(Mandatory = $true)]
+        [long]
+        $TotalSeq
+    )
+
+    if ($Key -ne [ConsoleKey]::Home -and $Key -ne [ConsoleKey]::End) {
+        return
+    }
+
+    $hasSelection = $TotalSeq -gt $BaseSeq
+    $selectedSeq = $BaseSeq
+    if ($hasSelection -and $Key -eq [ConsoleKey]::End) {
+        $selectedSeq = $TotalSeq - 1
+    }
+
+    return [pscustomobject]@{
+        HasSelection = $hasSelection
+        SelectedSeq = [long]$selectedSeq
+    }
+}
+
+<#
+.SYNOPSIS
+Clamps a Text Box selection and viewport to the retained sequence range.
+
+.OUTPUTS
+An object containing the normalized SelectedSeq and TopSeq values.
+#>
+function Get-PspktTuiTextViewport {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [long]
+        $SelectedSeq,
+
+        [Parameter(Mandatory = $true)]
+        [long]
+        $TopSeq,
+
+        [Parameter(Mandatory = $true)]
+        [long]
+        $BaseSeq,
+
+        [Parameter(Mandatory = $true)]
+        [long]
+        $TotalSeq,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $VisibleRows
+    )
+
+    if ($VisibleRows -lt 1) {
+        $VisibleRows = 1
+    }
+
+    if ($TotalSeq -le $BaseSeq) {
+        return [pscustomobject]@{
+            SelectedSeq = [long]$BaseSeq
+            TopSeq = [long]$BaseSeq
+        }
+    }
+
+    $lastSeq = $TotalSeq - 1
+    if ($SelectedSeq -lt $BaseSeq) {
+        $SelectedSeq = $BaseSeq
+    } elseif ($SelectedSeq -gt $lastSeq) {
+        $SelectedSeq = $lastSeq
+    }
+
+    $maxTop = [Math]::Max($BaseSeq, $TotalSeq - $VisibleRows)
+    if ($TopSeq -lt $BaseSeq) {
+        $TopSeq = $BaseSeq
+    } elseif ($TopSeq -gt $maxTop) {
+        $TopSeq = $maxTop
+    }
+
+    if ($SelectedSeq -lt $TopSeq) {
+        $TopSeq = $SelectedSeq
+    } elseif ($SelectedSeq -gt $TopSeq + $VisibleRows - 1) {
+        $TopSeq = $SelectedSeq - $VisibleRows + 1
+    }
+
+    if ($TopSeq -lt $BaseSeq) {
+        $TopSeq = $BaseSeq
+    } elseif ($TopSeq -gt $maxTop) {
+        $TopSeq = $maxTop
+    }
+
+    return [pscustomobject]@{
+        SelectedSeq = [long]$SelectedSeq
+        TopSeq = [long]$TopSeq
+    }
+}
+
+<#
+.SYNOPSIS
+Builds a retained packet detail tree without allowing parser failures to escape.
+
+.OUTPUTS
+System.Collections.Generic.List[BoxyBox.TreeNode]
+#>
+function Get-PspktTuiPacketDetailTree {
+    [CmdletBinding()]
+    [OutputType([System.Collections.Generic.List[BoxyBox.TreeNode]])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        [byte[]]
+        $PacketBytes,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $PacketLength,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $ComponentId,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $EdgeId,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $Direction
+    )
+
+    try {
+        $roots = [PacketDetailExtractor]::BuildTree(
+            $PacketBytes,
+            $PacketLength,
+            $ComponentId,
+            $EdgeId,
+            $Direction
+        )
+        Write-Output -NoEnumerate ([System.Collections.Generic.List[BoxyBox.TreeNode]]$roots)
+        return
+    } catch {
+        $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+        $null = $roots.Add(
+            [BoxyBox.TreeNode]::new(
+                '(packet detail unavailable - parser error)',
+                'DetailParseError',
+                $true
+            )
+        )
+        Write-Output -NoEnumerate $roots
+    }
+}
+
+<#
+.SYNOPSIS
 Word-wraps a single string into lines that each fit a given visible width, capped at a
 maximum number of lines.
 
@@ -1718,6 +1890,9 @@ function Invoke-PspktAnalysisLoop {
     $activeBox = 'text'      # 'text' or 'details' (Tab switches)
     [long]$selectedSeq = 0
     [long]$topSeq = 0
+    $detailsState = [pscustomobject]@{
+        LoadedSeq = [long]::MinValue
+    }
     # Selection highlight: a distinct background color applied over the row while preserving
     # the row's own foreground (parsing) colors. Active box uses blue; the inactive box uses
     # a dimmer gray so it's clear which box has keyboard focus.
@@ -1730,15 +1905,53 @@ function Invoke-PspktAnalysisLoop {
     # has scrolled beyond the retention window.
     $loadDetails = {
         param([long]$seq)
+        if ($detailsState.LoadedSeq -eq $seq) {
+            return
+        }
+
+        $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
+        $null = $roots.Add(
+            [BoxyBox.TreeNode]::new(
+                '(detail not retained - packet scrolled past the JIT window)',
+                'Info',
+                $true
+            )
+        )
         $pktBytes = $null; $cId = 0; $eId = 0; $dir = 0
         $got = $detailStore.TryGet($seq, [ref]$pktBytes, [ref]$cId, [ref]$eId, [ref]$dir)
         if ($got -and $null -ne $pktBytes) {
-            $roots = [PacketDetailExtractor]::BuildTree($pktBytes, $pktBytes.Length, $cId, $eId, $dir)
-        } else {
-            $roots = [System.Collections.Generic.List[BoxyBox.TreeNode]]::new()
-            $null = $roots.Add([BoxyBox.TreeNode]::new('(detail not retained - packet scrolled past the JIT window)', 'Info', $true))
+            $roots = Get-PspktTuiPacketDetailTree `
+                -PacketBytes $pktBytes `
+                -PacketLength $pktBytes.Length `
+                -ComponentId $cId `
+                -EdgeId $eId `
+                -Direction $dir
         }
         $detailsBox.SetTree($roots)
+        $detailsState.LoadedSeq = $seq
+    }
+
+    $applyTextBoundary = {
+        param([ConsoleKey]$boundaryKey)
+
+        $action = Get-PspktTuiTextBoundaryAction `
+            -Key $boundaryKey `
+            -BaseSeq $textBox.BaseSeq `
+            -TotalSeq $textBox.TotalSeq
+        if ($null -eq $action -or -not $action.HasSelection) {
+            return $false
+        }
+
+        $viewport = Get-PspktTuiTextViewport `
+            -SelectedSeq $action.SelectedSeq `
+            -TopSeq $topSeq `
+            -BaseSeq $textBox.BaseSeq `
+            -TotalSeq $textBox.TotalSeq `
+            -VisibleRows $textContentRows
+        $selectedSeq = $viewport.SelectedSeq
+        $topSeq = $viewport.TopSeq
+        & $loadDetails $selectedSeq
+        return $true
     }
 
     # Enters Focus mode: freezes scrolling, splits the screen, selects a line near the tail,
@@ -2036,11 +2249,15 @@ function Invoke-PspktAnalysisLoop {
                         $dirty = $true
                     }
                     elseif ($activeBox -eq 'details') {
-                        # Ctrl+Up/Down = prev/next packet (moves the Text Box selection + reloads).
-                        # Ctrl+PageUp/PageDown = page the Text Box up/down a page (selection + reload)
-                        # without leaving the Details Box. Ctrl+Left/Right = Collapse All / Expand All.
-                        # Plain arrows navigate or collapse/expand only the selected node.
-                        if ($ctrl -and $key.Key -eq [ConsoleKey]::UpArrow) {
+                        if ($ctrl -and (
+                            $key.Key -eq [ConsoleKey]::Home -or
+                            $key.Key -eq [ConsoleKey]::End
+                        )) {
+                            if (. $applyTextBoundary $key.Key) {
+                                $dirty = $true
+                            }
+                        }
+                        elseif ($ctrl -and $key.Key -eq [ConsoleKey]::UpArrow) {
                             $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); & $loadDetails $selectedSeq; $dirty = $true
                         }
                         elseif ($ctrl -and $key.Key -eq [ConsoleKey]::DownArrow) {
@@ -2066,6 +2283,8 @@ function Invoke-PspktAnalysisLoop {
                                 'DownArrow'  { $detailsBox.MoveDown(); $dirty = $true }
                                 'PageUp'     { $detailsBox.PageUp();   $dirty = $true }
                                 'PageDown'   { $detailsBox.PageDown(); $dirty = $true }
+                                'Home'       { $detailsBox.MoveToFirstRow(); $dirty = $true }
+                                'End'        { $detailsBox.MoveToLastRow(); $dirty = $true }
                                 'LeftArrow'  { $detailsBox.CollapseSelected(); $dirty = $true }
                                 'RightArrow' { $detailsBox.ExpandSelected();   $dirty = $true }
                             }
@@ -2078,6 +2297,8 @@ function Invoke-PspktAnalysisLoop {
                             'DownArrow'  { $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); & $loadDetails $selectedSeq; $dirty = $true }
                             'PageUp'     { $selectedSeq = $textBox.ClampSeq($selectedSeq - $textContentRows); $topSeq -= $textContentRows; & $loadDetails $selectedSeq; $dirty = $true }
                             'PageDown'   { $selectedSeq = $textBox.ClampSeq($selectedSeq + $textContentRows); $topSeq += $textContentRows; & $loadDetails $selectedSeq; $dirty = $true }
+                            'Home'       { if (. $applyTextBoundary $key.Key) { $dirty = $true } }
+                            'End'        { if (. $applyTextBoundary $key.Key) { $dirty = $true } }
                             'LeftArrow'  { $textFocusBox.Justification = [BoxyBox.Justify]::Left;  $dirty = $true }
                             'RightArrow' { $textFocusBox.Justification = [BoxyBox.Justify]::Right; $dirty = $true }
                         }
@@ -2085,13 +2306,14 @@ function Invoke-PspktAnalysisLoop {
 
                     # Keep the text-box selection inside its visible window + retained range.
                     if ($focused) {
-                        $selectedSeq = $textBox.ClampSeq($selectedSeq)
-                        $maxTop = [Math]::Max($textBox.BaseSeq, $textBox.TotalSeq - $textContentRows)
-                        if ($topSeq -gt $maxTop) { $topSeq = $maxTop }
-                        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
-                        if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
-                        elseif ($selectedSeq -gt $topSeq + $textContentRows - 1) { $topSeq = $selectedSeq - $textContentRows + 1 }
-                        if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
+                        $viewport = Get-PspktTuiTextViewport `
+                            -SelectedSeq $selectedSeq `
+                            -TopSeq $topSeq `
+                            -BaseSeq $textBox.BaseSeq `
+                            -TotalSeq $textBox.TotalSeq `
+                            -VisibleRows $textContentRows
+                        $selectedSeq = $viewport.SelectedSeq
+                        $topSeq = $viewport.TopSeq
                     }
                 }
             }
@@ -2140,11 +2362,17 @@ function Invoke-PspktAnalysisLoop {
             # --- Throttled render ---
             if ($dirty -and $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs) {
                 if ($focused) {
-                    # Re-clamp against any trimming since the last frame.
-                    $selectedSeq = $textBox.ClampSeq($selectedSeq)
-                    if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
-                    if ($selectedSeq -lt $topSeq) { $topSeq = $selectedSeq }
-                    elseif ($selectedSeq -gt $topSeq + $textFocusBox.ContentRows - 1) { $topSeq = $selectedSeq - $textFocusBox.ContentRows + 1 }
+                    $viewport = Get-PspktTuiTextViewport `
+                        -SelectedSeq $selectedSeq `
+                        -TopSeq $topSeq `
+                        -BaseSeq $textBox.BaseSeq `
+                        -TotalSeq $textBox.TotalSeq `
+                        -VisibleRows $textFocusBox.ContentRows
+                    if ($selectedSeq -ne $viewport.SelectedSeq) {
+                        $selectedSeq = $viewport.SelectedSeq
+                        & $loadDetails $selectedSeq
+                    }
+                    $topSeq = $viewport.TopSeq
 
                     $activeLabel = if ($activeBox -eq 'text') { 'TEXT' } else { 'DETAILS' }
                     $modeLabel = if ($paused) { "PAUSED/$activeLabel" } else { "FOCUS/$activeLabel" }
@@ -3533,6 +3761,7 @@ function Start-Pspkt {
             $createdSession = $true
         }
 
+        try {
         # Parse IPAddress early so it can be combined with quick filters and VM MAC filters.
         $parsedIP = $null
         if ($PSBoundParameters.ContainsKey('IPAddress') -and -not [string]::IsNullOrEmpty($IPAddress)) {
@@ -3546,18 +3775,24 @@ function Start-Pspkt {
         # list is also reused later to skip the standalone QF-VM-MAC-* filters
         # when quick filters already provide the scope.
         $vmMacList = @()
-        if ($PSBoundParameters.ContainsKey('VM') -or ($PSBoundParameters.ContainsKey('VMName') -and -not [string]::IsNullOrEmpty($VMName))) {
+        $vmScopeRequested = (
+            $PSBoundParameters.ContainsKey('VM') -or
+            ($PSBoundParameters.ContainsKey('VMName') -and -not [string]::IsNullOrEmpty($VMName))
+        )
+        if ($vmScopeRequested) {
             $vmMacList = Get-PspktVMMacList -VM $VM -VMName $VMName -NoWarning:$NoWarning.IsPresent
+            if ($vmMacList.Count -eq 0) {
+                throw "VM scope requires at least one usable MAC address."
+            }
         }
-        $vmScopingActive = ($vmMacList.Count -gt 0)
+        $vmScopingActive = $vmScopeRequested
         $vmExpansionApplied = $false
 
         # Persist VM scoping on the session object so any subsequent Add-PspktFilter
         # calls (outside Start-Pspkt) also auto-MAC-stamp their filters.
         if ($vmScopingActive) {
             $vmLabel = if ($PSBoundParameters.ContainsKey('VM')) { "$($VM.Name)" } else { $VMName }
-            $Session.VMName = $vmLabel
-            $Session.VMMacAddresses = $vmMacList
+            $Session.SetVmScope($vmLabel, $vmMacList)
         }
 
         # Apply quick filters — create and add filters for each active switch.
@@ -3719,18 +3954,34 @@ function Start-Pspkt {
             }
         }
 
-        # Apply -IPAddress to all quick filters (AND logic within each filter).
-        # If no quick filters exist and no VM, create a standalone IP filter.
         if ($null -ne $parsedIP) {
             if ($quickFilters.Count -gt 0) {
                 foreach ($qf in $quickFilters) {
                     $qf.SetIp1($parsedIP)
                 }
-            } elseif (-not $vmScopingActive) {
-                if ($parsedIP.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
-                    $null = $quickFilters.Add((New-PspktFilter -Name "QF-IP-$IPAddress" -EtherType 'IPv4' -Ip1 $parsedIP))
+            } else {
+                $ipEtherType = if (
+                    $parsedIP.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork
+                ) {
+                    'IPv4'
                 } else {
-                    $null = $quickFilters.Add((New-PspktFilter -Name "QF-IP-$IPAddress" -EtherType 'IPv6' -Ip1 $parsedIP))
+                    'IPv6'
+                }
+                if ($vmScopingActive) {
+                    foreach ($macStr in $vmMacList) {
+                        $null = $quickFilters.Add(
+                            (New-PspktFilter `
+                                -Name "QF-VM-IP-$macStr" `
+                                -Mac1 $macStr `
+                                -EtherType $ipEtherType `
+                                -Ip1 $parsedIP)
+                        )
+                    }
+                    $vmExpansionApplied = $true
+                } else {
+                    $null = $quickFilters.Add(
+                        (New-PspktFilter -Name "QF-IP-$IPAddress" -EtherType $ipEtherType -Ip1 $parsedIP)
+                    )
                 }
             }
         }
@@ -3741,11 +3992,8 @@ function Start-Pspkt {
         # OR-combine across the session-level filter list, so the only way to
         # express "(VM MAC) AND (protocol scope)" is to bake both into a
         # single filter object — expanded across the cartesian product of
-        # quick filters x VM MACs. The standalone QF-VM-MAC-* filters added
-        # later in the component-setup block are suppressed in this case
-        # (otherwise pktmon would OR them in, defeating the AND scoping).
-        # The original quickFilters list is replaced in-place.
-        if ($vmScopingActive -and $quickFilters.Count -gt 0) {
+        # quick filters x VM MACs.
+        if ($vmScopingActive -and $quickFilters.Count -gt 0 -and -not $vmExpansionApplied) {
             $expanded = [System.Collections.ArrayList]::new()
             foreach ($qf in $quickFilters) {
                 foreach ($macStr in $vmMacList) {
@@ -3886,7 +4134,47 @@ function Start-Pspkt {
                 Write-Verbose "Ring buffer capacity: $appliedRingCap entries (multiplier=$effectiveBufferMultiplier, level=$BufferLevel)"
 
                 $createdStream = $Session.Pspkt.CreateRealtimeStream($effectiveBufferMultiplier, $streamTruncation)
-                $Session.AttachOutputToSession($createdStream)
+                $attachCompleted = $false
+                $attachError = $null
+                $attachCleanupError = $null
+                try {
+                    $Session.AttachOutputToSession($createdStream)
+                    $attachCompleted = $true
+                } catch {
+                    $attachError = $_
+                } finally {
+                    if (-not $attachCompleted) {
+                        try {
+                            $Session.Pspkt.PacketMonitorCloseRealtimeStream($createdStream)
+                        } catch {
+                            $attachCleanupError = $_
+                        }
+                    }
+                }
+                if ($null -ne $attachError) {
+                    $cleanupMessages = [System.Collections.ArrayList]::new()
+                    if ($null -ne $attachCleanupError) {
+                        $null = $cleanupMessages.Add($attachCleanupError.Exception.Message)
+                    }
+                    if ($createdSession) {
+                        try {
+                            if ($Session.Handle -ne [IntPtr]::Zero) {
+                                $Session.Pspkt.PacketMonitorCloseSessionHandle($Session)
+                            }
+                        } catch {
+                            $null = $cleanupMessages.Add($_.Exception.Message)
+                        }
+                        try {
+                            $Session.Pspkt.PacketMonitorUninitialize()
+                        } catch {
+                            $null = $cleanupMessages.Add($_.Exception.Message)
+                        }
+                    }
+                    if ($cleanupMessages.Count -gt 0) {
+                        throw "$($attachError.Exception.Message) Cleanup failed: $($cleanupMessages -join '; ')"
+                    }
+                    throw $attachError
+                }
             }
         }
 
@@ -3937,27 +4225,6 @@ function Start-Pspkt {
                     }
                 }
 
-                # Standalone QF-VM-MAC-* filters per vmNIC — only added when
-                # no quick / app-imply filter took the VM scoping via
-                # cartesian expansion. With expansion, every filter already
-                # AND-combines MAC + protocol; a standalone MAC filter here
-                # would OR-combine at the kernel and capture all VM traffic,
-                # defeating `-SmbCommand Create` etc.
-                if (-not $vmExpansionApplied) {
-                    foreach ($macStr in $vmMacList) {
-                        $filterParams = @{ Name = "QF-VM-MAC-$macStr"; Mac1 = $macStr }
-                        if ($null -ne $parsedIP) {
-                            $filterParams['Ip1'] = $parsedIP
-                            if ($parsedIP.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
-                                $filterParams['EtherType'] = 'IPv4'
-                            } else {
-                                $filterParams['EtherType'] = 'IPv6'
-                            }
-                        }
-                        $macFilter = New-PspktFilter @filterParams
-                        Add-PspktFilter -Filter $macFilter -Session $Session
-                    }
-                }
             } elseif ($Component.Count -eq 1 -and $Component[0] -eq 'NICs') {
                 # NICs keyword — capture from NIC components only.
                 $componentsToAdd = $Session.Pspkt.EnumPktmonDataSources($true, 1)
@@ -4721,6 +4988,25 @@ function Start-Pspkt {
                 Write-Host "`nStopping capture..." -ForegroundColor Cyan
             }
             Stop-Pspkt -Session $Session -Teardown
+        }
+        }
+        catch {
+            $setupError = $_
+            $setupCleanupError = $null
+            if ($analysisWarningCapture) {
+                Remove-Item -Path function:Write-Warning -ErrorAction SilentlyContinue
+            }
+            if ($createdSession -and $null -ne $Session) {
+                try {
+                    Stop-Pspkt -Session $Session -Teardown
+                } catch {
+                    $setupCleanupError = $_
+                }
+            }
+            if ($null -ne $setupCleanupError) {
+                throw "$($setupError.Exception.Message) Cleanup failed: $($setupCleanupError.Exception.Message)"
+            }
+            throw $setupError
         }
     }
 }

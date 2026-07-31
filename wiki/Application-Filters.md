@@ -55,7 +55,7 @@ Predicates are protocol-scoped: they only filter traffic of their own protocol. 
 | `pspkt -VM <vm> -i 10.0.0.5 -HTTPS` | `(MAC=vmNIC AND TCP/443 AND IP=10.0.0.5)` — only VM HTTPS to/from 10.0.0.5. |
 | `pspkt -VM <vm>` | `(MAC=vmNIC1) OR (MAC=vmNIC2)` — all VM traffic, no quick filter, standalone per-NIC MAC filters (unchanged from earlier versions). |
 
-vmNICs whose MAC is unassigned (`000000000000`, i.e. dynamic-MAC VM that has never started) are skipped with a warning; use `-NoWarning` to silence.
+vmNICs whose MAC is unassigned (`000000000000`, i.e. dynamic-MAC VM that has never started) are ignored when another usable vmNIC MAC exists. If no usable MAC remains, setup fails instead of starting an unscoped capture.
 
 **OFF / Saved / Paused VMs.** pktmon doesn't enumerate vmNICs whose VM isn't actively bound to a vmSwitch, but the Hyper-V cmdlets (`Get-VMNetworkAdapter`, `Get-VM | Get-VMNetworkAdapter`, and `$vm.NetworkAdapters` as further fallbacks) return MAC addresses for VMs in any power state. When `Get-PspktComponent` returns no live vmNIC components, `Start-Pspkt` falls back to host NIC components and lets the MAC filter scope the capture — the AND-combined `(MAC=vmNIC AND <quick filter>)` filter starts matching as soon as the VM resumes / starts and its traffic appears on the wire. A warning announces the fallback; suppress it with `-NoWarning`.
 

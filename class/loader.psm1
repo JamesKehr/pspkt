@@ -4,6 +4,8 @@
 $classPath = Join-Path -Path $PSScriptRoot -ChildPath '.'
 $parsersPath = Join-Path -Path (Split-Path $PSScriptRoot -Parent) -ChildPath 'Parsers'
 $tuiPath = Join-Path -Path (Split-Path $PSScriptRoot -Parent) -ChildPath 'TUI'
+$testNativeApiEnabled = $env:PSPKT_TEST_NATIVE_API -eq '1'
+$typeCheck = 'PktMonApi' -as [type]
 
 # Collect .cs files from class/, Parsers/, and TUI/ (recursively).
 $csFiles = @()
@@ -14,12 +16,23 @@ if (Test-Path $parsersPath) {
 if (Test-Path $tuiPath) {
     $csFiles += Get-ChildItem -Path $tuiPath -Filter '*.cs' -File -Recurse -ErrorAction SilentlyContinue
 }
+if ($testNativeApiEnabled) {
+    if ($null -ne $typeCheck -and $null -eq ('PspktNativeApiFake' -as [type])) {
+        throw 'PSPKT_TEST_NATIVE_API requires a fresh PowerShell process before pspkt types are loaded.'
+    }
+
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $nativeApiFixturePath = Join-Path $repoRoot 'tests\fixtures\PspktNativeApiFake.cs'
+    if (-not (Test-Path -LiteralPath $nativeApiFixturePath)) {
+        throw "Native API test fixture is missing: $nativeApiFixturePath"
+    }
+    $csFiles += Get-Item -LiteralPath $nativeApiFixturePath
+}
 
 if (-not $csFiles -or $csFiles.Count -eq 0) {
     throw "No C# source files found in $classPath or $parsersPath. Module installation may be corrupt."
 }
 
-$typeCheck = 'PktMonApi' -as [type]
 if ($null -eq $typeCheck) {
     # Collect all source, deduplicate using directives at the top.
     $usingSet = [System.Collections.Generic.HashSet[string]]::new()
@@ -51,6 +64,7 @@ if ($null -eq $typeCheck) {
     # create the type accelerator
     $ExportableTypes =@(
         [PktMonApi]
+        [IPspktNativeApi]
         [SpscPacketRingBuffer]
         [PacketParseHelper]
         [PacketFormatter]

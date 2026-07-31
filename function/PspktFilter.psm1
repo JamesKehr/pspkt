@@ -160,18 +160,40 @@ function Update-PspktFilterInternal {
         [object]
         $EncapType
     )
-
+
+    if ($Filter.IsRawConstraint()) {
+        throw "Raw protocol constraints cannot be modified through Set-PspktFilter."
+    }
+
+    $candidate = [pspktFilter]::new()
+    $candidate.Name = $Filter.Name
+    $candidate.Mac1 = if ($null -eq $Filter.Mac1) { $null } else { [byte[]]$Filter.Mac1.Clone() }
+    $candidate.Mac2 = if ($null -eq $Filter.Mac2) { $null } else { [byte[]]$Filter.Mac2.Clone() }
+    $candidate.VlanId = $Filter.VlanId
+    $candidate.EtherType = $Filter.EtherType
+    $candidate.DSCP = $Filter.DSCP
+    $candidate.TransportProtocol = $Filter.TransportProtocol
+    $candidate.Ip1 = $Filter.Ip1
+    $candidate.Ip2 = $Filter.Ip2
+    $candidate.PrefixLength1 = $Filter.PrefixLength1
+    $candidate.PrefixLength2 = $Filter.PrefixLength2
+    $candidate.Port1 = $Filter.Port1
+    $candidate.Port2 = $Filter.Port2
+    $candidate.TCPFlags = $Filter.TCPFlags
+    $candidate.VxLanPort = $Filter.VxLanPort
+    $candidate.EncapType = $Filter.EncapType
+
     if ($PSBoundParameters.ContainsKey('Name')) {
-        $Filter.Name = $Name
+        $candidate.Name = $Name
     }
 
     if ($PSBoundParameters.ContainsKey('Mac1')) {
         if ($null -eq $Mac1) { throw "Mac1 cannot be null when specified." }
         if ($Mac1 -is [byte[]]) {
-            $Filter.SetMac1([byte[]]$Mac1)
+            $candidate.SetMac1([byte[]]$Mac1)
         }
         elseif ($Mac1 -is [string]) {
-            $Filter.SetMac1([string]$Mac1)
+            $candidate.SetMac1([string]$Mac1)
         }
         else {
             throw "Mac1 must be a byte[] or string."
@@ -181,10 +203,10 @@ function Update-PspktFilterInternal {
     if ($PSBoundParameters.ContainsKey('Mac2')) {
         if ($null -eq $Mac2) { throw "Mac2 cannot be null when specified." }
         if ($Mac2 -is [byte[]]) {
-            $Filter.SetMac2([byte[]]$Mac2)
+            $candidate.SetMac2([byte[]]$Mac2)
         }
         elseif ($Mac2 -is [string]) {
-            $Filter.SetMac2([string]$Mac2)
+            $candidate.SetMac2([string]$Mac2)
         }
         else {
             throw "Mac2 must be a byte[] or string."
@@ -192,66 +214,85 @@ function Update-PspktFilterInternal {
     }
 
     if ($PSBoundParameters.ContainsKey('VlanId')) {
-        $Filter.SetVlanId([uint16]$VlanId)
+        $candidate.SetVlanId([uint16]$VlanId)
     }
 
     if ($PSBoundParameters.ContainsKey('EtherType')) {
         if ($null -eq $EtherType) { throw "EtherType cannot be null when specified." }
         $resolved = Resolve-PspktEnumValue -Value $EtherType -EnumType ([ETHERTYPE])
-        $Filter.SetEtherType([ETHERTYPE]$resolved)
+        $candidate.SetEtherType([ETHERTYPE]$resolved)
     }
 
     if ($PSBoundParameters.ContainsKey('DSCP')) {
         if ($null -eq $DSCP) { throw "DSCP cannot be null when specified." }
         $resolved = Resolve-PspktEnumValue -Value $DSCP -EnumType ([DSCP])
-        $Filter.SetDSCP([DSCP]$resolved)
+        $candidate.SetDSCP([DSCP]$resolved)
     }
 
     if ($PSBoundParameters.ContainsKey('TransportProtocol')) {
         if ($null -eq $TransportProtocol) { throw "TransportProtocol cannot be null when specified." }
         $resolved = Resolve-PspktEnumValue -Value $TransportProtocol -EnumType ([IPv4Protocol])
-        $Filter.SetTransportProtocol([IPv4Protocol]$resolved)
+        $candidate.SetTransportProtocol([IPv4Protocol]$resolved)
     }
 
     if ($PSBoundParameters.ContainsKey('Ip1')) {
-        $Filter.SetIp1([System.Net.IPAddress]$Ip1)
+        $candidate.SetIp1([System.Net.IPAddress]$Ip1)
     }
 
     if ($PSBoundParameters.ContainsKey('Ip2')) {
-        $Filter.SetIp2([System.Net.IPAddress]$Ip2)
+        $candidate.SetIp2([System.Net.IPAddress]$Ip2)
     }
 
     if ($PSBoundParameters.ContainsKey('PrefixLength1')) {
-        $Filter.SetPrefixLength1([byte]$PrefixLength1)
+        $candidate.SetPrefixLength1([byte]$PrefixLength1)
     }
 
     if ($PSBoundParameters.ContainsKey('PrefixLength2')) {
-        $Filter.SetPrefixLength2([byte]$PrefixLength2)
+        $candidate.SetPrefixLength2([byte]$PrefixLength2)
     }
 
     if ($PSBoundParameters.ContainsKey('Port1')) {
-        $Filter.SetPort1([uint16]$Port1)
+        $candidate.SetPort1([uint16]$Port1)
     }
 
     if ($PSBoundParameters.ContainsKey('Port2')) {
-        $Filter.SetPort2([uint16]$Port2)
+        $candidate.SetPort2([uint16]$Port2)
     }
 
     if ($PSBoundParameters.ContainsKey('TCPFlags')) {
         if ($null -eq $TCPFlags) { throw "TCPFlags cannot be null when specified." }
         $resolved = Resolve-PspktEnumValue -Value $TCPFlags -EnumType ([TCPFLAGS])
-        $Filter.SetTCPFlags([TCPFLAGS]$resolved)
+        $candidate.SetTCPFlags([TCPFLAGS]$resolved)
     }
 
     if ($PSBoundParameters.ContainsKey('VxLanPort')) {
-        $Filter.SetVxLanPort([uint16]$VxLanPort)
+        $candidate.SetVxLanPort([uint16]$VxLanPort)
     }
 
     if ($PSBoundParameters.ContainsKey('EncapType')) {
         if ($null -eq $EncapType) { throw "EncapType cannot be null when specified." }
         $resolved = Resolve-PspktEnumValue -Value $EncapType -EnumType ([PKTMON_FILTER_ENCAPTYPE])
-        $Filter.SetEncapType([PKTMON_FILTER_ENCAPTYPE]$resolved)
+        $candidate.SetEncapType([PKTMON_FILTER_ENCAPTYPE]$resolved)
     }
+
+    $constraint = $candidate.ToProtocolConstraint()
+    $Filter.Name = $candidate.Name
+    $Filter.Mac1 = if ($null -eq $candidate.Mac1) { $null } else { [byte[]]$candidate.Mac1.Clone() }
+    $Filter.Mac2 = if ($null -eq $candidate.Mac2) { $null } else { [byte[]]$candidate.Mac2.Clone() }
+    $Filter.VlanId = $candidate.VlanId
+    $Filter.EtherType = $candidate.EtherType
+    $Filter.DSCP = $candidate.DSCP
+    $Filter.TransportProtocol = $candidate.TransportProtocol
+    $Filter.Ip1 = $candidate.Ip1
+    $Filter.Ip2 = $candidate.Ip2
+    $Filter.PrefixLength1 = $candidate.PrefixLength1
+    $Filter.PrefixLength2 = $candidate.PrefixLength2
+    $Filter.Port1 = $candidate.Port1
+    $Filter.Port2 = $candidate.Port2
+    $Filter.TCPFlags = $candidate.TCPFlags
+    $Filter.VxLanPort = $candidate.VxLanPort
+    $Filter.EncapType = $candidate.EncapType
+    $Filter.Filter = $constraint
 
     return $Filter
 }
@@ -573,9 +614,13 @@ function Add-PspktFilter {
         $PassThru
     )
 
+    begin {
+        $pendingFilters = [System.Collections.ArrayList]::new()
+    }
+
     process {
         if ($PSCmdlet.ParameterSetName -eq 'ByFilter') {
-            $Session.AddFilter($Filter)
+            $null = $pendingFilters.Add($Filter)
         }
         elseif ($PSCmdlet.ParameterSetName -eq 'QuickFilter') {
             $quickFilters = [System.Collections.ArrayList]::new()
@@ -622,12 +667,20 @@ function Add-PspktFilter {
                 }
             }
 
-            # Add all filters to the session (VM MAC expansion happens inside AddFilter).
             foreach ($qf in $quickFilters) {
-                $Session.AddFilter($qf)
+                $null = $pendingFilters.Add($qf)
             }
         }
+    }
 
+    end {
+        if ($pendingFilters.Count -gt 0) {
+            $filterBatch = [pspktFilter[]]$pendingFilters.ToArray([pspktFilter])
+            $Session.ValidateFilterBatchCapacity($filterBatch)
+            foreach ($pendingFilter in $filterBatch) {
+                $Session.AddFilter($pendingFilter)
+            }
+        }
         if ($PassThru.IsPresent) {
             return $Session
         }

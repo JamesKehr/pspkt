@@ -84,6 +84,20 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         Import-Module $script:modulePath -Force -ErrorAction Stop
 
         $script:expectedCommands = $script:allExportedCommands
+        $script:hostPath = (Get-Process -Id $PID).Path
+
+        function Invoke-PspktEncodedChildCommand {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]
+                $Command
+            )
+
+            $encodedCommand = [Convert]::ToBase64String(
+                [Text.Encoding]::Unicode.GetBytes($Command)
+            )
+            return @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+        }
     }
 
     AfterAll {
@@ -4485,17 +4499,1002 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $icmp6.Mac1.Length       | Should -Be 6
         }
 
-        It 'expansion with zero MACs yields zero filters (degraded path: unstarted VM)' {
-            # When a VM has no assigned MACs (e.g. dynamic-MAC VM never started),
-            # Get-PspktVMMacList returns @() and the expansion produces an empty
-            # list. The caller falls back to using the unexpanded list, matching
-            # the documented "no per-NIC MAC filter" behavior in that case.
+        It 'expansion with zero MACs yields no scoped filters' {
             $filters = [System.Collections.ArrayList]::new()
             $null = $filters.Add((New-PspktFilter -Name 'QF-SMB' -TransportProtocol 'TCP' -Port1 445))
             $macs = @()
             $out = & $script:vmMod $script:expand $filters $macs
             $out.Count | Should -Be 0
         }
+    }
+
+    Context 'MAC address compatibility' {
+        It 'parses standard MAC layouts consistently' {
+            $expected = 'AA:BB:CC:DD:EE:FF'
+            $inputs = @(
+                'aabbccddeeff',
+                'aa:bb:cc:dd:ee:ff',
+                'aa-bb-cc-dd-ee-ff',
+                'aabb.ccdd.eeff'
+            )
+
+            foreach ($inputValue in $inputs) {
+                $physicalAddress = [PAUtils]::ConvertString2PhysicalAddress($inputValue)
+                $physicalAddress.GetAddressBytes().Length | Should -Be 6
+                [PAUtils]::FormatPhysicalAddress($inputValue) | Should -Be $expected
+            }
+        }
+
+        It 'rejects invalid inputs without mutating filters' {
+            $filter = New-PspktFilter -Name 'Original' -Mac1 'AA-BB-CC-DD-EE-FF' -Port1 80
+            $beforeMac = [byte[]]$filter.Mac1.Clone()
+
+            {
+                Set-PspktFilter -Filter $filter -Name 'Changed' -Mac1 'AA:BB-CC:DD-EE:FF'
+            } | Should -Throw
+
+            $filter.Name | Should -Be 'Original'
+            $filter.Port1 | Should -Be 80
+            $filter.Mac1 | Should -Be $beforeMac
+        }
+
+        It 'formats filter MAC getters and protocol constraint flags' {
+            $filter = New-PspktFilter `
+                -Name 'MACs' `
+                -Mac1 'AA-BB-CC-DD-EE-01' `
+                -Mac2 'AA-BB-CC-DD-EE-02'
+            $constraint = $filter.ToProtocolConstraint()
+            $unset = [pspktFilter]::new()
+
+            $filter.GetMac1String() | Should -Be 'AA:BB:CC:DD:EE:01'
+            $filter.GetMac2String() | Should -Be 'AA:BB:CC:DD:EE:02'
+            $unset.GetMac1String() | Should -Be ''
+            $unset.GetMac2String() | Should -Be ''
+            (
+                [uint32]$constraint.IsPresent -band
+                [uint32][PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::Mac1
+            ) | Should -Be ([uint32][PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::Mac1)
+            (
+                [uint32]$constraint.IsPresent -band
+                [uint32][PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::Mac2
+            ) | Should -Be ([uint32][PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::Mac2)
+        }
+
+        It 'loads the native test double only in explicit fresh-process mode' {
+            ('PspktNativeApiFake' -as [type]) | Should -BeNullOrEmpty
+
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $command = @"
+`$env:PSPKT_TEST_NATIVE_API = '1'
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$fake = [PspktNativeApiFake]::new()
+if (-not (`$fake -is [IPspktNativeApi])) { throw 'Native fake type identity mismatch.' }
+'OK'
+"@
+            $output = @(Invoke-PspktEncodedChildCommand -Command $command)
+
+            $LASTEXITCODE | Should -Be 0
+            @($output)[-1] | Should -Be 'OK'
+        }
+
+        It 'faults supplied sessions after partial native commit failure' {
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $command = @"
+`$env:PSPKT_TEST_NATIVE_API = '1'
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$fake = [PspktNativeApiFake]::new()
+`$fake.InitializeHandle = [IntPtr]1
+`$fake.CreateLiveSessionHandle = [IntPtr]2
+`$owner = [pspkt]::new([IPspktNativeApi]`$fake)
+`$owner.PacketMonitorInitialize()
+`$session = `$owner.PacketMonitorCreateLiveSession('fault-test')
+`$session.AddFilter((New-PspktFilter -Name 'dns' -TransportProtocol 'UDP' -Port1 53))
+`$fake.AddCaptureConstraintStatus = 5
+try { `$session.SetSessionActive(`$true) } catch {}
+`$blocked = `$false
+try { `$session.AddFilter((New-PspktFilter -Name 'http' -TransportProtocol 'TCP' -Port1 80)) } catch { `$blocked = `$true }
+`$removeBlocked = `$false
+try { `$session.RemoveFilterAt(0) } catch { `$removeBlocked = `$true }
+`$snapshot = `$session.GetFaultSnapshot()
+"Faulted=`$(`$session.Faulted);Operation=`$(`$snapshot.Operation);FilterCount=`$(`$snapshot.FilterCount);OutputCount=`$(`$snapshot.OutputCount);NativeUncertain=`$(`$snapshot.NativeStateUncertain);Calls=`$(`$fake.GetCallCount([PspktNativeOperation]::AddCaptureConstraint));Blocked=`$blocked;RemoveBlocked=`$removeBlocked"
+`$session.CloseSessionHandle()
+"Closed=`$(`$fake.GetCallCount([PspktNativeOperation]::CloseSessionHandle));Handle=`$(`$session.Handle);Faulted=`$(`$session.Faulted)"
+"@
+            $output = @(Invoke-PspktEncodedChildCommand -Command $command)
+
+            $LASTEXITCODE | Should -Be 0
+            $output[-2] | Should -Be 'Faulted=True;Operation=AddCaptureConstraint;FilterCount=1;OutputCount=0;NativeUncertain=True;Calls=1;Blocked=True;RemoveBlocked=True'
+            $output[-1] | Should -Be 'Closed=1;Handle=0;Faulted=False'
+        }
+
+        It 'recovers faulted sessions only through teardown' {
+            $session = [pspktSession]::new('fault-reset', [IntPtr]::Zero)
+            $session.MarkFaulted('test', 'test failure', $true)
+
+            {
+                $session.AddFilter((New-PspktFilter -Name 'blocked' -Port1 1))
+            } | Should -Throw
+
+            $session.InvalidateAfterClose()
+            $session.AddFilter((New-PspktFilter -Name 'allowed' -Port1 2))
+            $session.Faulted | Should -BeFalse
+            $session.Filters.Count | Should -Be 1
+        }
+
+        It 'invalidates session and stream handles when native close fails' {
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $command = @"
+`$env:PSPKT_TEST_NATIVE_API = '1'
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$fake = [PspktNativeApiFake]::new()
+`$fake.InitializeHandle = [IntPtr]1
+`$fake.CreateLiveSessionHandle = [IntPtr]2
+`$fake.CreateRealtimeStreamHandle = [IntPtr]3
+`$owner = [pspkt]::new([IPspktNativeApi]`$fake)
+`$owner.PacketMonitorInitialize()
+`$session = `$owner.PacketMonitorCreateLiveSession('close-test')
+`$stream = `$owner.CreateRealtimeStream(1, 128)
+`$session.AttachOutputToSession(`$stream)
+`$fake.SetThrow([PspktNativeOperation]::CloseRealtimeStream, `$true)
+`$fake.SetThrow([PspktNativeOperation]::CloseSessionHandle, `$true)
+try { `$session.CloseSessionHandle() } catch { `$errorText = `$_.Exception.Message }
+"StreamCalls=`$(`$fake.GetCallCount([PspktNativeOperation]::CloseRealtimeStream));SessionCalls=`$(`$fake.GetCallCount([PspktNativeOperation]::CloseSessionHandle))"
+"StreamHandle=`$(`$stream.Handle);SessionHandle=`$(`$session.Handle);Outputs=`$(`$session.OutputStream.Count);Streams=`$(`$owner.OpenPktmonRealTimeStreams.Count);Sessions=`$(`$owner.OpenPktmonSessions.Count)"
+"Error=`$errorText"
+"@
+            $output = @(Invoke-PspktEncodedChildCommand -Command $command)
+
+            $LASTEXITCODE | Should -Be 0
+            $output[-3] | Should -Be 'StreamCalls=1;SessionCalls=1'
+            $output[-2] | Should -Be 'StreamHandle=0;SessionHandle=0;Outputs=0;Streams=0;Sessions=0'
+            $output[-1] | Should -Match 'CloseRealtimeStream'
+            $output[-1] | Should -Match 'CloseSessionHandle'
+        }
+
+        It 'closes attached streams before invalidating sessions' {
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $command = @"
+`$env:PSPKT_TEST_NATIVE_API = '1'
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$fake = [PspktNativeApiFake]::new()
+`$fake.InitializeHandle = [IntPtr]1
+`$fake.CreateLiveSessionHandle = [IntPtr]2
+`$fake.CreateRealtimeStreamHandle = [IntPtr]3
+`$owner = [pspkt]::new([IPspktNativeApi]`$fake)
+`$owner.PacketMonitorInitialize()
+`$session = `$owner.PacketMonitorCreateLiveSession('close-order')
+`$stream = `$owner.CreateRealtimeStream(1, 128)
+`$session.AttachOutputToSession(`$stream)
+`$session.CloseSessionHandle()
+(`$fake.GetCallSequence() | Where-Object { `$_ -in @([PspktNativeOperation]::CloseRealtimeStream, [PspktNativeOperation]::CloseSessionHandle) }) -join ','
+"@
+            $output = @(Invoke-PspktEncodedChildCommand -Command $command)
+
+            $LASTEXITCODE | Should -Be 0
+            $output[-1] | Should -Be 'CloseRealtimeStream,CloseSessionHandle'
+        }
+
+        It 'prevalidates VM MACs before filter expansion' {
+            $session = [pspktSession]::new('vm-preflight', [IntPtr]::Zero)
+            $exception = $null
+
+            try {
+                $session.SetVmScope('vm-preflight', @('AA:BB-CC:DD-EE:FF'))
+            } catch {
+                $exception = $_.Exception
+            }
+
+            $exception | Should -Not -BeNullOrEmpty
+            $exception.Message | Should -Match 'valid MAC'
+            $session.Filters.Count | Should -Be 0
+            $session.Components.Count | Should -Be 0
+            $session.VMName | Should -BeNullOrEmpty
+            $session.VMMacAddresses | Should -BeNullOrEmpty
+        }
+
+        It 'rejects direct VM scope mirror mutation' {
+            $session = [pspktSession]::new('vm-mirror', [IntPtr]::Zero)
+            $session.SetVmScope('vm-mirror', @('AA-BB-CC-DD-EE-01'))
+            $session.VMMacAddresses[0] = 'AA-BB-CC-DD-EE-02'
+
+            {
+                $session.AddFilter((New-PspktFilter -Name 'dns' -TransportProtocol 'UDP' -Port1 53))
+            } | Should -Throw
+
+            $session.Filters.Count | Should -Be 0
+        }
+
+        It 'rejects VM scope changes after filters or components are added' {
+            $session = [pspktSession]::new('vm-locked', [IntPtr]::Zero)
+            $session.SetVmScope('vm-locked', @('AA-BB-CC-DD-EE-01'))
+            $session.AddFilter((New-PspktFilter -Name 'dns' -TransportProtocol 'UDP' -Port1 53))
+
+            {
+                $session.SetVmScope('vm-other', @('AA-BB-CC-DD-EE-02'))
+            } | Should -Throw
+
+            $session.VMName | Should -Be 'vm-locked'
+            $session.Filters.Count | Should -Be 1
+        }
+
+        It 'sets piped VM scope before adding buffered components' {
+            $session = [pspktSession]::new('vm-pipeline', [IntPtr]::Zero)
+            $firstComponent = [pspktComponent]::new()
+            $firstComponent.Name = 'vmNIC-1'
+            $firstComponent.Pointer = [IntPtr]1
+            $firstComponent.VMName = 'vm-pipeline'
+            $firstComponent.VMMacAddress = 'AA-BB-CC-DD-EE-01'
+            $secondComponent = [pspktComponent]::new()
+            $secondComponent.Name = 'vmNIC-2'
+            $secondComponent.Pointer = [IntPtr]2
+            $secondComponent.VMName = 'vm-pipeline'
+            $secondComponent.VMMacAddress = 'AA-BB-CC-DD-EE-02'
+
+            @($firstComponent, $secondComponent) |
+                Add-PspktComponent -Session $session
+
+            $session.VMName | Should -Be 'vm-pipeline'
+            $session.VMMacAddresses | Should -Be @(
+                'AA:BB:CC:DD:EE:01',
+                'AA:BB:CC:DD:EE:02'
+            )
+            $session.Components.Count | Should -Be 2
+        }
+
+        It 'materializes VM MAC filters before activating component-scoped sessions' {
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $command = @"
+`$env:PSPKT_TEST_NATIVE_API = '1'
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$fake = [PspktNativeApiFake]::new()
+`$fake.InitializeHandle = [IntPtr]1
+`$fake.CreateLiveSessionHandle = [IntPtr]2
+`$owner = [pspkt]::new([IPspktNativeApi]`$fake)
+`$owner.PacketMonitorInitialize()
+`$session = `$owner.PacketMonitorCreateLiveSession('vm-activate')
+`$session.SetVmScope('vm-activate', @('AA-BB-CC-DD-EE-01', 'AA-BB-CC-DD-EE-02'))
+`$component = [pspktComponent]::new()
+`$component.Name = 'vm-switch'
+`$component.Pointer = [IntPtr]3
+`$session.AddSingleDataSourceToSession(`$component)
+`$session.SetSessionActive(`$true)
+`$blocked = `$false
+try { `$session.AddFilter((New-PspktFilter -Name 'dns' -Port1 53)) } catch { `$blocked = `$true }
+`$session.SetSessionActive(`$false)
+`$removeBlocked = `$false
+try { `$session.RemoveFilterAt(0) } catch { `$removeBlocked = `$true }
+`$componentRemoveBlocked = `$false
+try { `$session.RemoveComponentAt(0) } catch { `$componentRemoveBlocked = `$true }
+`$blockedAfterStop = `$false
+try { `$session.AddFilter((New-PspktFilter -Name 'https' -Port1 443)) } catch { `$blockedAfterStop = `$true }
+"Filters=`$(`$session.Filters.Count);Mac1=`$(`$session.Filters[0].GetMac1String());Mac2=`$(`$session.Filters[1].GetMac1String());Constraints=`$(`$fake.GetCallCount([PspktNativeOperation]::AddCaptureConstraint));Components=`$(`$fake.GetCallCount([PspktNativeOperation]::AddSingleDataSource));Activations=`$(`$fake.GetCallCount([PspktNativeOperation]::SetSessionActive));Blocked=`$blocked;RemoveBlocked=`$removeBlocked;ComponentRemoveBlocked=`$componentRemoveBlocked;BlockedAfterStop=`$blockedAfterStop"
+(`$fake.GetCallSequence() | Where-Object { `$_ -in @([PspktNativeOperation]::AddSingleDataSource, [PspktNativeOperation]::AddCaptureConstraint, [PspktNativeOperation]::SetSessionActive) }) -join ','
+`$session.CloseSessionHandle()
+"@
+            $output = @(Invoke-PspktEncodedChildCommand -Command $command)
+
+            $LASTEXITCODE | Should -Be 0
+            $output[-2] | Should -Be 'Filters=2;Mac1=AA:BB:CC:DD:EE:01;Mac2=AA:BB:CC:DD:EE:02;Constraints=2;Components=1;Activations=2;Blocked=True;RemoveBlocked=True;ComponentRemoveBlocked=True;BlockedAfterStop=True'
+            $output[-1] | Should -Be 'AddSingleDataSource,AddCaptureConstraint,AddCaptureConstraint,SetSessionActive,SetSessionActive'
+        }
+
+        It 'deep-copies raw protocol constraints on add' {
+            $session = [pspktSession]::new('raw-copy', [IntPtr]::Zero)
+            $constraint = [PACKETMONITOR_PROTOCOL_CONSTRAINT]::new()
+            $constraint.Name = 'raw'
+            $constraint.Mac1 = [byte[]](1, 2, 3, 4, 5, 6)
+            $constraint.Mac2 = [byte[]](6, 5, 4, 3, 2, 1)
+            $constraint.DSCP = 46
+            $constraint.TransportProtocol = [byte][IPv4Protocol]::TCP
+            $constraint.Port1 = 443
+            $constraint.IsPresent = (
+                [PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::Mac1 -bor
+                [PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::DSCP -bor
+                [PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::TransportProtocol -bor
+                [PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::Port1
+            )
+
+            $session.AddFilter($constraint)
+            $constraint.Mac1[0] = 99
+            $constraint.Mac2[0] = 99
+            $stored = $session.Filters[0].ToProtocolConstraint()
+
+            $stored.Mac1 | Should -Be ([byte[]](1, 2, 3, 4, 5, 6))
+            $stored.Mac2 | Should -Be ([byte[]](6, 5, 4, 3, 2, 1))
+            $stored.DSCP | Should -Be 46
+            $stored.TransportProtocol | Should -Be ([byte][IPv4Protocol]::TCP)
+            $stored.Port1 | Should -Be 443
+            $session.Filters[0].GetMac1String() | Should -Be '01:02:03:04:05:06'
+            $session.Filters[0].GetMac2String() | Should -Be '06:05:04:03:02:01'
+            $session.Filters[0].GetDSCPString() | Should -Be 'EF'
+            $session.Filters[0].GetTransportProtocolString() | Should -Be 'TCP'
+            $session.Filters[0].Port1 | Should -Be 443
+            {
+                Set-PspktFilter -Filter $session.Filters[0] -Name 'typed-mutation'
+            } | Should -Throw
+            $session.Filters[0].ToProtocolConstraint().Mac1 |
+                Should -Be ([byte[]](1, 2, 3, 4, 5, 6))
+        }
+
+        It 'rejects raw constraints in VM-scoped sessions' {
+            $session = [pspktSession]::new('raw-vm', [IntPtr]::Zero)
+            $session.SetVmScope('raw-vm', @('AA-BB-CC-DD-EE-01'))
+            $constraint = [PACKETMONITOR_PROTOCOL_CONSTRAINT]::new()
+            $constraint.Name = 'raw'
+            $rawFilter = [pspktFilter]::new()
+            $rawFilter.SetRawConstraint($constraint)
+
+            { $session.AddFilter($constraint) } | Should -Throw
+            { $session.AddFilter($rawFilter) } | Should -Throw
+            {
+                @(
+                    (New-PspktFilter -Name 'typed' -Port1 53),
+                    $rawFilter
+                ) | Add-PspktFilter -Session $session
+            } | Should -Throw
+
+            $session.Filters.Count | Should -Be 0
+        }
+
+        It 'keeps standalone realtime streams owner-backed' {
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $command = @"
+`$env:PSPKT_TEST_NATIVE_API = '1'
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$fake = [PspktNativeApiFake]::new()
+`$stream = [PktmonRealTimeStream]::new(1, 128, [IntPtr]3, [IPspktNativeApi]`$fake)
+`$stream.PacketMonitorCloseRealtimeStream()
+"Calls=`$(`$fake.GetCallCount([PspktNativeOperation]::CloseRealtimeStream));Handle=`$(`$stream.Handle);Registered=`$(`$stream.Owner.OpenPktmonRealTimeStreams.Count)"
+"@
+            $output = @(Invoke-PspktEncodedChildCommand -Command $command)
+
+            $LASTEXITCODE | Should -Be 0
+            $output[-1] | Should -Be 'Calls=1;Handle=0;Registered=0'
+        }
+
+        It 'enforces filter capacity across staged batches' {
+            $session = [pspktSession]::new('capacity', [IntPtr]::Zero)
+            1..31 | ForEach-Object {
+                $session.AddFilter((New-PspktFilter -Name "existing-$_" -Port1 $_))
+            }
+            $filterBatch = @(
+                (New-PspktFilter -Name 'pending-1' -Port1 1001),
+                (New-PspktFilter -Name 'pending-2' -Port1 1002)
+            )
+            $exception = $null
+
+            try {
+                $filterBatch | Add-PspktFilter -Session $session
+            } catch {
+                $exception = $_.Exception
+            }
+
+            $exception | Should -Not -BeNullOrEmpty
+            $exception.Message | Should -Match 'at most 32'
+            $session.Filters.Count | Should -Be 31
+            ($session.Filters | Where-Object Name -Like 'pending-*').Count | Should -Be 0
+        }
+
+        It 'buffers Add-PspktFilter pipelines and emits PassThru once' {
+            $session = [pspktSession]::new('filter-pipeline', [IntPtr]::Zero)
+            $filterBatch = @(
+                (New-PspktFilter -Name 'dns' -TransportProtocol 'UDP' -Port1 53),
+                (New-PspktFilter -Name 'http' -TransportProtocol 'TCP' -Port1 80)
+            )
+
+            $output = @($filterBatch | Add-PspktFilter -Session $session -PassThru)
+
+            $output.Count | Should -Be 1
+            [object]::ReferenceEquals($output[0], $session) | Should -BeTrue
+            $session.Filters.Count | Should -Be 2
+        }
+
+        It 'buffers Add-PspktComponent pipelines until validation succeeds' {
+            $session = [pspktSession]::new('component-pipeline', [IntPtr]::Zero)
+            $firstComponent = [pspktComponent]::new()
+            $firstComponent.Name = 'first'
+            $firstComponent.VMName = 'vm-one'
+            $firstComponent.VMMacAddress = 'AA-BB-CC-DD-EE-01'
+            $secondComponent = [pspktComponent]::new()
+            $secondComponent.Name = 'second'
+            $secondComponent.VMName = 'vm-two'
+            $secondComponent.VMMacAddress = 'AA-BB-CC-DD-EE-02'
+
+            {
+                @($firstComponent, $secondComponent) |
+                    Add-PspktComponent -Session $session
+            } | Should -Throw
+
+            $session.Components.Count | Should -Be 0
+            $session.VMName | Should -BeNullOrEmpty
+        }
+
+        It 'transfers realtime stream ownership exactly once' {
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $command = @"
+`$env:PSPKT_TEST_NATIVE_API = '1'
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$fake = [PspktNativeApiFake]::new()
+`$fake.InitializeHandle = [IntPtr]1
+`$fake.CreateLiveSessionHandle = [IntPtr]2
+`$fake.CreateRealtimeStreamHandle = [IntPtr]3
+`$fake.AttachOutputStatus = 5
+`$owner = [pspkt]::new([IPspktNativeApi]`$fake)
+`$owner.PacketMonitorInitialize()
+`$session = `$owner.PacketMonitorCreateLiveSession('attach-test')
+`$stream = `$owner.CreateRealtimeStream(1, 128)
+try { `$session.AttachOutputToSession(`$stream) } catch {}
+"Faulted=`$(`$session.Faulted);Outputs=`$(`$session.OutputStream.Count);Registered=`$(`$owner.OpenPktmonRealTimeStreams.Count);Callback=`$(`$fake.LastRealtimeStreamDataCallback -ne [IntPtr]::Zero)"
+`$owner.PacketMonitorCloseRealtimeStream(`$stream)
+`$owner.PacketMonitorCloseRealtimeStream(`$stream)
+"CloseCalls=`$(`$fake.GetCallCount([PspktNativeOperation]::CloseRealtimeStream));Handle=`$(`$stream.Handle);Registered=`$(`$owner.OpenPktmonRealTimeStreams.Count)"
+"@
+            $output = @(Invoke-PspktEncodedChildCommand -Command $command)
+
+            $LASTEXITCODE | Should -Be 0
+            $output[-2] | Should -Be 'Faulted=True;Outputs=0;Registered=1;Callback=True'
+            $output[-1] | Should -Be 'CloseCalls=1;Handle=0;Registered=0'
+        }
+
+        It 'retains one callback delegate across multiple realtime streams' {
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $command = @"
+`$env:PSPKT_TEST_NATIVE_API = '1'
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$fake = [PspktNativeApiFake]::new()
+`$fake.InitializeHandle = [IntPtr]1
+`$fake.CreateRealtimeStreamHandle = [IntPtr]3
+`$owner = [pspkt]::new([IPspktNativeApi]`$fake)
+`$owner.PacketMonitorInitialize()
+`$firstStream = `$owner.CreateRealtimeStream(1, 128)
+`$firstDelegate = [PktMonApi]::DataCallback
+`$firstPointer = `$fake.LastRealtimeStreamDataCallback
+`$secondStream = `$owner.CreateRealtimeStream(1, 128)
+`$secondDelegate = [PktMonApi]::DataCallback
+`$secondPointer = `$fake.LastRealtimeStreamDataCallback
+"SameDelegate=`$([object]::ReferenceEquals(`$firstDelegate, `$secondDelegate));SamePointer=`$(`$firstPointer -eq `$secondPointer);PointerNonZero=`$(`$firstPointer -ne [IntPtr]::Zero)"
+`$owner.PacketMonitorCloseRealtimeStream(`$firstStream)
+`$owner.PacketMonitorCloseRealtimeStream(`$secondStream)
+"CloseCalls=`$(`$fake.GetCallCount([PspktNativeOperation]::CloseRealtimeStream))"
+"@
+            $output = @(Invoke-PspktEncodedChildCommand -Command $command)
+
+            $LASTEXITCODE | Should -Be 0
+            $output[-2] | Should -Be 'SameDelegate=True;SamePointer=True;PointerNonZero=True'
+            $output[-1] | Should -Be 'CloseCalls=2'
+        }
+    }
+}
+
+Describe 'Invoke-Tests runner contracts' -Tag 'Unit' {
+    BeforeAll {
+        $script:runnerPath = Join-Path $PSScriptRoot 'Invoke-Tests.ps1'
+        $script:pesterManifest = Join-Path (Get-Module -Name Pester).ModuleBase 'Pester.psd1'
+        $script:supportedPesterModuleRoot = Split-Path -Parent (
+            Split-Path -Parent (
+                Split-Path -Parent $script:pesterManifest
+            )
+        )
+        $script:hostPath = (Get-Process -Id $PID).Path
+
+        function Assert-PspktExpectedTestPath {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string[]]
+                $ExpectedPath,
+
+                [Parameter(Mandatory = $true)]
+                [object[]]
+                $Tests
+            )
+
+            $matches = @(
+                $Tests | Where-Object {
+                    if ($_.Path.Count -ne $ExpectedPath.Count) {
+                        return $false
+                    }
+                    for ($index = 0; $index -lt $ExpectedPath.Count; $index++) {
+                        if (-not [string]::Equals(
+                            [string]$_.Path[$index],
+                            $ExpectedPath[$index],
+                            [System.StringComparison]::Ordinal
+                        )) {
+                            return $false
+                        }
+                    }
+                    return $true
+                }
+            )
+            if ($matches.Count -ne 1) {
+                throw "Expected exactly one test path match, found $($matches.Count)."
+            }
+            if (-not $matches[0].Executed -or $matches[0].Result -ne 'Passed') {
+                throw "Expected test path did not execute and pass."
+            }
+            return $matches[0]
+        }
+
+        function Invoke-PspktRunnerFailureFixture {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]
+                $ModulePath,
+
+                [Parameter(Mandatory = $false)]
+                [string]
+                $Preparation
+            )
+
+            $command = @"
+`$env:PSModulePath = '$ModulePath'
+$Preparation
+try {
+    & '$script:runnerPath' -Path '$PSScriptRoot' -Mode Precheck -Verbosity None
+} catch {
+    [Console]::Out.WriteLine(`$_.Exception.Message)
+    exit 1
+}
+"@
+            $encodedCommand = [Convert]::ToBase64String(
+                [Text.Encoding]::Unicode.GetBytes($command)
+            )
+            $output = @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+            return [pscustomobject]@{
+                ExitCode = $LASTEXITCODE
+                Output = $output -join "`n"
+            }
+        }
+
+        function New-PspktSyntheticPesterModule {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]
+                $Root,
+
+                [Parameter(Mandatory = $true)]
+                [version]
+                $Version,
+
+                [Parameter(Mandatory = $true)]
+                [guid]
+                $Guid
+            )
+
+            $moduleDirectory = Join-Path $Root ("Pester\{0}" -f $Version)
+            $null = New-Item -ItemType Directory -Path $moduleDirectory -Force
+            Set-Content -LiteralPath (Join-Path $moduleDirectory 'Pester.psm1') -Value ''
+            Set-Content -LiteralPath (Join-Path $moduleDirectory 'Pester.psd1') -Value @"
+@{
+    RootModule = 'Pester.psm1'
+    ModuleVersion = '$Version'
+    GUID = '$Guid'
+}
+"@
+            return Join-Path $moduleDirectory 'Pester.psd1'
+        }
+
+        $command = @"
+`$result = & '$script:runnerPath' -Path '$PSScriptRoot' -Mode Precheck -PesterManifestPath '$script:pesterManifest' -Verbosity None -PassThru
+`$expectedPath = @('pspkt test prechecks', 'Analysis boundary navigation wiring', 'wires Analysis boundary navigation and selection synchronization')
+`$expectedMatches = @(`$result.Tests | Where-Object {
+    if (`$_.Path.Count -ne `$expectedPath.Count) { return `$false }
+    for (`$index = 0; `$index -lt `$expectedPath.Count; `$index++) {
+        if (-not [string]::Equals([string]`$_.Path[`$index], `$expectedPath[`$index], [System.StringComparison]::Ordinal)) {
+            return `$false
+        }
+    }
+    return `$true
+})
+[pscustomobject]@{
+    Edition = `$PSVersionTable.PSEdition
+    Result = `$result.Result
+    Selected = @(`$result.Tests | Where-Object ShouldRun).Count
+    FailedBlocks = `$result.FailedBlocksCount
+    FailedContainers = `$result.FailedContainersCount
+    ExpectedMatchCount = `$expectedMatches.Count
+    ExpectedExecuted = if (`$expectedMatches.Count -eq 1) { `$expectedMatches[0].Executed } else { `$false }
+    ExpectedResult = if (`$expectedMatches.Count -eq 1) { `$expectedMatches[0].Result } else { '' }
+    PesterVersion = (Get-Module -Name Pester).Version.ToString()
+} | ConvertTo-Json -Compress
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $output = @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+        $script:explicitRunnerExitCode = $LASTEXITCODE
+        $script:explicitRunnerSummary = $output[-1] | ConvertFrom-Json
+    }
+
+    It 'returns structured PassThru results' {
+        $script:explicitRunnerExitCode | Should -Be 0
+        $script:explicitRunnerSummary.Result | Should -Be 'Passed'
+        $script:explicitRunnerSummary.Selected | Should -BeGreaterThan 0
+        $script:explicitRunnerSummary.FailedBlocks | Should -Be 0
+        $script:explicitRunnerSummary.FailedContainers | Should -Be 0
+        $script:explicitRunnerSummary.ExpectedMatchCount | Should -Be 1
+        $script:explicitRunnerSummary.ExpectedExecuted | Should -BeTrue
+        $script:explicitRunnerSummary.ExpectedResult | Should -Be 'Passed'
+    }
+
+    It 'loads the exact explicit Pester identity' {
+        $script:explicitRunnerSummary.PesterVersion |
+            Should -Be ([version](Import-PowerShellDataFile $script:pesterManifest).ModuleVersion).ToString()
+    }
+
+    It 'uses the invoking PowerShell host for isolated fixtures' {
+        $script:explicitRunnerSummary.Edition | Should -Be $PSVersionTable.PSEdition
+    }
+
+    It 'rejects zero-selected and all-skipped runs' {
+        $fixtureRoot = Join-Path $env:TEMP ("pspkt-runner-{0}" -f [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $fixtureRoot
+        try {
+            Set-Content -LiteralPath (Join-Path $fixtureRoot 'Zero.Tests.ps1') -Value @"
+Describe 'Only unit' -Tag 'Unit' {
+    It 'passes' { `$true | Should -BeTrue }
+}
+"@
+            $zeroCommand = @"
+try {
+    & '$script:runnerPath' -Path '$fixtureRoot' -Mode Precheck -PesterManifestPath '$script:pesterManifest' -Verbosity None
+} catch {
+    [Console]::Out.WriteLine(`$_.Exception.Message)
+    exit 1
+}
+"@
+            $encodedZeroCommand = [Convert]::ToBase64String(
+                [Text.Encoding]::Unicode.GetBytes($zeroCommand)
+            )
+            $zeroOutput = @(& $script:hostPath -NoProfile -EncodedCommand $encodedZeroCommand)
+            $zeroExitCode = $LASTEXITCODE
+
+            Set-Content -LiteralPath (Join-Path $fixtureRoot 'OnlySkipped.Tests.ps1') -Value @"
+Describe 'Only skipped' -Tag 'Precheck' {
+    It 'skips' -Skip { `$true | Should -BeTrue }
+}
+"@
+            Remove-Item -LiteralPath (Join-Path $fixtureRoot 'Zero.Tests.ps1')
+            $skippedCommand = @"
+try {
+    & '$script:runnerPath' -Path '$fixtureRoot' -Mode Precheck -PesterManifestPath '$script:pesterManifest' -Verbosity None
+} catch {
+    [Console]::Out.WriteLine(`$_.Exception.Message)
+    exit 1
+}
+"@
+            $encodedSkippedCommand = [Convert]::ToBase64String(
+                [Text.Encoding]::Unicode.GetBytes($skippedCommand)
+            )
+            $skippedOutput = @(& $script:hostPath -NoProfile -EncodedCommand $encodedSkippedCommand)
+            $skippedExitCode = $LASTEXITCODE
+
+            $zeroExitCode | Should -Not -Be 0
+            ($zeroOutput -join "`n") | Should -Match 'selected zero tests'
+            $skippedExitCode | Should -Not -Be 0
+            ($skippedOutput -join "`n") | Should -Match 'selected only skipped tests'
+        } finally {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+
+    It 'rejects missing old loaded-future and available-future Pester versions' {
+        $fixtureRoot = Join-Path $env:TEMP ("pspkt-pester-identity-{0}" -f [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $fixtureRoot
+        try {
+            $missingRoot = Join-Path $fixtureRoot 'missing'
+            $null = New-Item -ItemType Directory -Path $missingRoot
+            $missing = Invoke-PspktRunnerFailureFixture -ModulePath $missingRoot
+
+            $oldRoot = Join-Path $fixtureRoot 'old'
+            $oldModule = Join-Path $oldRoot 'Pester\5.2.0'
+            $null = New-Item -ItemType Directory -Path $oldModule -Force
+            Set-Content -LiteralPath (Join-Path $oldModule 'Pester.psm1') -Value ''
+            Set-Content -LiteralPath (Join-Path $oldModule 'Pester.psd1') -Value @"
+@{
+    RootModule = 'Pester.psm1'
+    ModuleVersion = '5.2.0'
+    GUID = '11111111-1111-1111-1111-111111111111'
+}
+"@
+            $old = Invoke-PspktRunnerFailureFixture -ModulePath $oldRoot
+
+            $futureRoot = Join-Path $fixtureRoot 'future'
+            $futureModule = Join-Path $futureRoot 'Pester\6.0.0'
+            $null = New-Item -ItemType Directory -Path $futureModule -Force
+            Set-Content -LiteralPath (Join-Path $futureModule 'Pester.psm1') -Value ''
+            Set-Content -LiteralPath (Join-Path $futureModule 'Pester.psd1') -Value @"
+@{
+    RootModule = 'Pester.psm1'
+    ModuleVersion = '6.0.0'
+    GUID = '22222222-2222-2222-2222-222222222222'
+}
+"@
+            $availableFuture = Invoke-PspktRunnerFailureFixture -ModulePath $futureRoot
+            $loadedFuture = Invoke-PspktRunnerFailureFixture `
+                -ModulePath $futureRoot `
+                -Preparation "Import-Module '$(Join-Path $futureModule 'Pester.psd1')' -Force"
+
+            foreach ($fixtureResult in @($missing, $old, $availableFuture)) {
+                $fixtureResult.ExitCode | Should -Not -Be 0
+                $fixtureResult.Output | Should -Match 'No supported Pester installation'
+            }
+            $loadedFuture.ExitCode | Should -Not -Be 0
+            $loadedFuture.Output | Should -Match 'Loaded Pester 6 or later is unsupported'
+        } finally {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+
+    It 'rejects conflicting loaded Pester identities' {
+        $fixtureRoot = Join-Path $env:TEMP ("pspkt-pester-conflict-{0}" -f [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $fixtureRoot
+        try {
+            $firstManifest = New-PspktSyntheticPesterModule `
+                -Root $fixtureRoot `
+                -Version ([version]'5.3.3') `
+                -Guid ([guid]'33333333-3333-3333-3333-333333333333')
+            $secondManifest = New-PspktSyntheticPesterModule `
+                -Root $fixtureRoot `
+                -Version ([version]'5.7.1') `
+                -Guid ([guid]'44444444-4444-4444-4444-444444444444')
+            $result = Invoke-PspktRunnerFailureFixture `
+                -ModulePath $fixtureRoot `
+                -Preparation "Import-Module '$firstManifest' -Force; Import-Module '$secondManifest' -Force"
+
+            $result.ExitCode | Should -Not -Be 0
+            $result.Output | Should -Match 'Multiple supported Pester identities are loaded'
+        } finally {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+
+    It 'rejects orphaned Pester assemblies' {
+        $fixtureRoot = Join-Path $env:TEMP ("pspkt-pester-orphan-{0}" -f [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $fixtureRoot
+        try {
+            $preparation = "[void][Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly([Reflection.AssemblyName]::new('Pester'), [Reflection.Emit.AssemblyBuilderAccess]::Run)"
+            $result = Invoke-PspktRunnerFailureFixture `
+                -ModulePath $fixtureRoot `
+                -Preparation $preparation
+
+            $result.ExitCode | Should -Not -Be 0
+            $result.Output | Should -Match 'assembly is loaded without its module'
+        } finally {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+
+    It 'rejects duplicate highest Pester installations' {
+        $fixtureRoot = Join-Path $env:TEMP ("pspkt-pester-duplicate-{0}" -f [guid]::NewGuid().ToString('N'))
+        $firstRoot = Join-Path $fixtureRoot 'first'
+        $secondRoot = Join-Path $fixtureRoot 'second'
+        try {
+            $null = New-PspktSyntheticPesterModule `
+                -Root $firstRoot `
+                -Version ([version]'5.7.1') `
+                -Guid ([guid]'55555555-5555-5555-5555-555555555555')
+            $null = New-PspktSyntheticPesterModule `
+                -Root $secondRoot `
+                -Version ([version]'5.7.1') `
+                -Guid ([guid]'66666666-6666-6666-6666-666666666666')
+            $modulePath = $firstRoot + [IO.Path]::PathSeparator + $secondRoot
+            $result = Invoke-PspktRunnerFailureFixture -ModulePath $modulePath
+
+            $result.ExitCode | Should -Not -Be 0
+            $result.Output | Should -Match 'Multiple Pester installations share the highest supported version'
+        } finally {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+
+    It 'requires install opt-in' {
+        $fixtureRoot = Join-Path $env:TEMP ("pspkt-pester-no-install-{0}" -f [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $fixtureRoot
+        try {
+            $result = Invoke-PspktRunnerFailureFixture -ModulePath $fixtureRoot
+
+            $result.ExitCode | Should -Not -Be 0
+            $result.Output | Should -Match 'AllowPesterInstall'
+        } finally {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+
+    It 'installs a supported Pester 5 version at CurrentUser scope and revalidates' {
+        $fixtureRoot = Join-Path $env:TEMP ("pspkt-pester-install-{0}" -f [guid]::NewGuid().ToString('N'))
+        $moduleRoot = Join-Path $fixtureRoot 'modules'
+        $testRoot = Join-Path $fixtureRoot 'tests'
+        $powerShellGetRoot = Join-Path $moduleRoot 'PowerShellGet\1.0.0'
+        $installRecord = Join-Path $fixtureRoot 'install.txt'
+        $sourcePesterRoot = Split-Path -Parent $script:pesterManifest
+        $sourcePesterVersion = [version](Import-PowerShellDataFile $script:pesterManifest).ModuleVersion
+        $destinationPesterRoot = Join-Path $moduleRoot ("Pester\{0}" -f $sourcePesterVersion)
+        $null = New-Item -ItemType Directory -Path $powerShellGetRoot -Force
+        $null = New-Item -ItemType Directory -Path $testRoot -Force
+        try {
+            Set-Content -LiteralPath (Join-Path $powerShellGetRoot 'PowerShellGet.psd1') -Value @"
+@{
+    RootModule = 'PowerShellGet.psm1'
+    ModuleVersion = '1.0.0'
+    GUID = '77777777-7777-7777-7777-777777777777'
+    FunctionsToExport = @('Install-Module')
+}
+"@
+            Set-Content -LiteralPath (Join-Path $powerShellGetRoot 'PowerShellGet.psm1') -Value @"
+function Install-Module {
+    [CmdletBinding()]
+    param(
+        [string]`$Name,
+        [string]`$Scope,
+        [version]`$MinimumVersion,
+        [version]`$MaximumVersion,
+        [switch]`$Force,
+        [switch]`$SkipPublisherCheck
+    )
+    New-Item -ItemType Directory -Path (Split-Path -Parent `$env:PSPKT_INSTALL_DESTINATION) -Force | Out-Null
+    Copy-Item -LiteralPath `$env:PSPKT_INSTALL_SOURCE -Destination `$env:PSPKT_INSTALL_DESTINATION -Recurse
+    "`$Name|`$Scope|`$MinimumVersion|`$MaximumVersion" | Set-Content -LiteralPath `$env:PSPKT_INSTALL_RECORD
+}
+Export-ModuleMember -Function Install-Module
+"@
+            Set-Content -LiteralPath (Join-Path $testRoot 'Installed.Tests.ps1') -Value @"
+Describe 'Installed Pester' -Tag 'Precheck' {
+    It 'runs' { `$true | Should -BeTrue }
+}
+"@
+            $command = @"
+`$env:PSModulePath = '$moduleRoot'
+`$env:PSPKT_INSTALL_SOURCE = '$sourcePesterRoot'
+`$env:PSPKT_INSTALL_DESTINATION = '$destinationPesterRoot'
+`$env:PSPKT_INSTALL_RECORD = '$installRecord'
+`$result = & '$script:runnerPath' -Path '$testRoot' -Mode Precheck -AllowPesterInstall -Verbosity None -PassThru
+[pscustomobject]@{
+    Result = `$result.Result
+    Version = (Get-Module -Name Pester).Version.ToString()
+    Install = [string](Get-Content -LiteralPath '$installRecord' -Raw)
+} | ConvertTo-Json -Compress
+"@
+            $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+            $output = @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+            $summary = $output[-1] | ConvertFrom-Json
+
+            $LASTEXITCODE | Should -Be 0
+            $summary.Result | Should -Be 'Passed'
+            $summary.Version | Should -Be $sourcePesterVersion.ToString()
+            ([string]$summary.Install).Trim() | Should -Be 'Pester|CurrentUser|5.3.3|5.999.999'
+        } finally {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+
+    It 'reports discovery block and container failures before selection failures' {
+        $fixtureRoot = Join-Path $env:TEMP ("pspkt-pester-discovery-{0}" -f [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $fixtureRoot
+        try {
+            Set-Content -LiteralPath (Join-Path $fixtureRoot 'Discovery.Tests.ps1') -Value @"
+Describe 'Broken discovery' -Tag 'Precheck' {
+    BeforeAll { throw 'discovery failed' }
+    It 'does not run' { `$true | Should -BeTrue }
+}
+"@
+            $command = @"
+try {
+    & '$script:runnerPath' -Path '$fixtureRoot' -Mode Precheck -PesterManifestPath '$script:pesterManifest' -Verbosity None
+} catch {
+    [Console]::Out.WriteLine(`$_.Exception.Message)
+    exit 1
+}
+"@
+            $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+            $output = @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+
+            $LASTEXITCODE | Should -Not -Be 0
+            ($output -join "`n") | Should -Match 'Pester run failed'
+            ($output -join "`n") | Should -Match 'blocks=1'
+            ($output -join "`n") | Should -Not -Match 'selected zero tests'
+        } finally {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+
+    It 'reuses one loaded supported Pester identity' {
+        $command = @"
+Import-Module '$script:pesterManifest' -Force
+`$result = & '$script:runnerPath' -Path '$PSScriptRoot' -Mode Precheck -Verbosity None -PassThru
+"Version=`$((Get-Module -Name Pester).Version);Result=`$(`$result.Result)"
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $output = @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+
+        $LASTEXITCODE | Should -Be 0
+        $output[-1] | Should -Be "Version=$((Import-PowerShellDataFile $script:pesterManifest).ModuleVersion);Result=Passed"
+    }
+
+    It 'selects the unique highest available supported Pester identity' {
+        $expectedVersion = @(
+            Get-ChildItem -LiteralPath (Join-Path $script:supportedPesterModuleRoot 'Pester') `
+                -Filter 'Pester.psd1' `
+                -Recurse |
+                ForEach-Object { [version](Import-PowerShellDataFile $_.FullName).ModuleVersion } |
+                Where-Object { $_ -ge [version]'5.3.3' -and $_ -lt [version]'6.0.0' } |
+                Sort-Object -Descending
+        )[0]
+        $command = @"
+`$env:PSModulePath = '$script:supportedPesterModuleRoot' + [IO.Path]::PathSeparator + `$env:PSModulePath
+`$result = & '$script:runnerPath' -Path '$PSScriptRoot' -Mode Precheck -Verbosity None -PassThru
+"Version=`$((Get-Module -Name Pester).Version);Result=`$(`$result.Result)"
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $output = @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+
+        $LASTEXITCODE | Should -Be 0
+        $output[-1] | Should -Be "Version=$expectedVersion;Result=Passed"
+    }
+
+    It 'removes legacy loaded Pester before supported import' {
+        $legacyManifest = (
+            Get-Module -ListAvailable Pester |
+                Where-Object { $_.Version.Major -lt 5 } |
+                Sort-Object Version -Descending |
+                Select-Object -First 1
+        ).Path
+        $command = @"
+`$env:PSModulePath = '$script:supportedPesterModuleRoot' + [IO.Path]::PathSeparator + `$env:PSModulePath
+Import-Module '$legacyManifest' -Force
+`$result = & '$script:runnerPath' -Path '$PSScriptRoot' -Mode Precheck -Verbosity None -PassThru
+"Version=`$((Get-Module -Name Pester).Version);Result=`$(`$result.Result)"
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $output = @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+
+        $LASTEXITCODE | Should -Be 0
+        $output[-1] | Should -Match '^Version=5\.'
+        $output[-1] | Should -Match ';Result=Passed$'
+    }
+
+    It 'preserves default successful output' {
+        $command = @"
+& '$script:runnerPath' -Path '$PSScriptRoot' -Mode Precheck -PesterManifestPath '$script:pesterManifest' -Verbosity None
+'runner-completed'
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $output = @(& $script:hostPath -NoProfile -EncodedCommand $encodedCommand)
+
+        $LASTEXITCODE | Should -Be 0
+        $output | Should -Be @('runner-completed')
+    }
+
+    It 'matches expected paths by exact segments' {
+        $tests = @(
+            [pscustomobject]@{
+                Path = @('Describe.With.Dot', 'Context', 'It')
+                Executed = $true
+                Result = 'Passed'
+            }
+        )
+
+        $match = Assert-PspktExpectedTestPath `
+            -ExpectedPath @('Describe.With.Dot', 'Context', 'It') `
+            -Tests $tests
+
+        $match.Result | Should -Be 'Passed'
+        {
+            Assert-PspktExpectedTestPath `
+                -ExpectedPath @('Describe', 'With', 'Dot', 'Context', 'It') `
+                -Tests $tests
+        } | Should -Throw
+    }
+
+    It 'rejects duplicate expected path matches' {
+        $duplicate = [pscustomobject]@{
+            Path = @('Describe', 'Context', 'It')
+            Executed = $true
+            Result = 'Passed'
+        }
+
+        {
+            Assert-PspktExpectedTestPath `
+                -ExpectedPath @('Describe', 'Context', 'It') `
+                -Tests @($duplicate, $duplicate)
+        } | Should -Throw
     }
 }
 
@@ -5249,6 +6248,17 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $all.Count | Should -Be 7                # 3 parents + 4 children, all included
             ($all -join '|').Contains('Src') | Should -BeTrue
             ($all -join '|').Contains('Dst') | Should -BeTrue
+        }
+        It 'moves Details selection to first and last rows' {
+            $db = [BoxyBox.DetailsBox]::new(40, 4)
+            $db.SetTree((New-SampleTree))
+            $db.ExpandAll()
+
+            $db.MoveToLastRow()
+            $db.SelectedIndex | Should -Be ($db.RowCount - 1)
+
+            $db.MoveToFirstRow()
+            $db.SelectedIndex | Should -Be 0
         }
     }
 
@@ -6237,6 +7247,89 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
         }
     }
 
+    Context 'Analysis boundary navigation' {
+        BeforeAll {
+            $script:mod = Get-Module PspktSession
+        }
+
+        It 'resolves Text and Details boundary actions' {
+            $homeAction = & $script:mod {
+                Get-PspktTuiTextBoundaryAction -Key ([ConsoleKey]::Home) -BaseSeq 20 -TotalSeq 30
+            }
+            $endAction = & $script:mod {
+                Get-PspktTuiTextBoundaryAction -Key ([ConsoleKey]::End) -BaseSeq 20 -TotalSeq 30
+            }
+            $emptyAction = & $script:mod {
+                Get-PspktTuiTextBoundaryAction -Key ([ConsoleKey]::Home) -BaseSeq 20 -TotalSeq 20
+            }
+            $otherAction = & $script:mod {
+                Get-PspktTuiTextBoundaryAction -Key ([ConsoleKey]::UpArrow) -BaseSeq 20 -TotalSeq 30
+            }
+
+            $homeAction.HasSelection | Should -BeTrue
+            $homeAction.SelectedSeq | Should -Be 20
+            $endAction.HasSelection | Should -BeTrue
+            $endAction.SelectedSeq | Should -Be 29
+            $emptyAction.HasSelection | Should -BeFalse
+            $emptyAction.SelectedSeq | Should -Be 20
+            $otherAction | Should -BeNullOrEmpty
+        }
+
+        It 'normalizes Text selection and viewport boundaries' {
+            $endViewport = & $script:mod {
+                Get-PspktTuiTextViewport -SelectedSeq 29 -TopSeq 20 -BaseSeq 20 -TotalSeq 30 -VisibleRows 4
+            }
+            $trimmedViewport = & $script:mod {
+                Get-PspktTuiTextViewport -SelectedSeq 19 -TopSeq 18 -BaseSeq 20 -TotalSeq 30 -VisibleRows 4
+            }
+            $emptyViewport = & $script:mod {
+                Get-PspktTuiTextViewport -SelectedSeq 40 -TopSeq 35 -BaseSeq 30 -TotalSeq 30 -VisibleRows 4
+            }
+
+            $endViewport.SelectedSeq | Should -Be 29
+            $endViewport.TopSeq | Should -Be 26
+            $trimmedViewport.SelectedSeq | Should -Be 20
+            $trimmedViewport.TopSeq | Should -Be 20
+            $emptyViewport.SelectedSeq | Should -Be 30
+            $emptyViewport.TopSeq | Should -Be 30
+        }
+
+        It 'preserves End selection until packet eviction' {
+            $initial = & $script:mod {
+                Get-PspktTuiTextViewport -SelectedSeq 29 -TopSeq 26 -BaseSeq 20 -TotalSeq 30 -VisibleRows 4
+            }
+            $afterAppend = & $script:mod {
+                Get-PspktTuiTextViewport -SelectedSeq 29 -TopSeq 26 -BaseSeq 20 -TotalSeq 35 -VisibleRows 4
+            }
+            $afterEviction = & $script:mod {
+                Get-PspktTuiTextViewport -SelectedSeq 29 -TopSeq 26 -BaseSeq 30 -TotalSeq 40 -VisibleRows 4
+            }
+
+            $initial.SelectedSeq | Should -Be 29
+            $afterAppend.SelectedSeq | Should -Be 29
+            $afterAppend.TopSeq | Should -Be 26
+            $afterEviction.SelectedSeq | Should -Be 30
+            $afterEviction.TopSeq | Should -Be 30
+        }
+
+        It 'builds a detail error node when packet parsing fails' {
+            $packetBytes = [byte[]]::new(14)
+            $packetBytes[12] = 0x08
+            $packetBytes[13] = 0x00
+
+            $roots = & $script:mod {
+                param($bytes)
+                $detailTree = Get-PspktTuiPacketDetailTree -PacketBytes $bytes -PacketLength 100 -ComponentId 1 -EdgeId 2 -Direction 1
+                return ,$detailTree
+            } $packetBytes
+
+            $roots.GetType() | Should -Be ([System.Collections.Generic.List[BoxyBox.TreeNode]])
+            $roots.Count | Should -Be 1
+            $roots[0].Key | Should -Be 'DetailParseError'
+            $roots[0].Text | Should -Be '(packet detail unavailable - parser error)'
+        }
+    }
+
     Context 'Split-PspktWarningText (Analysis runtime-warning wrap)' {
         BeforeAll {
             $script:mod = Get-Module PspktSession
@@ -6293,7 +7386,15 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
 Describe 'pspkt test prechecks' -Tag 'Precheck' {
     BeforeAll {
         $script:modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
-        $script:runningAsAdmin = Test-IsAdministrator
+        try {
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+            $script:runningAsAdmin = $principal.IsInRole(
+                [Security.Principal.WindowsBuiltInRole]::Administrator
+            )
+        } catch {
+            $script:runningAsAdmin = $false
+        }
     }
 
     It 'has module and test files present' {
@@ -6307,6 +7408,86 @@ Describe 'pspkt test prechecks' -Tag 'Precheck' {
         }
 
         $script:runningAsAdmin | Should -BeTrue
+    }
+
+    Context 'Analysis boundary navigation wiring' {
+        It 'wires Analysis boundary navigation and selection synchronization' {
+            $repoRoot = Split-Path -Parent $PSScriptRoot
+            $sessionPath = Join-Path $repoRoot 'function\PspktSession.psm1'
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                $sessionPath,
+                [ref]$tokens,
+                [ref]$parseErrors
+            )
+            $analysisFunction = $ast.Find(
+                {
+                    param($node)
+                    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                        $node.Name -eq 'Invoke-PspktAnalysisLoop'
+                },
+                $true
+            )
+            $analysisSource = $analysisFunction.Extent.Text
+            $boxSource = Get-Content -LiteralPath (
+                Join-Path $repoRoot 'TUI\BoxyBox\BoxyBox.cs'
+            ) -Raw
+
+            $parseErrors.Count | Should -Be 0
+            $analysisFunction | Should -Not -BeNullOrEmpty
+            $analysisSource | Should -Match '\$detailsState\.LoadedSeq'
+            $analysisSource | Should -Match '\[ConsoleKey\]::Home'
+            $analysisSource | Should -Match '\[ConsoleKey\]::End'
+            $analysisSource | Should -Match 'Get-PspktTuiTextBoundaryAction'
+            $analysisSource | Should -Match 'Get-PspktTuiTextViewport'
+            $analysisSource | Should -Match 'Get-PspktTuiPacketDetailTree'
+            $analysisSource | Should -Match '\$detailsBox\.MoveToFirstRow\(\)'
+            $analysisSource | Should -Match '\$detailsBox\.MoveToLastRow\(\)'
+            $boxSource | Should -Match 'public void MoveToFirstRow\(\)'
+            $boxSource | Should -Match 'public void MoveToLastRow\(\)'
+        }
+
+        It 'cleans up implicit sessions after setup failures' {
+            $repoRoot = Split-Path -Parent $PSScriptRoot
+            $sessionPath = Join-Path $repoRoot 'function\PspktSession.psm1'
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                $sessionPath,
+                [ref]$tokens,
+                [ref]$parseErrors
+            )
+            $startFunction = $ast.Find(
+                {
+                    param($node)
+                    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                        $node.Name -eq 'Start-Pspkt'
+                },
+                $true
+            )
+            $startSource = $startFunction.Extent.Text
+
+            $parseErrors.Count | Should -Be 0
+            $startSource | Should -Match (
+                'if \(\$null -ne \$attachError\) \{[\s\S]*?' +
+                'if \(\$createdSession\) \{[\s\S]*?' +
+                'PacketMonitorCloseSessionHandle\(\$Session\)[\s\S]*?' +
+                'PacketMonitorUninitialize\(\)'
+            )
+            $startSource | Should -Match (
+                'catch \{[\s\S]*?' +
+                '\$setupError = \$_[\s\S]*?' +
+                'if \(\$createdSession -and \$null -ne \$Session\) \{[\s\S]*?' +
+                'Stop-Pspkt -Session \$Session -Teardown'
+            )
+            $startSource | Should -Match (
+                'if \(\$vmMacList\.Count -eq 0\) \{[\s\S]*?' +
+                'VM scope requires at least one usable MAC address'
+            )
+            $startSource | Should -Not -Match 'QF-VM-MAC-\$macStr'
+            $startSource | Should -Match 'QF-VM-IP-\$macStr'
+        }
     }
 
     It 'contains the expected function definition' -ForEach $allProjectFunctionDefinitions {

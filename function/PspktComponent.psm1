@@ -613,8 +613,10 @@ function Add-PspktComponent {
     )
 
     begin {
-        # Collect vmNIC MACs from piped components to auto-set VM scoping.
-        $script:pipedVmName = $null
+        $script:pipedComponents = [System.Collections.ArrayList]::new()
+        $script:pipedVmNames = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
         $script:pipedVmMacs = [System.Collections.ArrayList]::new()
 
         if ($PSCmdlet.ParameterSetName -eq 'ByVM' -or $PSCmdlet.ParameterSetName -eq 'ByVMName') {
@@ -634,8 +636,7 @@ function Add-PspktComponent {
             } $VM $VMName
 
             $vmLabel = if ($PSCmdlet.ParameterSetName -eq 'ByVM') { "$($VM.Name)" } else { $VMName }
-            $Session.VMName = $vmLabel
-            $Session.VMMacAddresses = $macList
+            $Session.SetVmScope($vmLabel, $macList)
 
             # Add components.
             if ($null -ne $vmComps) {
@@ -660,14 +661,9 @@ function Add-PspktComponent {
 
     process {
         if ($PSCmdlet.ParameterSetName -eq 'ByComponent') {
-            $Session.AddSingleDataSourceToSession($Component)
-
-            # Detect VM components via the VMName/VMMacAddress properties stamped
-            # by Get-PspktComponent -VM/-VMName. Collect for end{} VM scoping.
+            $null = $script:pipedComponents.Add($Component)
             if (-not [string]::IsNullOrEmpty($Component.VMName)) {
-                if ($null -eq $script:pipedVmName) {
-                    $script:pipedVmName = $Component.VMName
-                }
+                $null = $script:pipedVmNames.Add($Component.VMName)
                 if (-not [string]::IsNullOrEmpty($Component.VMMacAddress)) {
                     if (-not $script:pipedVmMacs.Contains($Component.VMMacAddress)) {
                         $null = $script:pipedVmMacs.Add($Component.VMMacAddress)
@@ -678,10 +674,18 @@ function Add-PspktComponent {
     }
 
     end {
-        # Auto-set VM scoping from piped vmNIC components.
-        if ($PSCmdlet.ParameterSetName -eq 'ByComponent' -and $script:pipedVmMacs.Count -gt 0) {
-            $Session.VMName = $script:pipedVmName
-            $Session.VMMacAddresses = [string[]]$script:pipedVmMacs.ToArray()
+        if ($PSCmdlet.ParameterSetName -eq 'ByComponent') {
+            if ($script:pipedVmNames.Count -gt 1) {
+                throw "Piped VM components must belong to exactly one VM."
+            }
+            if ($script:pipedVmNames.Count -eq 1) {
+                $vmNames = [string[]]::new(1)
+                $script:pipedVmNames.CopyTo($vmNames)
+                $Session.SetVmScope($vmNames[0], [string[]]$script:pipedVmMacs.ToArray())
+            }
+            foreach ($pipedComponent in $script:pipedComponents) {
+                $Session.AddSingleDataSourceToSession($pipedComponent)
+            }
         }
 
         if ($PassThru.IsPresent) {

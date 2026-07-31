@@ -1327,6 +1327,17 @@ namespace BoxyBox
         public void MoveDown() { if (_selected < _rows.Count - 1) { _selected++; EnsureVisible(); } }
         public void PageUp()   { _selected = Math.Max(0, _selected - ContentRows); EnsureVisible(); }
         public void PageDown() { _selected = Math.Min(_rows.Count - 1, _selected + ContentRows); EnsureVisible(); }
+        public void MoveToFirstRow()
+        {
+            _selected = 0;
+            EnsureVisible();
+        }
+
+        public void MoveToLastRow()
+        {
+            _selected = Math.Max(0, _rows.Count - 1);
+            EnsureVisible();
+        }
 
         private TreeNode SelectedNode()
         {
@@ -1456,7 +1467,6 @@ namespace BoxyBox
         }
     }
 
-    /// <summary>A single menu entry. Rendered as "[Hotkey]DisplayName" (Full) or "[Hotkey]" (Simple).</summary>
     public sealed class MenuItem
     {
         public string Name;        // logical id (matched by the loop's key handler)

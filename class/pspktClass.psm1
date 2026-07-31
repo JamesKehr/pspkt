@@ -11,13 +11,26 @@ class pspkt {
     [List[pspktSession]] $OpenPktmonSessions;
     [List[PktmonRealTimeStream]] $OpenPktmonRealTimeStreams;
     [IntPtr] $PktmonHandle;
+    hidden [IPspktNativeApi] $NativeApi;
 
     pspkt()
     {
+        $this.InitializeManagedState([PspktNativeApi]::new())
+    }
+
+    hidden pspkt([IPspktNativeApi] $nativeApi)
+    {
+        $this.InitializeManagedState($nativeApi)
+    }
+
+    hidden [void] InitializeManagedState([IPspktNativeApi] $nativeApi)
+    {
+        if ($null -eq $nativeApi) { throw "Native API cannot be null." }
         $this.OpenPktmonPointers = [List[System.IntPtr]]::new()
         $this.OpenPktmonSessions = [List[pspktSession]]::new()
         $this.OpenPktmonRealTimeStreams = [List[PktmonRealTimeStream]]::new()
-        $this.PktmonHandle = [IntPtr]::Zero 
+        $this.PktmonHandle = [IntPtr]::Zero
+        $this.NativeApi = $nativeApi
     }
 
     [void] PacketMonitorInitialize()
@@ -25,8 +38,9 @@ class pspkt {
         [UInt32]$ApiVersion = 0x00010000
         if ($this.PktmonHandle -ne [IntPtr]::Zero) { return }
         [IntPtr] $handle = [IntPtr]::Zero
-        $result = [PktMonApi]::PacketMonitorInitialize($ApiVersion, [IntPtr]::Zero, [ref]$handle)
+        $result = $this.NativeApi.PacketMonitorInitialize($ApiVersion, [IntPtr]::Zero, [ref]$handle)
         if ($result -ne 0) { throw "Failed to initialize PktMon: 0x{0:X}" -f $result }
+        if ($handle -eq [IntPtr]::Zero) { throw "Failed to initialize PktMon: native handle is null." }
         $this.PktmonHandle = $handle
         [PacketData]::MissedPacketWriteCount = 0
         [PacketData]::MissedPacketReadCount = 0
@@ -35,40 +49,64 @@ class pspkt {
     [void] PacketMonitorUninitialize()
     {
         if ($this.PktmonHandle -eq [IntPtr]::Zero) { return }
-        $this.FreeAllMemoryPointers()
-        foreach($session in $this.OpenPktmonSessions)
-        {
-            if($session.Active)
-            {
-                $session.SetSessionActive($false)
+        $cleanupErrors = [System.Collections.ArrayList]::new()
+        try {
+            try {
+                $this.FreeAllMemoryPointers()
+            } catch {
+                $null = $cleanupErrors.Add($_.Exception.Message)
             }
-            if($session.Handle -ne [IntPtr]::Zero)
-            {
-                $session.CloseSessionHandle()
+
+            foreach ($session in @($this.OpenPktmonSessions)) {
+                if ($session.Active) {
+                    try {
+                        $session.SetSessionActive($false)
+                    } catch {
+                        $null = $cleanupErrors.Add($_.Exception.Message)
+                    }
+                }
+                try {
+                    $this.PacketMonitorCloseSessionHandle($session)
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
             }
+
+            foreach ($realTimeStream in @($this.OpenPktmonRealTimeStreams)) {
+                try {
+                    $this.PacketMonitorCloseRealtimeStream($realTimeStream)
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
+            }
+
+            try {
+                $this.NativeApi.PacketMonitorUninitialize($this.PktmonHandle)
+            } catch {
+                $null = $cleanupErrors.Add($_.Exception.Message)
+            }
+        } finally {
+            $this.OpenPktmonSessions.Clear()
+            $this.OpenPktmonRealTimeStreams.Clear()
+            $this.PktmonHandle = [IntPtr]::Zero
         }
-        $this.OpenPktmonSessions.Clear()
-        foreach($realTimeStream in $this.OpenPktmonRealTimeStreams)
-        {
-            if($realTimeStream.Handle -ne [IntPtr]::Zero)
-            {
-                $realTimeStream.PacketMonitorCloseRealtimeStream()
-            }
+
+        if ($cleanupErrors.Count -gt 0) {
+            throw "Pktmon cleanup failed: $($cleanupErrors -join '; ')"
         }
-        $this.OpenPktmonRealTimeStreams.Clear()
-        [PktMonApi]::PacketMonitorUninitialize($this.PktmonHandle)
-        $this.PktmonHandle = [IntPtr]::Zero
     }
 
     [pspktSession] PacketMonitorCreateLiveSession([string] $name)
     {
         if ($this.PktMonHandle -eq [IntPtr]::Zero) { throw "Pktmon not initialized" }
         $session = [IntPtr]::Zero
-        $res = [PktMonApi]::PacketMonitorCreateLiveSession($this.PktMonHandle, $Name, [ref]$session)
+        $res = $this.NativeApi.PacketMonitorCreateLiveSession($this.PktMonHandle, $Name, [ref]$session)
         if ($res -ne 0) { throw "Failed to create session: 0x{0:X}" -f $res }
+        if ($session -eq [IntPtr]::Zero) { throw "Failed to create session: native handle is null." }
         #[PktmonUtils]::WriteInformation("Live session created: $Name, handle = $session")
 
-        $pktmonSession = [pspktSession]::new($name, $session)
+        $pktmonSession = [pspktSession]::new($name, $session, $this.NativeApi)
+        $pktmonSession.Pspkt = $this
         $null = $this.OpenPktmonSessions.Add($pktmonSession)
         return $pktmonSession;
     }
@@ -76,15 +114,18 @@ class pspkt {
     [void] PacketMonitorCloseSessionHandle([string] $name)
     {
         if ($this.PktMonHandle -eq [IntPtr]::Zero) { throw "Pktmon not initialized" }
-        $this.CloseSession($this.GetSession($name))
+        $this.PacketMonitorCloseSessionHandle($this.GetSession($name))
     }
 
 
     [void] PacketMonitorCloseSessionHandle([pspktSession] $pktmonSession)
     {
-        if ($this.PktMonHandle -eq [IntPtr]::Zero) { throw "Pktmon not initialized" }
-        $pktmonSession.CloseSessionHandle()
-        $this.OpenPktmonSessions.Remove($pktmonSession)
+        if ($null -eq $pktmonSession) { return }
+        try {
+            $pktmonSession.CloseSessionHandleCore()
+        } finally {
+            $null = $this.OpenPktmonSessions.Remove($pktmonSession)
+        }
     }
 
     [pspktSession] GetSession([string] $name)
@@ -134,28 +175,71 @@ class pspkt {
         $config.DataCallback = [IntPtr]::Zero
         $config.BufferSizeMultiplier = [uint16] $BufferSizeMultiplier
         $config.TruncationSize = [uint16] $TruncationSize
+        [PktMonApi]::PrepareRealtimeStreamConfiguration([ref]$config)
         
-        $RSPtr = [PktMonApi]::CreateRealtimeStream($this.PktmonHandle, [PACKETMONITOR_REALTIME_STREAM_CONFIGURATION]$config)
-        if ($RSPtr  -eq [IntPtr]::Zero) { throw "Failed to create realtime stream."}
+        $streamHandle = [IntPtr]::Zero
+        $result = $this.NativeApi.PacketMonitorCreateRealtimeStream(
+            $this.PktmonHandle,
+            [ref]$config,
+            [ref]$streamHandle
+        )
+        if ($result -ne 0 -or $streamHandle -eq [IntPtr]::Zero) {
+            $cleanupError = $null
+            if ($streamHandle -ne [IntPtr]::Zero) {
+                try {
+                    $this.NativeApi.PacketMonitorCloseRealtimeStream($streamHandle)
+                } catch {
+                    $cleanupError = $_.Exception.Message
+                }
+            }
+            $message = "Failed to create realtime stream: status=0x{0:X}, handle={1}." -f $result, $streamHandle
+            if ($null -ne $cleanupError) {
+                $message += " Cleanup failed: $cleanupError"
+            }
+            throw $message
+        }
 
-        $realTimeStream = [PktmonRealTimeStream]::new($BufferSizeMultiplier, $TruncationSize, $RSPtr)
-        #[PktmonUtils]::WriteInformation("Real time stream created: handle = $($realTimeStream.Handle)") 
-
-        $null = $this.OpenPktmonRealTimeStreams.Add($realTimeStream);
-        return $realTimeStream
+        try {
+            $realTimeStream = [PktmonRealTimeStream]::new(
+                $BufferSizeMultiplier,
+                $TruncationSize,
+                $streamHandle,
+                $this
+            )
+            $null = $this.OpenPktmonRealTimeStreams.Add($realTimeStream)
+            return $realTimeStream
+        } catch {
+            $primaryError = $_
+            try {
+                $this.NativeApi.PacketMonitorCloseRealtimeStream($streamHandle)
+            } catch {
+                throw "$($primaryError.Exception.Message) Cleanup failed: $($_.Exception.Message)"
+            }
+            throw $primaryError
+        }
     }
 
     [void] PacketMonitorCloseRealtimeStream([PktmonRealTimeStream] $realTimeStream)
     {
-        if ($this.PktMonHandle -eq [IntPtr]::Zero) { throw "Pktmon not initialized" }
-        $tmpHandle = $realTimeStream.Handle
-        $realTimeStream.PacketMonitorCloseRealtimeStream()
-        #[PktmonUtils]::WriteInformation("Real time stream closed: handle = $($tmpHandle)")
-        foreach($session in $this.OpenPktmonSessions)
-        {
-            $session.RemoveOutputFromSession($realTimeStream)
+        if ($null -eq $realTimeStream) { return }
+        $closeError = $null
+        try {
+            if ($realTimeStream.Handle -ne [IntPtr]::Zero) {
+                $this.NativeApi.PacketMonitorCloseRealtimeStream($realTimeStream.Handle)
+            }
+        } catch {
+            $closeError = $_
+        } finally {
+            $realTimeStream.InvalidateAfterClose()
+            foreach ($session in @($this.OpenPktmonSessions)) {
+                $session.RemoveOutputFromSession($realTimeStream)
+            }
+            $null = $this.OpenPktmonRealTimeStreams.Remove($realTimeStream)
         }
-        $this.OpenPktmonRealTimeStreams.Remove($realTimeStream)
+
+        if ($null -ne $closeError) {
+            throw $closeError
+        }
     }
 
     [List[pspktComponent]]
@@ -163,7 +247,7 @@ class pspkt {
         if ($this.PktMonHandle -eq [IntPtr]::Zero) { throw "Pktmon not initialized" }
         
         $bytesNeeded = [uint64]::Zero
-        $res = [PktMonApi]::PacketMonitorEnumDataSources(
+        $res = $this.NativeApi.PacketMonitorEnumDataSources(
             $this.PktmonHandle,
             $SourceKind,
             $ShowHidden,
@@ -177,7 +261,7 @@ class pspkt {
         $DataSourceMemoryPointer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($bytesNeeded)
         $this.OpenPktmonPointers.Add($DataSourceMemoryPointer)
         $bytesReturned = [UIntPtr]::Zero
-        $res = [PktMonApi]::PacketMonitorEnumDataSources(
+        $res = $this.NativeApi.PacketMonitorEnumDataSources(
             $this.PktmonHandle,
             $SourceKind,
             $ShowHidden,
@@ -768,6 +852,8 @@ class pspktFilter {
     hidden
     [PACKETMONITOR_PROTOCOL_CONSTRAINT]
     $Filter
+    hidden [bool] $RawConstraintMode
+    hidden [PACKETMONITOR_PROTOCOL_CONSTRAINT] $RawConstraint
 
     pspktFilter() {
         # set defaults as needed
@@ -778,11 +864,91 @@ class pspktFilter {
         $this.Ip1 = [ipaddress]::new(0)
         $this.Ip2 = [ipaddress]::new(0)
         $this.Filter = [PACKETMONITOR_PROTOCOL_CONSTRAINT]::new()
+        $this.RawConstraintMode = $false
+    }
+
+    hidden [PACKETMONITOR_PROTOCOL_CONSTRAINT] CopyProtocolConstraint(
+        [PACKETMONITOR_PROTOCOL_CONSTRAINT] $constraint
+    ) {
+        $copy = $constraint
+        $copy.Mac1 = if ($null -eq $constraint.Mac1) { $null } else { [byte[]]$constraint.Mac1.Clone() }
+        $copy.Mac2 = if ($null -eq $constraint.Mac2) { $null } else { [byte[]]$constraint.Mac2.Clone() }
+        return $copy
+    }
+
+    [bool] IsRawConstraint() {
+        return $this.RawConstraintMode
+    }
+
+    hidden [ipaddress] ConvertConstraintIpAddress(
+        [PACKETMONITOR_IP_ADDRESS] $address,
+        [bool] $isIpv6
+    ) {
+        if ($isIpv6) {
+            $addressBytes = [byte[]]::new(16)
+            [BitConverter]::GetBytes($address.IPv6_low).CopyTo($addressBytes, 0)
+            [BitConverter]::GetBytes($address.IPv6_high).CopyTo($addressBytes, 8)
+            return [ipaddress]::new($addressBytes)
+        }
+        return [ipaddress]::new([BitConverter]::GetBytes($address.IPv4))
+    }
+
+    [void] SetRawConstraint([PACKETMONITOR_PROTOCOL_CONSTRAINT] $constraint) {
+        $this.RawConstraint = $this.CopyProtocolConstraint($constraint)
+        $this.Filter = $this.CopyProtocolConstraint($constraint)
+        $this.Name = $constraint.Name
+        $this.Mac1 = if ($null -eq $constraint.Mac1) { $null } else { [byte[]]$constraint.Mac1.Clone() }
+        $this.Mac2 = if ($null -eq $constraint.Mac2) { $null } else { [byte[]]$constraint.Mac2.Clone() }
+        $this.VlanId = $constraint.VlanId
+        $this.EtherType = $constraint.EtherType
+        $this.DSCP = $constraint.DSCP
+        $this.TransportProtocol = [int16]$constraint.TransportProtocol
+        $this.PrefixLength1 = $constraint.PrefixLength1
+        $this.PrefixLength2 = $constraint.PrefixLength2
+        $this.Port1 = $constraint.Port1
+        $this.Port2 = $constraint.Port2
+        $this.TCPFlags = $constraint.TCPFlags
+        $this.VxLanPort = $constraint.VxLanPort
+        $this.EncapType = [PKTMON_FILTER_ENCAPTYPE]$constraint.EncapType
+        $isIpv6 = (
+            [uint32]$constraint.IsPresent -band
+            [uint32][PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::IPv6
+        ) -ne 0
+        if ((
+            [uint32]$constraint.IsPresent -band
+            [uint32][PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::Ip1
+        ) -ne 0) {
+            $this.Ip1 = $this.ConvertConstraintIpAddress($constraint.Ip1, $isIpv6)
+        }
+        if ((
+            [uint32]$constraint.IsPresent -band
+            [uint32][PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::Ip2
+        ) -ne 0) {
+            $this.Ip2 = $this.ConvertConstraintIpAddress($constraint.Ip2, $isIpv6)
+        }
+        $this.RawConstraintMode = $true
+    }
+
+    hidden [void] ThrowIfRawConstraint() {
+        if ($this.RawConstraintMode) {
+            throw "Raw protocol constraints cannot be modified through typed filter setters."
+        }
     }
 
     ## GET ##
-    [string]GetMac1String() { return [PAUtils]::FormatPhysicalAddress($this.Mac1) }
-    [string]GetMac2String() { return [PAUtils]::FormatPhysicalAddress($this.Mac2) }
+    [string]GetMac1String() {
+        if ($this.RawConstraintMode) {
+            return [PAUtils]::FormatPhysicalAddress([byte[]]$this.RawConstraint.Mac1)
+        }
+        return [PAUtils]::FormatPhysicalAddress([byte[]]$this.Mac1)
+    }
+
+    [string]GetMac2String() {
+        if ($this.RawConstraintMode) {
+            return [PAUtils]::FormatPhysicalAddress([byte[]]$this.RawConstraint.Mac2)
+        }
+        return [PAUtils]::FormatPhysicalAddress([byte[]]$this.Mac2)
+    }
 
     [string]GetIp1String() {return "$($this.Ip1.IPAddressToString)"}
     [string]GetIp2String() {return "$($this.Ip2.IPAddressToString)"}
@@ -814,43 +980,63 @@ class pspktFilter {
     ## SET/ADD ##
     #region SET/ADD
 
-    [void] SetMac1([byte[]]$mac)   { $this.Mac1 = $mac }
-    [void] SetMac1([string]$mac)   { $this.Mac1 = ([PAUtils]::ConvertString2PhysicalAddress($mac)).GetAddressBytes() }
+    [void] SetMac1([byte[]]$mac) {
+        $this.ThrowIfRawConstraint()
+        if ($null -eq $mac -or $mac.Length -ne 6) { throw "Mac1 must be exactly 6 bytes." }
+        $this.Mac1 = [byte[]]$mac.Clone()
+    }
 
-    [void] SetMac2([byte[]]$mac)   { $this.Mac2 = $mac }
-    [void] SetMac2([string]$mac)   { $this.Mac2 = ([PAUtils]::ConvertString2PhysicalAddress($mac)).GetAddressBytes() }
+    [void] SetMac1([string]$mac) {
+        $this.ThrowIfRawConstraint()
+        $macBytes = ([PAUtils]::ConvertString2PhysicalAddress($mac)).GetAddressBytes()
+        if ($macBytes.Length -ne 6) { throw "Mac1 is not a valid MAC address." }
+        $this.Mac1 = $macBytes
+    }
 
-    [void] SetVlanId([uint16]$vlanId) { $this.VlanId = $vlanId }
+    [void] SetMac2([byte[]]$mac) {
+        $this.ThrowIfRawConstraint()
+        if ($null -eq $mac -or $mac.Length -ne 6) { throw "Mac2 must be exactly 6 bytes." }
+        $this.Mac2 = [byte[]]$mac.Clone()
+    }
 
-    [void] SetEtherType([uint16]$etherType)    { $this.EtherType = $etherType }
-    [void] SetEtherType([ETHERTYPE]$etherType) { $this.EtherType = [uint16]$etherType }
+    [void] SetMac2([string]$mac) {
+        $this.ThrowIfRawConstraint()
+        $macBytes = ([PAUtils]::ConvertString2PhysicalAddress($mac)).GetAddressBytes()
+        if ($macBytes.Length -ne 6) { throw "Mac2 is not a valid MAC address." }
+        $this.Mac2 = $macBytes
+    }
 
-    [void] SetDSCP([uint16]$dscp) { $this.DSCP = $dscp }
-    [void] SetDSCP([DSCP]$dscp)   { $this.DSCP = [uint16]$dscp }
+    [void] SetVlanId([uint16]$vlanId) { $this.ThrowIfRawConstraint(); $this.VlanId = $vlanId }
 
-    [void] SetTransportProtocol([int16]$protocol)           { $this.TransportProtocol = $protocol }
-    [void] SetTransportProtocol([IPv4Protocol]$protocol)    { $this.TransportProtocol = [int16]$protocol }
+    [void] SetEtherType([uint16]$etherType)    { $this.ThrowIfRawConstraint(); $this.EtherType = $etherType }
+    [void] SetEtherType([ETHERTYPE]$etherType) { $this.ThrowIfRawConstraint(); $this.EtherType = [uint16]$etherType }
 
-    [void] SetIp1([ipaddress]$ip) { $this.Ip1 = $ip }
-    [void] SetIp1([string]$ip)    { $this.Ip1 = [ipaddress]::Parse($ip) }
+    [void] SetDSCP([uint16]$dscp) { $this.ThrowIfRawConstraint(); $this.DSCP = $dscp }
+    [void] SetDSCP([DSCP]$dscp)   { $this.ThrowIfRawConstraint(); $this.DSCP = [uint16]$dscp }
 
-    [void] SetIp2([ipaddress]$ip) { $this.Ip2 = $ip }
-    [void] SetIp2([string]$ip)    { $this.Ip2 = [ipaddress]::Parse($ip) }
+    [void] SetTransportProtocol([int16]$protocol)        { $this.ThrowIfRawConstraint(); $this.TransportProtocol = $protocol }
+    [void] SetTransportProtocol([IPv4Protocol]$protocol) { $this.ThrowIfRawConstraint(); $this.TransportProtocol = [int16]$protocol }
 
-    [void] SetPrefixLength1([byte]$len) { $this.PrefixLength1 = $len }
+    [void] SetIp1([ipaddress]$ip) { $this.ThrowIfRawConstraint(); $this.Ip1 = $ip }
+    [void] SetIp1([string]$ip)    { $this.ThrowIfRawConstraint(); $this.Ip1 = [ipaddress]::Parse($ip) }
 
-    [void] SetPrefixLength2([byte]$len) { $this.PrefixLength2 = $len }
+    [void] SetIp2([ipaddress]$ip) { $this.ThrowIfRawConstraint(); $this.Ip2 = $ip }
+    [void] SetIp2([string]$ip)    { $this.ThrowIfRawConstraint(); $this.Ip2 = [ipaddress]::Parse($ip) }
 
-    [void] SetPort1([uint16]$port) { $this.Port1 = $port }
+    [void] SetPrefixLength1([byte]$len) { $this.ThrowIfRawConstraint(); $this.PrefixLength1 = $len }
 
-    [void] SetPort2([uint16]$port) { $this.Port2 = $port }
+    [void] SetPrefixLength2([byte]$len) { $this.ThrowIfRawConstraint(); $this.PrefixLength2 = $len }
 
-    [void] SetTCPFlags([byte]$flags)        { $this.TCPFlags = $flags }
-    [void] SetTCPFlags([TCPFLAGS]$flags)    { $this.TCPFlags = [byte]$flags }
+    [void] SetPort1([uint16]$port) { $this.ThrowIfRawConstraint(); $this.Port1 = $port }
 
-    [void] SetVxLanPort([uint16]$port) { $this.VxLanPort = $port }
+    [void] SetPort2([uint16]$port) { $this.ThrowIfRawConstraint(); $this.Port2 = $port }
 
-    [void] SetEncapType([PKTMON_FILTER_ENCAPTYPE]$encapType) { $this.EncapType = $encapType }
+    [void] SetTCPFlags([byte]$flags)     { $this.ThrowIfRawConstraint(); $this.TCPFlags = $flags }
+    [void] SetTCPFlags([TCPFLAGS]$flags) { $this.ThrowIfRawConstraint(); $this.TCPFlags = [byte]$flags }
+
+    [void] SetVxLanPort([uint16]$port) { $this.ThrowIfRawConstraint(); $this.VxLanPort = $port }
+
+    [void] SetEncapType([PKTMON_FILTER_ENCAPTYPE]$encapType) { $this.ThrowIfRawConstraint(); $this.EncapType = $encapType }
 
     #endregion SET/ADD
 
@@ -877,6 +1063,10 @@ class pspktFilter {
 
     [PACKETMONITOR_PROTOCOL_CONSTRAINT]
     ToProtocolConstraint() {
+        if ($this.RawConstraintMode) {
+            return $this.CopyProtocolConstraint($this.RawConstraint)
+        }
+
         $constraint = [PACKETMONITOR_PROTOCOL_CONSTRAINT]::new()
         $flags = [PACKETMONITOR_PROTOCOL_CONSTRAINT_FLAGS]::None
 
@@ -996,6 +1186,7 @@ class pspktFilter {
 
 
 class pspktSession {
+    hidden static [int] $MaxFilterCount = 32
     [string]
     $Name
 
@@ -1032,14 +1223,46 @@ class pspktSession {
     # with each vmNIC MAC address so capture stays in the VM's network data path.
     [string]   $VMName
     [string[]] $VMMacAddresses
+    hidden [string] $CanonicalVMName
+    hidden [string[]] $CanonicalVMMacAddresses
+    hidden [string] $VmScopeFingerprint
 
     hidden
     [pspkt] $Pspkt
 
+    hidden [IPspktNativeApi] $NativeApi
+    hidden [bool] $Faulted
+    hidden [string] $FaultOperation
+    hidden [string] $FaultMessage
+    hidden [int[]] $FaultCommittedComponentIndexes
+    hidden [int[]] $FaultCommittedFilterIndexes
+    hidden [int] $FaultComponentCount
+    hidden [int] $FaultFilterCount
+    hidden [int] $FaultOutputCount
+    hidden [bool] $FaultActive
+    hidden [bool] $FaultNativeStateUncertain
+    hidden [bool] $VmScopeOnlyFiltersMaterialized
+
     pspktSession([string] $name, [intptr]$handle)
     {
+        $this.InitializeManagedState($name, $handle, [PspktNativeApi]::new())
+    }
+
+    hidden pspktSession([string] $name, [intptr]$handle, [IPspktNativeApi] $nativeApi)
+    {
+        $this.InitializeManagedState($name, $handle, $nativeApi)
+    }
+
+    hidden [void] InitializeManagedState(
+        [string] $name,
+        [intptr] $handle,
+        [IPspktNativeApi] $nativeApi
+    )
+    {
+        if ($null -eq $nativeApi) { throw "Native API cannot be null." }
         $this.name = $name
         $this.handle = $handle
+        $this.NativeApi = $nativeApi
         $this.Components = [System.Collections.ArrayList]::new()
         $this.Filters = [System.Collections.ArrayList]::new()
         $this.OutputStream = [System.Collections.ArrayList]::new()
@@ -1054,6 +1277,175 @@ class pspktSession {
         $this.FileSize     = 512
         $this.FileName     = 'PktMon.etl'
         $this.CountersOnly = $false
+        $this.VmScopeOnlyFiltersMaterialized = $false
+        $this.ClearFaultState()
+    }
+
+    hidden [int[]] CopyIndexes([System.Collections.Generic.HashSet[int]] $indexes)
+    {
+        $copy = [int[]]::new($indexes.Count)
+        $indexes.CopyTo($copy)
+        return $copy
+    }
+
+    hidden [void] ClearFaultState()
+    {
+        $this.Faulted = $false
+        $this.FaultOperation = ''
+        $this.FaultMessage = ''
+        $this.FaultCommittedComponentIndexes = [int[]]::new(0)
+        $this.FaultCommittedFilterIndexes = [int[]]::new(0)
+        $this.FaultComponentCount = 0
+        $this.FaultFilterCount = 0
+        $this.FaultOutputCount = 0
+        $this.FaultActive = $false
+        $this.FaultNativeStateUncertain = $false
+    }
+
+    hidden [void] MarkFaulted(
+        [string] $operation,
+        [string] $message,
+        [bool] $nativeStateUncertain
+    )
+    {
+        if ($this.Faulted) { return }
+        $this.Faulted = $true
+        $this.FaultOperation = $operation
+        $this.FaultMessage = $message
+        $this.FaultCommittedComponentIndexes = $this.CopyIndexes($this.CommittedComponents)
+        $this.FaultCommittedFilterIndexes = $this.CopyIndexes($this.CommittedFilters)
+        $this.FaultComponentCount = $this.Components.Count
+        $this.FaultFilterCount = $this.Filters.Count
+        $this.FaultOutputCount = $this.OutputStream.Count
+        $this.FaultActive = $this.Active
+        $this.FaultNativeStateUncertain = $nativeStateUncertain
+    }
+
+    hidden [pscustomobject] GetFaultSnapshot()
+    {
+        if (-not $this.Faulted) { return $null }
+        return [pscustomobject]@{
+            Operation = $this.FaultOperation
+            Message = $this.FaultMessage
+            CommittedComponentIndexes = [int[]]$this.FaultCommittedComponentIndexes.Clone()
+            CommittedFilterIndexes = [int[]]$this.FaultCommittedFilterIndexes.Clone()
+            ComponentCount = $this.FaultComponentCount
+            FilterCount = $this.FaultFilterCount
+            OutputCount = $this.FaultOutputCount
+            Active = $this.FaultActive
+            NativeStateUncertain = $this.FaultNativeStateUncertain
+        }
+    }
+
+    hidden [void] ThrowIfFaultedForForwardOperation()
+    {
+        if ($this.Faulted) {
+            throw "Session '$($this.Name)' is faulted after '$($this.FaultOperation)'. Tear it down and create a new session."
+        }
+        $this.ValidateVmScopeMirrors()
+    }
+
+    hidden [string[]] NormalizeVmMacAddresses([string[]] $macAddresses)
+    {
+        if ($null -eq $macAddresses -or $macAddresses.Count -eq 0) {
+            throw "VM scope requires at least one valid MAC address."
+        }
+
+        $normalizedSet = [System.Collections.Generic.SortedSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
+        foreach ($macAddress in $macAddresses) {
+            $physicalAddress = [PAUtils]::ConvertString2PhysicalAddress($macAddress)
+            $addressBytes = $physicalAddress.GetAddressBytes()
+            if ($addressBytes.Length -ne 6) {
+                throw "VM scope contains an invalid MAC address: '$macAddress'."
+            }
+
+            $allZero = $true
+            foreach ($addressByte in $addressBytes) {
+                if ($addressByte -ne 0) {
+                    $allZero = $false
+                    break
+                }
+            }
+            if ($allZero) {
+                throw "VM scope requires at least one valid non-zero MAC address."
+            }
+
+            $null = $normalizedSet.Add([PAUtils]::FormatPhysicalAddress($addressBytes))
+        }
+
+        if ($normalizedSet.Count -eq 0) {
+            throw "VM scope requires at least one valid MAC address."
+        }
+
+        $normalized = [string[]]::new($normalizedSet.Count)
+        $normalizedSet.CopyTo($normalized)
+        return $normalized
+    }
+
+    hidden [string] GetVmScopeFingerprint([string] $vmName, [string[]] $macAddresses)
+    {
+        if ([string]::IsNullOrWhiteSpace($vmName)) {
+            throw "VM scope requires a VM name."
+        }
+        $normalized = $this.NormalizeVmMacAddresses($macAddresses)
+        return $vmName.Trim().ToUpperInvariant() + '|' + ($normalized -join ',')
+    }
+
+    hidden [void] ValidateVmScopeMirrors()
+    {
+        if ([string]::IsNullOrEmpty($this.VmScopeFingerprint)) {
+            if (
+                -not [string]::IsNullOrEmpty($this.VMName) -or
+                ($null -ne $this.VMMacAddresses -and $this.VMMacAddresses.Count -gt 0)
+            ) {
+                throw "VM scope was modified directly. Use Start-Pspkt or Add-PspktComponent VM parameters."
+            }
+            return
+        }
+
+        try {
+            $mirrorFingerprint = $this.GetVmScopeFingerprint($this.VMName, $this.VMMacAddresses)
+        } catch {
+            throw "VM scope was modified directly. Use Start-Pspkt or Add-PspktComponent VM parameters."
+        }
+        if ($mirrorFingerprint -ne $this.VmScopeFingerprint) {
+            throw "VM scope was modified directly. Use Start-Pspkt or Add-PspktComponent VM parameters."
+        }
+    }
+
+    hidden [void] SetVmScope([string] $vmName, [string[]] $macAddresses)
+    {
+        if ($this.Faulted) {
+            $this.ThrowIfFaultedForForwardOperation()
+        }
+
+        $normalized = $this.NormalizeVmMacAddresses($macAddresses)
+        $fingerprint = $this.GetVmScopeFingerprint($vmName, $normalized)
+        if ($fingerprint -eq $this.VmScopeFingerprint) {
+            $this.VMName = $this.CanonicalVMName
+            $this.VMMacAddresses = [string[]]$this.CanonicalVMMacAddresses.Clone()
+            return
+        }
+
+        $scopeLocked = (
+            $this.Components.Count -gt 0 -or
+            $this.Filters.Count -gt 0 -or
+            $this.OutputStream.Count -gt 0 -or
+            $this.CommittedComponents.Count -gt 0 -or
+            $this.CommittedFilters.Count -gt 0 -or
+            $this.Active
+        )
+        if ($scopeLocked) {
+            throw "VM scope cannot change after session configuration has started."
+        }
+
+        $this.CanonicalVMName = $vmName.Trim()
+        $this.CanonicalVMMacAddresses = [string[]]$normalized.Clone()
+        $this.VmScopeFingerprint = $fingerprint
+        $this.VMName = $this.CanonicalVMName
+        $this.VMMacAddresses = [string[]]$normalized.Clone()
     }
 
     # Converts the current session state to a PACKETMONITOR_SESSION struct
@@ -1078,20 +1470,34 @@ class pspktSession {
 
     [void] SetSessionActive([bool] $active)
     {
+        if ($active) { $this.ThrowIfFaultedForForwardOperation() }
         if ($this.handle -eq [IntPtr]::Zero) { throw "Session handle is null." }
 
         if ($active) {
             $this.CommitSessionConfiguration()
         }
 
-        $res = [PktMonApi]::PacketMonitorSetSessionActive($this.handle, $active)
-        if ($res -ne 0) { throw "Failed to set session active state: 0x{0:X}" -f $res }
+        try {
+            $res = $this.NativeApi.PacketMonitorSetSessionActive($this.handle, $active)
+            if ($res -ne 0) {
+                if ($active) {
+                    $this.MarkFaulted('SetSessionActive', ("Native status 0x{0:X}" -f $res), $true)
+                }
+                throw "Failed to set session active state: 0x{0:X}" -f $res
+            }
+        } catch {
+            if ($active) {
+                $this.MarkFaulted('SetSessionActive', $_.Exception.Message, $true)
+            }
+            throw
+        }
         $this.active = $active
     }
 
     # Stores a component for later commit. No native API call until the session is activated.
     [void] AddSingleDataSourceToSession([pspktComponent] $DataSource)
     {
+        $this.ThrowIfFaultedForForwardOperation()
         if ($null -eq $DataSource) { throw "DataSource cannot be null." }
 
         $null = $this.Components.Add($DataSource)
@@ -1102,23 +1508,69 @@ class pspktSession {
         }
     }
 
+    hidden [int] GetRequiredFilterSlots([pspktFilter] $filter)
+    {
+        if (
+            $null -ne $this.CanonicalVMMacAddresses -and
+            $this.CanonicalVMMacAddresses.Count -gt 0 -and
+            ($null -eq $filter.Mac1 -or $filter.Mac1.Length -lt 6)
+        ) {
+            return $this.CanonicalVMMacAddresses.Count
+        }
+        return 1
+    }
+
+    hidden [void] ValidateFilterBatchCapacity([pspktFilter[]] $filters)
+    {
+        $this.ThrowIfFaultedForForwardOperation()
+        $requiredSlots = $this.Filters.Count
+        foreach ($candidateFilter in $filters) {
+            if ($null -eq $candidateFilter) { throw "Filter cannot be null." }
+            if (
+                $candidateFilter.IsRawConstraint() -and
+                $null -ne $this.CanonicalVMMacAddresses -and
+                $this.CanonicalVMMacAddresses.Count -gt 0
+            ) {
+                throw "Raw protocol constraints cannot be added to a VM-scoped session."
+            }
+            $null = $candidateFilter.ToProtocolConstraint()
+            $requiredSlots += $this.GetRequiredFilterSlots($candidateFilter)
+        }
+        if ($requiredSlots -gt [pspktSession]::MaxFilterCount) {
+            throw "A session supports at most $([pspktSession]::MaxFilterCount) filters."
+        }
+    }
+
     # Stores a filter for later commit. Validates the filter can produce a constraint.
     # When VM scoping is active (VMMacAddresses is populated), expands the filter into
     # one clone per vmNIC MAC with Mac1 set, so the pktmon OR-combined filter set
     # effectively AND-combines "VM MAC" with the filter's protocol scope.
     [void] AddFilter([pspktFilter] $filter)
     {
+        $this.ThrowIfFaultedForForwardOperation()
         if ($null -eq $filter) { throw "Filter cannot be null." }
+        if ($this.VmScopeOnlyFiltersMaterialized) {
+            throw "Filters cannot be added after a VM-scoped session starts with broad MAC-only filters. Recreate the session with filters configured before activation."
+        }
 
-        # Validate the filter can produce a valid constraint now, fail early.
-        $null = $filter.ToProtocolConstraint()
+        $this.ValidateFilterBatchCapacity([pspktFilter[]]@($filter))
+        if ($filter.IsRawConstraint()) {
+            if ($null -ne $this.CanonicalVMMacAddresses -and $this.CanonicalVMMacAddresses.Count -gt 0) {
+                throw "Raw protocol constraints cannot be added to a VM-scoped session."
+            }
+            $null = $this.Filters.Add($filter)
+            if ($this.Active) {
+                $this.CommitRawConstraint($filter.ToProtocolConstraint(), $this.Filters.Count - 1)
+            }
+            return
+        }
 
-        if ($null -ne $this.VMMacAddresses -and $this.VMMacAddresses.Count -gt 0 -and
+        if ($null -ne $this.CanonicalVMMacAddresses -and $this.CanonicalVMMacAddresses.Count -gt 0 -and
             ($null -eq $filter.Mac1 -or $filter.Mac1.Length -lt 6))
         {
             # VM-scoped session: expand filter × MAC list.
             # Skip expansion if the filter already has a 6-byte MAC set (caller pre-stamped).
-            foreach ($macStr in $this.VMMacAddresses)
+            foreach ($macStr in $this.CanonicalVMMacAddresses)
             {
                 $clone = [pspktFilter]::new()
                 $clone.Name              = "$($filter.Name)-VM-$macStr"
@@ -1160,19 +1612,31 @@ class pspktSession {
 
     [void] AddFilter([PACKETMONITOR_PROTOCOL_CONSTRAINT] $constraint)
     {
-        # Wrap the raw constraint in a pspktFilter for uniform deferred handling.
+        $this.ThrowIfFaultedForForwardOperation()
+        if ($this.VmScopeOnlyFiltersMaterialized) {
+            throw "Filters cannot be added after a VM-scoped session starts with broad MAC-only filters. Recreate the session with filters configured before activation."
+        }
+        if ($null -ne $this.CanonicalVMMacAddresses -and $this.CanonicalVMMacAddresses.Count -gt 0) {
+            throw "Raw protocol constraints cannot be added to a VM-scoped session."
+        }
+        if ($this.Filters.Count + 1 -gt [pspktSession]::MaxFilterCount) {
+            throw "A session supports at most $([pspktSession]::MaxFilterCount) filters."
+        }
         $filter = [pspktFilter]::new()
-        $filter.Filter = $constraint
-        $filter.Name = $constraint.Name
+        $filter.SetRawConstraint($constraint)
         $null = $this.Filters.Add($filter)
 
         if ($this.Active) {
-            $this.CommitRawConstraint($constraint, $this.Filters.Count - 1)
+            $this.CommitRawConstraint($filter.ToProtocolConstraint(), $this.Filters.Count - 1)
         }
     }
 
     [bool] RemoveComponent([pspktComponent] $DataSource)
     {
+        $this.ThrowIfFaultedForForwardOperation()
+        if ($this.Active -or $this.CommittedComponents.Count -gt 0) {
+            throw "Components cannot be removed after native session configuration is committed. Recreate the session."
+        }
         if ($null -eq $DataSource) { return $false }
         $idx = $this.Components.IndexOf($DataSource)
         if ($idx -lt 0) { return $false }
@@ -1185,6 +1649,10 @@ class pspktSession {
 
     [bool] RemoveComponentAt([int] $Index)
     {
+        $this.ThrowIfFaultedForForwardOperation()
+        if ($this.Active -or $this.CommittedComponents.Count -gt 0) {
+            throw "Components cannot be removed after native session configuration is committed. Recreate the session."
+        }
         if ($Index -lt 0 -or $Index -ge $this.Components.Count) { return $false }
         $this.CommittedComponents.Remove($Index) | Out-Null
         $this.Components.RemoveAt($Index)
@@ -1194,6 +1662,10 @@ class pspktSession {
 
     [bool] RemoveFilter([pspktFilter] $Filter)
     {
+        $this.ThrowIfFaultedForForwardOperation()
+        if ($this.Active -or $this.CommittedFilters.Count -gt 0) {
+            throw "Filters cannot be removed after native session configuration is committed. Recreate the session."
+        }
         if ($null -eq $Filter) { return $false }
         $idx = $this.Filters.IndexOf($Filter)
         if ($idx -lt 0) { return $false }
@@ -1205,6 +1677,10 @@ class pspktSession {
 
     [bool] RemoveFilterAt([int] $Index)
     {
+        $this.ThrowIfFaultedForForwardOperation()
+        if ($this.Active -or $this.CommittedFilters.Count -gt 0) {
+            throw "Filters cannot be removed after native session configuration is committed. Recreate the session."
+        }
         if ($Index -lt 0 -or $Index -ge $this.Filters.Count) { return $false }
         $this.CommittedFilters.Remove($Index) | Out-Null
         $this.Filters.RemoveAt($Index)
@@ -1233,7 +1709,9 @@ class pspktSession {
     # Commits all uncommitted components and filters to the native pktmon session.
     hidden [void] CommitSessionConfiguration()
     {
+        $this.ThrowIfFaultedForForwardOperation()
         if ($this.handle -eq [IntPtr]::Zero) { throw "Session handle is null." }
+        $this.EnsureVmScopeFilters()
 
         # Resolve any components with stale/null pointers by re-enumerating
         # from the session's active pspkt instance.
@@ -1261,6 +1739,33 @@ class pspktSession {
                 $this.CommitFilter($this.Filters[$i], $i)
             }
         }
+    }
+
+    hidden [void] EnsureVmScopeFilters()
+    {
+        if (
+            $this.Filters.Count -gt 0 -or
+            $null -eq $this.CanonicalVMMacAddresses -or
+            $this.CanonicalVMMacAddresses.Count -eq 0
+        ) {
+            return
+        }
+        if ($this.CanonicalVMMacAddresses.Count -gt [pspktSession]::MaxFilterCount) {
+            throw "VM scope requires more than $([pspktSession]::MaxFilterCount) MAC filters."
+        }
+
+        $scopeFilters = [pspktFilter[]]::new($this.CanonicalVMMacAddresses.Count)
+        for ($index = 0; $index -lt $this.CanonicalVMMacAddresses.Count; $index++) {
+            $scopeFilter = [pspktFilter]::new()
+            $scopeFilter.Name = "QF-VM-MAC-$($this.CanonicalVMMacAddresses[$index])"
+            $scopeFilter.SetMac1($this.CanonicalVMMacAddresses[$index])
+            $scopeFilters[$index] = $scopeFilter
+        }
+        $this.ValidateFilterBatchCapacity($scopeFilters)
+        foreach ($scopeFilter in $scopeFilters) {
+            $this.AddFilter($scopeFilter)
+        }
+        $this.VmScopeOnlyFiltersMaterialized = $true
     }
 
     hidden [void] ResolveComponentPointers()
@@ -1302,8 +1807,16 @@ class pspktSession {
     {
         if ($this.handle -eq [IntPtr]::Zero) { throw "Session handle is null." }
         if ($DataSource.Pointer -eq [IntPtr]::Zero) { throw "DataSource pointer is null for component '$($DataSource.Name)'. The component may not have been properly enumerated." }
-        $res = [PktMonApi]::PacketMonitorAddSingleDataSourceToSession($this.handle, $DataSource.Pointer)
-        if ($res -ne 0) { throw "Failed to add data source '$($DataSource.Name)': 0x{0:X}" -f $res }
+        try {
+            $res = $this.NativeApi.PacketMonitorAddSingleDataSourceToSession($this.handle, $DataSource.Pointer)
+            if ($res -ne 0) {
+                $this.MarkFaulted('AddSingleDataSource', ("Native status 0x{0:X}" -f $res), $true)
+                throw "Failed to add data source '$($DataSource.Name)': 0x{0:X}" -f $res
+            }
+        } catch {
+            $this.MarkFaulted('AddSingleDataSource', $_.Exception.Message, $true)
+            throw
+        }
         $this.CommittedComponents.Add($index) | Out-Null
     }
 
@@ -1322,8 +1835,16 @@ class pspktSession {
 
         try {
             [System.Runtime.InteropServices.Marshal]::StructureToPtr($constraint, $constraintPtr, $false)
-            $res = [PktMonApi]::PacketMonitorAddCaptureConstraint($this.handle, $constraintPtr)
-            if ($res -ne 0) { throw "Failed to add capture constraint '$($constraint.Name)': 0x{0:X}" -f $res }
+            try {
+                $res = $this.NativeApi.PacketMonitorAddCaptureConstraint($this.handle, $constraintPtr)
+                if ($res -ne 0) {
+                    $this.MarkFaulted('AddCaptureConstraint', ("Native status 0x{0:X}" -f $res), $true)
+                    throw "Failed to add capture constraint '$($constraint.Name)': 0x{0:X}" -f $res
+                }
+            } catch {
+                $this.MarkFaulted('AddCaptureConstraint', $_.Exception.Message, $true)
+                throw
+            }
             $this.CommittedFilters.Add($index) | Out-Null
         }
         finally {
@@ -1333,9 +1854,22 @@ class pspktSession {
     
     [void] AttachOutputToSession([PktmonRealTimeStream] $realTimeStream)
     {
-        $res = [PktMonApi]::PacketMonitorAttachOutputToSession($this.handle, $realTimeStream.Handle)
-        if ($res -ne 0) { throw "Failed to attach realtime stream to session: 0x{0:X}" -f $res }
+        $this.ThrowIfFaultedForForwardOperation()
+        if ($null -eq $realTimeStream) { throw "Realtime stream cannot be null." }
+        if ($realTimeStream.Handle -eq [IntPtr]::Zero) { throw "Realtime stream handle is null." }
+        if ($this.OutputStream.Contains($realTimeStream)) { throw "Realtime stream is already attached." }
+
         $null = $this.OutputStream.Add($realTimeStream)
+        try {
+            $res = $this.NativeApi.PacketMonitorAttachOutputToSession($this.handle, $realTimeStream.Handle)
+            if ($res -ne 0) {
+                throw "Failed to attach realtime stream to session: 0x{0:X}" -f $res
+            }
+        } catch {
+            $null = $this.OutputStream.Remove($realTimeStream)
+            $this.MarkFaulted('AttachOutput', $_.Exception.Message, $true)
+            throw
+        }
     }
 
     [void] RemoveOutputFromSession([PktmonRealTimeStream] $realTimeStream)
@@ -1348,8 +1882,50 @@ class pspktSession {
     
     [void] CloseSessionHandle()
     {
-        if($this.handle -eq [IntPtr]::Zero){Throw "Null pointer"}
-        [PktMonApi]::PacketMonitorCloseSessionHandle($this.handle)
+        if ($this.handle -eq [IntPtr]::Zero) { return }
+        if ($null -ne $this.Pspkt) {
+            $this.Pspkt.PacketMonitorCloseSessionHandle($this)
+            return
+        }
+
+        $this.CloseSessionHandleCore()
+    }
+
+    hidden [void] CloseSessionHandleCore()
+    {
+        if ($this.handle -eq [IntPtr]::Zero) {
+            $this.InvalidateAfterClose()
+            return
+        }
+
+        $cleanupErrors = [System.Collections.ArrayList]::new()
+        foreach ($outputStream in @($this.OutputStream)) {
+            try {
+                if ($null -ne $this.Pspkt) {
+                    $this.Pspkt.PacketMonitorCloseRealtimeStream($outputStream)
+                } else {
+                    $outputStream.PacketMonitorCloseRealtimeStream()
+                }
+            } catch {
+                $null = $cleanupErrors.Add($_.Exception.Message)
+            }
+        }
+
+        try {
+            $this.NativeApi.PacketMonitorCloseSessionHandle($this.handle)
+        } catch {
+            $null = $cleanupErrors.Add($_.Exception.Message)
+        } finally {
+            $this.InvalidateAfterClose()
+        }
+
+        if ($cleanupErrors.Count -gt 0) {
+            throw "Session cleanup failed: $($cleanupErrors -join '; ')"
+        }
+    }
+
+    hidden [void] InvalidateAfterClose()
+    {
         $this.handle = [IntPtr]::Zero
         $this.Components.Clear()
         $this.Filters.Clear()
@@ -1357,6 +1933,13 @@ class pspktSession {
         $this.CommittedComponents.Clear()
         $this.CommittedFilters.Clear()
         $this.Active = $false
+        $this.CanonicalVMName = ''
+        $this.CanonicalVMMacAddresses = $null
+        $this.VmScopeFingerprint = ''
+        $this.VMName = ''
+        $this.VMMacAddresses = $null
+        $this.VmScopeOnlyFiltersMaterialized = $false
+        $this.ClearFaultState()
     }
 
     [System.Collections.ArrayList] ReadPacketsFromBuffer()
@@ -1406,14 +1989,66 @@ class PktmonRealTimeStream
     [IntPtr] $Handle;
     [PSPacketData[]] $PacketBuffer
     [PacketData[]] $PacketDataCache
-
-
+    hidden [pspkt] $Owner
 
     PktmonRealTimeStream([uint16] $BufferSizeMultiplier, [uint16] $TruncationSize, [IntPtr] $pointer)
+    {
+        $this.InitializeStandaloneStream(
+            $BufferSizeMultiplier,
+            $TruncationSize,
+            $pointer,
+            [PspktNativeApi]::new()
+        )
+    }
+
+    hidden PktmonRealTimeStream(
+        [uint16] $BufferSizeMultiplier,
+        [uint16] $TruncationSize,
+        [IntPtr] $pointer,
+        [IPspktNativeApi] $nativeApi
+    )
+    {
+        $this.InitializeStandaloneStream(
+            $BufferSizeMultiplier,
+            $TruncationSize,
+            $pointer,
+            $nativeApi
+        )
+    }
+
+    hidden PktmonRealTimeStream(
+        [uint16] $BufferSizeMultiplier,
+        [uint16] $TruncationSize,
+        [IntPtr] $pointer,
+        [pspkt] $owner
+    )
+    {
+        $this.InitializeManagedState($BufferSizeMultiplier, $TruncationSize, $pointer, $owner)
+    }
+
+    hidden [void] InitializeStandaloneStream(
+        [uint16] $BufferSizeMultiplier,
+        [uint16] $TruncationSize,
+        [IntPtr] $pointer,
+        [IPspktNativeApi] $nativeApi
+    )
+    {
+        $standaloneOwner = [pspkt]::new($nativeApi)
+        $this.InitializeManagedState($BufferSizeMultiplier, $TruncationSize, $pointer, $standaloneOwner)
+        $null = $standaloneOwner.OpenPktmonRealTimeStreams.Add($this)
+    }
+
+    hidden [void] InitializeManagedState(
+        [uint16] $BufferSizeMultiplier,
+        [uint16] $TruncationSize,
+        [IntPtr] $pointer,
+        [pspkt] $owner
+    )
     {
         $this.BufferSizeMultiplier = $BufferSizeMultiplier
         $this.TruncationSize = $TruncationSize
         $this.Handle = $pointer
+        $this.Owner = $owner
         $this.Id = [PktmonRealTimeStream]::Index
         [PktmonRealTimeStream]::Index += 1;
         $this.PacketBuffer = [PSPacketData[]]::new([PktmonRealTimeStream]::PacketBufferSize)
@@ -1422,10 +2057,14 @@ class PktmonRealTimeStream
 
     [void] PacketMonitorCloseRealtimeStream()
     {
-        if($this.Handle -eq [IntPtr]::Zero){Throw "Null pointer"}
-        [PktMonApi]::PacketMonitorCloseRealtimeStream($this.Handle)
+        if ($this.Handle -eq [IntPtr]::Zero) { return }
+        if ($null -eq $this.Owner) { throw "Realtime stream has no owner." }
+        $this.Owner.PacketMonitorCloseRealtimeStream($this)
+    }
+
+    hidden [void] InvalidateAfterClose()
+    {
         $this.Handle = [IntPtr]::Zero
-        # Clear buffers to prevent stale data leaking into a subsequent session.
         [System.Array]::Clear($this.PacketBuffer, 0, $this.PacketBuffer.Length)
         [System.Array]::Clear($this.PacketDataCache, 0, $this.PacketDataCache.Length)
     }

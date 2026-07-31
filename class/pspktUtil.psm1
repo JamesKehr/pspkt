@@ -46,42 +46,63 @@ class BitUtils {
 
 
 class PAUtils {
-    static [PhysicalAddress] ConvertString2PhysicalAddress([string]$rawMAC) {
-        # remove delimiters (: - .)
-        $str = $rawMAC -replace "(:|-|\.)",$null
-
-        # try to parse the string as a PA
-        $mac = [PhysicalAddress]::new(00)
-        if ([PhysicalAddress]::TryParse($str, [ref]$mac)) {
-            return $mac
-        } else {
-            return ([PhysicalAddress]::new(0))
+    hidden static [PhysicalAddress] ParseStandardPhysicalAddressOrNull([string]$rawMac) {
+        if ([string]::IsNullOrWhiteSpace($rawMac)) {
+            return $null
         }
+
+        $candidate = $rawMac.Trim()
+        $isPlain = [regex]::IsMatch($candidate, '^[0-9A-Fa-f]{12}$')
+        $isColon = [regex]::IsMatch($candidate, '^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+        $isHyphen = [regex]::IsMatch($candidate, '^(?:[0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}$')
+        $isCisco = [regex]::IsMatch($candidate, '^(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}$')
+        if (-not ($isPlain -or $isColon -or $isHyphen -or $isCisco)) {
+            return $null
+        }
+
+        $normalized = ($candidate -replace '[:\.-]', '').ToUpperInvariant()
+        try {
+            $physicalAddress = [PhysicalAddress]::Parse($normalized)
+        } catch [FormatException] {
+            return $null
+        }
+
+        if ($physicalAddress.GetAddressBytes().Length -ne 6) {
+            return $null
+        }
+
+        return $physicalAddress
     }
 
-    static [string] FormatPhysicalAddress([string]$MacAddress) {
-        [string]$Delimiter = ':'
-        $str = ""
-
-        # use [PhsyicalAddress] to validate the MAC address
-        $mac = [PhysicalAddress]::new(0)
-        if (-NOT [PhysicalAddress]::TryParse($MacAddress, [ref]$mac)) {
-            throw "The MAC address is invalid. MacAddress: $MacAddress"
+    static [PhysicalAddress] ConvertString2PhysicalAddress([string]$rawMac) {
+        $physicalAddress = [PAUtils]::ParseStandardPhysicalAddressOrNull($rawMac)
+        if ($null -ne $physicalAddress) {
+            return $physicalAddress
         }
 
-        $str = $mac.ToString()
-        switch -Regex ($Delimiter) {
-            "(:|-)" {
-                # Standard 6-byte format
-                return ($str -split '(.{2})' | Where-Object { $_ }) -join $Delimiter
-            }
-            '.' {
-                # Cisco-style (xxxx.xxxx.xxxx)
-                return ($str -split '(.{4})' | Where-Object { $_ }) -join '.'
-            }
+        return [PhysicalAddress]::new([byte[]](0))
+    }
+
+    static [string] FormatPhysicalAddress([string]$macAddress) {
+        $physicalAddress = [PAUtils]::ParseStandardPhysicalAddressOrNull($macAddress)
+        if ($null -eq $physicalAddress) {
+            throw "The MAC address is invalid. MacAddress: $macAddress"
         }
 
-        return $str
+        return [PAUtils]::FormatPhysicalAddress($physicalAddress.GetAddressBytes())
+    }
+
+    static [string] FormatPhysicalAddress([byte[]]$macAddress) {
+        if ($null -eq $macAddress -or $macAddress.Length -ne 6) {
+            return ''
+        }
+
+        $parts = [string[]]::new(6)
+        for ($index = 0; $index -lt 6; $index++) {
+            $parts[$index] = '{0:X2}' -f $macAddress[$index]
+        }
+
+        return $parts -join ':'
     }
 }
 

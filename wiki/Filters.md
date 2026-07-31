@@ -42,8 +42,8 @@ Used by `New-PspktFilter` and `Set-PspktFilter`. Setting a field marks it `IsPre
 | Field | Type | Description |
 |---|---|---|
 | `Name` | `string` | Friendly name shown in session summaries. |
-| `Mac1` | `byte[]` or `string` | First MAC address (e.g. `'00-15-5D-00-48-00'` or `[byte[]]`). |
-| `Mac2` | `byte[]` or `string` | Second MAC address. |
+| `Mac1` | `byte[]` or `string` | First MAC address. Strings accept 12 hex digits, colon pairs, hyphen pairs, or Cisco-dot form. |
+| `Mac2` | `byte[]` or `string` | Second MAC address. Uses the same four string layouts as `Mac1`. |
 | `VlanId` | `uint16` | VLAN ID. |
 | `EtherType` | enum name, int, or hex string | EtherType (e.g. `'IPv4'`, `'ARP'`, `'IPv6'`, `0x0800`, `'0x0806'`). |
 | `DSCP` | enum name or numeric | IPv4 DSCP code point. |
@@ -96,6 +96,19 @@ New-PspktFilter -Name 'vmnic1' -Mac1 '00-15-5D-00-48-00'
 # Filter on subnet (10.0.0.0/24)
 New-PspktFilter -Name 'lab' -Ip1 ([System.Net.IPAddress]'10.0.0.0') -PrefixLength1 24
 ```
+
+Invalid or mixed-delimiter MAC strings throw. `Set-PspktFilter` validates the complete candidate
+before updating the original filter, so a rejected field does not leave earlier parameters applied.
+Raw `PACKETMONITOR_PROTOCOL_CONSTRAINT` values are copied when added and cannot be modified through
+typed filter setters. Raw constraints cannot be combined with VM scope.
+
+A VM-scoped session activated with no filters materializes broad MAC-only constraints. Because
+pktmon cannot remove native constraints, add all narrowing filters before activation; later filter
+adds and removals are rejected with a recreate-required error.
+
+For every session, filter removal is allowed only before native configuration is committed.
+After activation, recreate the session instead of removing a managed filter that pktmon would
+continue enforcing natively.
 
 ---
 
