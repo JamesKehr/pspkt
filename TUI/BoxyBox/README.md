@@ -72,8 +72,23 @@ All types live in the `BoxyBox` namespace.
 | Type | Responsibility |
 |---|---|
 | `OverlayBox` | A centered bordered box for notifications and prompts (e.g. "Copied to clipboard", a save-path prompt). Reports its absolute top/left so the caller can position it over the current frame. |
+| `ScrollableOverlayBox` | A stateful centered overlay viewport. Stores a cloned content list and `TopRow`; supports line, page, Home, and End movement; clamps after `SetContent`, `Resize`, and screen-size changes; and appends `[first-last/total]` to the title. |
 | `MenuItem` / `MenuDefinition` | The in-memory menu model (`Name`, `DisplayName`, `Hotkey`). |
 | `MenuRenderer` | Turns a `MenuDefinition` into option strings: `BuildAuto(def, width)` picks **Full** (`[Hotkey]DisplayName`) when it fits or **Simple** (`[Hotkey]`) when the bar is too narrow. Hotkeys and labels are colored for contrast (`SetColors`). |
+
+`ScrollableOverlayBox.Render(screenWidth, screenHeight, out top, out left)` uses the configured
+body-row count when space permits and blank-pads short content so the overlay height stays stable.
+The title suffix is `[0/0]` for empty content, `[0/total]` when no body row fits, and
+`[first-last/total]` otherwise. The base title is truncated before the suffix, preserving the
+position indicator on narrow screens.
+
+`OverlayBox` and `ScrollableOverlayBox` degrade without scrolling or throwing on tiny screens.
+A one-column overlay is borderless and can show only one cell; for a scrollable title that cell is
+the first character of the position suffix (`[`). A one-row screen renders only the top/title row,
+and non-positive screen dimensions produce no rows.
+
+The Analysis Help popup and its shortcut content are Phase 3 host integration. Phase 2 provides
+only the project-independent scrolling engine.
 
 ---
 

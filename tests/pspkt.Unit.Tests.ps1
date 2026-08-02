@@ -7373,6 +7373,22 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $lines[1].Contains('hello') | Should -BeTrue
             # centered on an 80x24 screen
             $left | Should -Be 26   # (80-30)/2 + 1
+            $top | Should -Be 11
+            $topLeft = [char]0x250c
+            $topRight = [char]0x2510
+            $bottomLeft = [char]0x2514
+            $bottomRight = [char]0x2518
+            $horizontal = [char]0x2500
+            $vertical = [char]0x2502
+            $lines | Should -Be @(
+                "$topLeft$($horizontal.ToString() * 10) Title $($horizontal.ToString() * 11)$topRight",
+                "$vertical$('hello'.PadRight(28))$vertical",
+                "$vertical$('world'.PadRight(28))$vertical",
+                "$bottomLeft$($horizontal.ToString() * 28)$bottomRight"
+            )
+            foreach ($line in $lines) {
+                [BoxyBox.AnsiText]::VisibleLength($line) | Should -Be 30
+            }
         }
         It 'clamps box width to the screen width' {
             $body = [System.Collections.Generic.List[string]]@('x')
@@ -7380,6 +7396,245 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             $lines = [BoxyBox.OverlayBox]::Build(20, 10, 100, 'T', $body, [ref]$top, [ref]$left)
             $lines[0].Length | Should -Be 20
         }
+    }
+
+    Context 'ScrollableOverlayBox' {
+        It 'scrolls line and page boundaries without leaving the viewport range' {
+            $content = [System.Collections.Generic.List[string]]::new()
+            1..10 | ForEach-Object { $content.Add("line-$_") }
+            $overlay = [BoxyBox.ScrollableOverlayBox]::new(30, 3, 'Help', $content)
+            $top = 0
+            $left = 0
+
+            $null = $overlay.Render(80, 24, [ref]$top, [ref]$left)
+            $overlay.MoveDown()
+            $overlay.PageDown()
+            $frame = $overlay.Render(80, 24, [ref]$top, [ref]$left)
+
+            $overlay.TopRow | Should -Be 4
+            $frame[1].Contains('line-5') | Should -BeTrue
+            $frame[2].Contains('line-6') | Should -BeTrue
+            $frame[3].Contains('line-7') | Should -BeTrue
+
+            $overlay.MoveEnd()
+            $overlay.MoveDown()
+            $overlay.TopRow | Should -Be 7
+            $overlay.PageUp()
+            $overlay.TopRow | Should -Be 4
+            $overlay.MoveHome()
+            $overlay.MoveUp()
+            $overlay.TopRow | Should -Be 0
+        }
+
+        It 'preserves and clamps scroll position when content changes' {
+            $initial = [System.Collections.Generic.List[string]]@(
+                'one', 'two', 'three', 'four', 'five', 'six'
+            )
+            $overlay = [BoxyBox.ScrollableOverlayBox]::new(30, 3, 'Help', $initial)
+            $top = 0
+            $left = 0
+            $null = $overlay.Render(80, 24, [ref]$top, [ref]$left)
+            $overlay.MoveEnd()
+            $overlay.TopRow | Should -Be 3
+
+            $replacement = [System.Collections.Generic.List[string]]@('alpha', 'beta')
+            $overlay.SetContent($replacement)
+            $replacement[0] = 'changed'
+            $initial[0] = 'changed'
+            $frame = $overlay.Render(80, 24, [ref]$top, [ref]$left)
+
+            $overlay.TopRow | Should -Be 0
+            $overlay.ContentCount | Should -Be 2
+            $overlay.LastVisibleRows | Should -Be 3
+            $frame[1].Contains('alpha') | Should -BeTrue
+            $frame[2].Contains('beta') | Should -BeTrue
+            $frame[3].Trim([char[]]@([char]0x2502, ' ')) | Should -Be ''
+
+            $overlay.SetContent($null)
+            $overlay.ContentCount | Should -Be 0
+            $overlay.TopRow | Should -Be 0
+        }
+
+        It 'clamps scroll position when resized' {
+            $content = [System.Collections.Generic.List[string]]::new()
+            1..10 | ForEach-Object { $content.Add("line-$_") }
+            $overlay = [BoxyBox.ScrollableOverlayBox]::new(30, 3, 'Help', $content)
+            $top = 0
+            $left = 0
+            $null = $overlay.Render(80, 6, [ref]$top, [ref]$left)
+            $overlay.MoveEnd()
+            $overlay.TopRow | Should -Be 7
+
+            $overlay.Resize(30, 8)
+            $overlay.TopRow | Should -Be 6
+            $overlay.PageUp()
+            $overlay.TopRow | Should -Be 2
+
+            $overlay.Resize(-10, -5)
+            $overlay.ConfiguredBodyRows | Should -Be 0
+            $frame = $overlay.Render(80, 24, [ref]$top, [ref]$left)
+            [BoxyBox.AnsiText]::VisibleLength($frame[0]) | Should -Be 1
+        }
+
+        It 'renders empty and single-page content without scroll availability' {
+            $empty = [BoxyBox.ScrollableOverlayBox]::new(30, 3, 'Help', $null)
+            $top = 0
+            $left = 0
+            $emptyFrame = $empty.Render(80, 24, [ref]$top, [ref]$left)
+
+            $empty.TopRow | Should -Be 0
+            $empty.CanScrollUp | Should -BeFalse
+            $empty.CanScrollDown | Should -BeFalse
+            $emptyFrame[0].Contains('[0/0]') | Should -BeTrue
+
+            $single = [BoxyBox.ScrollableOverlayBox]::new(
+                30,
+                5,
+                'Help',
+                [System.Collections.Generic.List[string]]@('one', 'two', 'three')
+            )
+            $singleFrame = $single.Render(80, 24, [ref]$top, [ref]$left)
+            $single.CanScrollUp | Should -BeFalse
+            $single.CanScrollDown | Should -BeFalse
+            $singleFrame[0].Contains('[1-3/3]') | Should -BeTrue
+        }
+
+        It 'renders title position indicators and preserves them on narrow widths' {
+            $escape = [char]27
+            $content = [System.Collections.Generic.List[string]]::new()
+            1..10 | ForEach-Object { $content.Add("line-$_") }
+            $overlay = [BoxyBox.ScrollableOverlayBox]::new(
+                30,
+                3,
+                "$escape[31mHelp$escape[0m",
+                $content
+            )
+            $top = 0
+            $left = 0
+
+            $frame = $overlay.Render(20, 10, [ref]$top, [ref]$left)
+            [BoxyBox.AnsiText]::StripAnsi($frame[0]).Contains('Help [1-3/10]') |
+                Should -BeTrue
+
+            $narrow = $overlay.Render(12, 10, [ref]$top, [ref]$left)
+            [BoxyBox.AnsiText]::StripAnsi($narrow[0]).Contains('[1-3/10]') |
+                Should -BeTrue
+
+            $oneCell = $overlay.Render(1, 3, [ref]$top, [ref]$left)
+            $oneCell[0] | Should -Be '['
+        }
+
+        It 'renders safely on zero one and two row screens' {
+            $body = [System.Collections.Generic.List[string]]@('')
+            $top = 0
+            $left = 0
+
+            $zeroWidth = [BoxyBox.OverlayBox]::Build(
+                0, 3, 1, 'T', $body, [ref]$top, [ref]$left
+            )
+            $zeroWidth.Count | Should -Be 0
+            $top | Should -Be 1
+            $left | Should -Be 1
+            [BoxyBox.OverlayBox]::Build(-1, 3, 1, 'T', $body, [ref]$top, [ref]$left).Count |
+                Should -Be 0
+            [BoxyBox.OverlayBox]::Build(30, 0, 1, 'T', $body, [ref]$top, [ref]$left).Count |
+                Should -Be 0
+            [BoxyBox.OverlayBox]::Build(30, -1, 1, 'T', $body, [ref]$top, [ref]$left).Count |
+                Should -Be 0
+            [BoxyBox.OverlayBox]::Build(30, 3, -1, 'T', $body, [ref]$top, [ref]$left) |
+                Should -Be @('T', ' ', "$([char]0x2500)")
+
+            [BoxyBox.OverlayBox]::Build(1, 1, 1, 'T', $body, [ref]$top, [ref]$left) |
+                Should -Be @('T')
+            [BoxyBox.OverlayBox]::Build(1, 2, 1, 'T', $body, [ref]$top, [ref]$left) |
+                Should -Be @('T', "$([char]0x2500)")
+            [BoxyBox.OverlayBox]::Build(1, 3, 1, '', $body, [ref]$top, [ref]$left) |
+                Should -Be @(' ', ' ', "$([char]0x2500)")
+            [BoxyBox.OverlayBox]::Build(2, 1, 2, 'T', $body, [ref]$top, [ref]$left) |
+                Should -Be @("$([char]0x250c)$([char]0x2510)")
+            [BoxyBox.OverlayBox]::Build(2, 2, 2, 'T', $body, [ref]$top, [ref]$left) |
+                Should -Be @(
+                    "$([char]0x250c)$([char]0x2510)",
+                    "$([char]0x2514)$([char]0x2518)"
+                )
+
+        }
+
+        It 'preserves scroll position through zero-row renders and restores in one frame' {
+            $content = [System.Collections.Generic.List[string]]::new()
+            1..10 | ForEach-Object { $content.Add("line-$_") }
+            $overlay = [BoxyBox.ScrollableOverlayBox]::new(30, 3, 'Help', $content)
+            $top = 0
+            $left = 0
+            $null = $overlay.Render(80, 5, [ref]$top, [ref]$left)
+            $overlay.MoveEnd()
+            $overlay.TopRow | Should -Be 7
+
+            $overlay.Render(80, 1, [ref]$top, [ref]$left).Count | Should -Be 1
+            $overlay.LastVisibleRows | Should -Be 0
+            $overlay.MoveEnd()
+            $overlay.TopRow | Should -Be 9
+
+            $overlay.Render(0, 5, [ref]$top, [ref]$left).Count | Should -Be 0
+            $top | Should -Be 1
+            $left | Should -Be 1
+            $overlay.LastVisibleRows | Should -Be 0
+            $overlay.TopRow | Should -Be 9
+            $overlay.Render(80, 0, [ref]$top, [ref]$left).Count | Should -Be 0
+            $overlay.TopRow | Should -Be 9
+
+            $restored = $overlay.Render(80, 5, [ref]$top, [ref]$left)
+            $overlay.TopRow | Should -Be 7
+            $restored[1].Contains('line-8') | Should -BeTrue
+            $restored[2].Contains('line-9') | Should -BeTrue
+            $restored[3].Contains('line-10') | Should -BeTrue
+        }
+
+        It 'normalizes dimensions and supports pre-render navigation' {
+            $source = [System.Collections.Generic.List[string]]@('alpha', 'beta', 'gamma')
+            $overlay = [BoxyBox.ScrollableOverlayBox]::new(-5, 2, 'Help', $source)
+            $source[0] = 'changed'
+
+            $overlay.LastVisibleRows | Should -Be 0
+            $overlay.MoveEnd()
+            $overlay.TopRow | Should -Be 1
+            $overlay.MoveHome()
+
+            $top = 0
+            $left = 0
+            $frame = $overlay.Render(80, 24, [ref]$top, [ref]$left)
+            [BoxyBox.AnsiText]::VisibleLength($frame[0]) | Should -Be 1
+            $frame[1] | Should -Be 'a'
+
+            $zeroRows = [BoxyBox.ScrollableOverlayBox]::new(20, 0, 'Help', $source)
+            $zeroRows.MoveEnd()
+            $zeroRows.TopRow | Should -Be 2
+            $nullContent = [BoxyBox.ScrollableOverlayBox]::new(20, 2, 'Help', $null)
+            $nullContent.ContentCount | Should -Be 0
+        }
+
+        It 'resolves ScrollableOverlayBox in a fresh child after one import' {
+            $hostPath = (Get-Process -Id $PID).Path
+            $modulePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pspkt.psm1'
+            $childScript = Join-Path $env:TEMP (
+                "pspkt-scrollable-overlay-{0}.ps1" -f [guid]::NewGuid().ToString('N')
+            )
+            try {
+                Set-Content -LiteralPath $childScript -Value @"
+`$before = 'BoxyBox.ScrollableOverlayBox' -as [type]
+Import-Module '$modulePath' -Force -ErrorAction Stop
+`$after = 'BoxyBox.ScrollableOverlayBox' -as [type]
+"Before=`$(`$null -ne `$before);After=`$(`$null -ne `$after)"
+"@
+                $output = @(& $hostPath -NoProfile -File $childScript)
+
+                $LASTEXITCODE | Should -Be 0
+                $output[-1] | Should -Be 'Before=False;After=True'
+            } finally {
+                Remove-Item -LiteralPath $childScript -Force -ErrorAction SilentlyContinue
+            }
+        }
+
     }
 }
 
@@ -7487,6 +7742,109 @@ Describe 'pspkt test prechecks' -Tag 'Precheck' {
             )
             $startSource | Should -Not -Match 'QF-VM-MAC-\$macStr'
             $startSource | Should -Match 'QF-VM-IP-\$macStr'
+        }
+    }
+
+    Context 'Scrollable overlay wiring' {
+        It 'registers ScrollableOverlayBox through the loader accelerator loop' {
+            $loaderPath = Join-Path (
+                Split-Path -Parent $PSScriptRoot
+            ) 'class\loader.psm1'
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                $loaderPath,
+                [ref]$tokens,
+                [ref]$parseErrors
+            )
+            $exportAssignment = @(
+                $ast.FindAll(
+                    {
+                        param($node)
+                        $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                            $node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                            $node.Left.VariablePath.UserPath -eq 'ExportableTypes'
+                    },
+                    $true
+                )
+            )
+            $scrollableTypes = @(
+                $exportAssignment[0].Right.FindAll(
+                    {
+                        param($node)
+                        $node -is [System.Management.Automation.Language.TypeExpressionAst] -and
+                            $node.TypeName.FullName -eq 'BoxyBox.ScrollableOverlayBox'
+                    },
+                    $true
+                )
+            )
+            $registrationLoops = @(
+                $ast.FindAll(
+                    {
+                        param($node)
+                        $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
+                            $node.Variable.VariablePath.UserPath -eq 'Type' -and
+                            $node.Condition.Extent.Text -eq '$ExportableTypes'
+                    },
+                    $true
+                ) | Where-Object {
+                    $registrationLoop = $_
+                    $loopParent = $registrationLoop.Parent
+                    $loopIsExecutable = $true
+                    while ($null -ne $loopParent) {
+                        if (
+                            $loopParent -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
+                            $loopParent -is [System.Management.Automation.Language.FunctionDefinitionAst]
+                        ) {
+                            $loopIsExecutable = $false
+                            break
+                        }
+                        $loopParent = $loopParent.Parent
+                    }
+                    if (-not $loopIsExecutable) {
+                        return $false
+                    }
+                    $registrationCalls = @(
+                        $registrationLoop.Body.FindAll(
+                            {
+                                param($node)
+                                $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+                                    $node.Static -and
+                                    $node.Expression.Extent.Text -eq '$TypeAcceleratorsClass' -and
+                                    $node.Member.Value -eq 'Add' -and
+                                    $node.Arguments.Count -eq 2 -and
+                                    $node.Arguments[0].Extent.Text -eq '$Type.FullName' -and
+                                    $node.Arguments[1].Extent.Text -eq '$Type'
+                            },
+                            $true
+                        ) | Where-Object {
+                        $parent = $_.Parent
+                        $reachesLoop = $false
+                        while ($null -ne $parent) {
+                            if ([object]::ReferenceEquals($parent, $registrationLoop)) {
+                                $reachesLoop = $true
+                                break
+                            }
+                            if (
+                                $parent -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
+                                $parent -is [System.Management.Automation.Language.FunctionDefinitionAst] -or
+                                $parent -is [System.Management.Automation.Language.ForEachStatementAst]
+                            ) {
+                                break
+                            }
+                            $parent = $parent.Parent
+                        }
+                        $reachesLoop
+                        }
+                    )
+                    $registrationCalls.Count -eq 1
+                }
+            )
+
+            $parseErrors.Count | Should -Be 0
+            $exportAssignment.Count | Should -Be 1
+            $scrollableTypes.Count | Should -Be 1
+            $registrationLoops.Count | Should -Be 1
         }
     }
 

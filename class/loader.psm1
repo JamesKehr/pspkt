@@ -109,6 +109,7 @@ if ($null -eq $typeCheck) {
         [BoxyBox.MenuDefinition]
         [BoxyBox.MenuRenderer]
         [BoxyBox.OverlayBox]
+        [BoxyBox.ScrollableOverlayBox]
         [BoxyBox.Justify]
         [PACKETMONITOR_REALTIME_STREAM_CONFIGURATION]
         [PACKETMONITOR_STREAM_DATA_DESCRIPTOR]
