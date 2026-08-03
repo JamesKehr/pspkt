@@ -149,9 +149,10 @@ namespace BoxyBox
 
         private static bool InRanges(int cp, int[] ranges)
         {
+            const int firstRangeStartIndex = 0;
             int lo = 0;
             int hi = ranges.Length / 2 - 1;
-            if (cp < ranges[0] || cp > ranges[hi * 2 + 1]) return false;
+            if (cp < ranges[firstRangeStartIndex] || cp > ranges[hi * 2 + 1]) return false;
             while (lo <= hi)
             {
                 int mid = (lo + hi) / 2;
@@ -667,7 +668,7 @@ namespace BoxyBox
             int row = 0;
             if (ShowTopBorder)
             {
-                result[0] = TopBorder();
+                result[row] = TopBorder();
                 row = 1;
             }
             for (int r = 0; r < ContentRows; r++)
@@ -865,7 +866,6 @@ namespace BoxyBox
         private readonly int _capacity;
         private readonly int _trimSlack;
         private readonly Box _box;
-        // Sequence number of _lines[0]. Increases when the front is trimmed.
         private long _baseSeq = 0;
 
         public TextBox(int width, int height, int capacity)
@@ -1580,7 +1580,7 @@ namespace BoxyBox
             {
                 top = 1;
                 left = 1;
-                return new string[0];
+                return Array.Empty<string>();
             }
 
             if (boxWidth < 1) boxWidth = 1;
@@ -1730,7 +1730,7 @@ namespace BoxyBox
                 ClampTopRow();
                 top = 1;
                 left = 1;
-                return new string[0];
+                return Array.Empty<string>();
             }
 
             int effectiveBoxWidth = Math.Min(_boxWidth, screenWidth);

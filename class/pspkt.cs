@@ -317,6 +317,7 @@ public static class PacketBytePool
     // copies sitting in each ring. The boxes are themselves pooled so we don't trade a
     // per-packet byte[] allocation for a per-packet int[] allocation.
     private const int MaxLeaseBoxes = 8192;
+    private const int LeaseCountIndex = 0;
     private static readonly ArrayStack<int[]> _leaseBoxes = new ArrayStack<int[]>(MaxLeaseBoxes);
     // Incremented if a lease refcount is decremented below zero, which can only happen on a
     // double-release bug. Zero in a correct build; the concurrency harness asserts on it.
@@ -333,7 +334,7 @@ public static class PacketBytePool
         {
             box = new int[1];
         }
-        Volatile.Write(ref box[0], initialCount);
+        Volatile.Write(ref box[LeaseCountIndex], initialCount);
         return box;
     }
 
@@ -357,7 +358,7 @@ public static class PacketBytePool
             if (buffer != null) Return(buffer);
             return;
         }
-        int remaining = Interlocked.Decrement(ref lease[0]);
+        int remaining = Interlocked.Decrement(ref lease[LeaseCountIndex]);
         if (remaining == 0)
         {
             if (buffer != null) Return(buffer);
