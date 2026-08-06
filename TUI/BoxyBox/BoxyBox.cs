@@ -149,9 +149,10 @@ namespace BoxyBox
 
         private static bool InRanges(int cp, int[] ranges)
         {
+            const int firstRangeStartIndex = 0;
             int lo = 0;
             int hi = ranges.Length / 2 - 1;
-            if (cp < ranges[0] || cp > ranges[hi * 2 + 1]) return false;
+            if (cp < ranges[firstRangeStartIndex] || cp > ranges[hi * 2 + 1]) return false;
             while (lo <= hi)
             {
                 int mid = (lo + hi) / 2;
@@ -667,7 +668,7 @@ namespace BoxyBox
             int row = 0;
             if (ShowTopBorder)
             {
-                result[0] = TopBorder();
+                result[row] = TopBorder();
                 row = 1;
             }
             for (int r = 0; r < ContentRows; r++)
@@ -865,7 +866,6 @@ namespace BoxyBox
         private readonly int _capacity;
         private readonly int _trimSlack;
         private readonly Box _box;
-        // Sequence number of _lines[0]. Increases when the front is trimmed.
         private long _baseSeq = 0;
 
         public TextBox(int width, int height, int capacity)
@@ -1326,7 +1326,18 @@ namespace BoxyBox
         public void MoveUp()   { if (_selected > 0) { _selected--; EnsureVisible(); } }
         public void MoveDown() { if (_selected < _rows.Count - 1) { _selected++; EnsureVisible(); } }
         public void PageUp()   { _selected = Math.Max(0, _selected - ContentRows); EnsureVisible(); }
-        public void PageDown() { _selected = Math.Min(_rows.Count - 1, _selected + ContentRows); EnsureVisible(); }
+        public void PageDown() { _selected = Math.Max(0, Math.Min(_rows.Count - 1, _selected + ContentRows)); EnsureVisible(); }
+        public void MoveToFirstRow()
+        {
+            _selected = 0;
+            EnsureVisible();
+        }
+
+        public void MoveToLastRow()
+        {
+            _selected = Math.Max(0, _rows.Count - 1);
+            EnsureVisible();
+        }
 
         private TreeNode SelectedNode()
         {
@@ -1456,7 +1467,6 @@ namespace BoxyBox
         }
     }
 
-    /// <summary>A single menu entry. Rendered as "[Hotkey]DisplayName" (Full) or "[Hotkey]" (Simple).</summary>
     public sealed class MenuItem
     {
         public string Name;        // logical id (matched by the loop's key handler)
@@ -1566,20 +1576,42 @@ namespace BoxyBox
         /// </summary>
         public static string[] Build(int screenWidth, int screenHeight, int boxWidth, string title, IList<string> body, out int top, out int left)
         {
-            if (boxWidth < 8) boxWidth = 8;
+            if (screenWidth <= 0 || screenHeight <= 0)
+            {
+                top = 1;
+                left = 1;
+                return new string[] { };
+            }
+
+            if (boxWidth < 1) boxWidth = 1;
             if (boxWidth > screenWidth) boxWidth = screenWidth;
             int bodyCount = body != null ? body.Count : 0;
-            int height = bodyCount + 2; // top border + body + bottom border
-            if (height < 3) height = 3;
-            if (height > screenHeight) height = screenHeight;
+            int height = screenHeight == 1 ? 1 : Math.Min(screenHeight, bodyCount + 2);
 
             left = Math.Max(1, (screenWidth - boxWidth) / 2 + 1);
             top = Math.Max(1, (screenHeight - height) / 2 + 1);
 
             var lines = new List<string>(height);
+            if (boxWidth == 1)
+            {
+                lines.Add(AnsiText.FitToWidth(title ?? string.Empty, 1));
+                int narrowBodyRows = height - 2;
+                for (int i = 0; i < narrowBodyRows; i++)
+                {
+                    string text = body != null && i < body.Count ? body[i] : string.Empty;
+                    lines.Add(AnsiText.FitToWidth(text ?? string.Empty, 1));
+                }
+                if (height > 1)
+                {
+                    lines.Add(BoxChars.Horizontal.ToString());
+                }
+                return lines.ToArray();
+            }
+
             // Top border with centered title.
             string t = title ?? string.Empty;
-            if (AnsiText.VisibleLength(t) > boxWidth - 4) t = AnsiText.TakeVisiblePrefix(t, Math.Max(0, boxWidth - 4));
+            int titleBudget = Math.Max(0, boxWidth - 4);
+            if (AnsiText.VisibleLength(t) > titleBudget) t = AnsiText.TakeVisiblePrefix(t, titleBudget);
             int inner = boxWidth - 2;
             int titleRoom = inner - AnsiText.VisibleLength(t);
             int leftFill = Math.Max(0, titleRoom / 2);
@@ -1591,6 +1623,11 @@ namespace BoxyBox
             tb.Append(new string(BoxChars.Horizontal, rightFill));
             tb.Append(BoxChars.TopRight);
             lines.Add(tb.ToString());
+
+            if (height == 1)
+            {
+                return lines.ToArray();
+            }
 
             int bodyRows = height - 2;
             for (int i = 0; i < bodyRows; i++)
@@ -1607,6 +1644,218 @@ namespace BoxyBox
             lines.Add(bb.ToString());
 
             return lines.ToArray();
+        }
+    }
+
+    public sealed class ScrollableOverlayBox
+    {
+        private int _boxWidth;
+        private int _configuredBodyRows;
+        private readonly string _title;
+        private List<string> _content;
+        private int _topRow;
+        private int _lastVisibleRows;
+        private int _lastScreenBodyCapacity;
+        private bool _hasRendered;
+
+        public ScrollableOverlayBox(int boxWidth, int bodyRows, string title, IList<string> content)
+        {
+            _boxWidth = Math.Max(1, boxWidth);
+            _configuredBodyRows = Math.Max(0, bodyRows);
+            _title = title ?? string.Empty;
+            _content = CopyContent(content);
+        }
+
+        public int TopRow { get { return _topRow; } }
+        public int ContentCount { get { return _content.Count; } }
+        public int ConfiguredBodyRows { get { return _configuredBodyRows; } }
+        public int LastVisibleRows { get { return _lastVisibleRows; } }
+        public bool CanScrollUp { get { return _topRow > 0; } }
+        public bool CanScrollDown { get { return _topRow < GetMaximumTopRow(); } }
+
+        public void SetContent(IList<string> content)
+        {
+            _content = CopyContent(content);
+            ClampTopRow();
+        }
+
+        public void Resize(int boxWidth, int bodyRows)
+        {
+            _boxWidth = Math.Max(1, boxWidth);
+            _configuredBodyRows = Math.Max(0, bodyRows);
+            ClampTopRow();
+        }
+
+        public void MoveUp()
+        {
+            _topRow--;
+            ClampTopRow();
+        }
+
+        public void MoveDown()
+        {
+            _topRow++;
+            ClampTopRow();
+        }
+
+        public void PageUp()
+        {
+            _topRow -= Math.Max(1, GetCurrentVisibleRows());
+            ClampTopRow();
+        }
+
+        public void PageDown()
+        {
+            _topRow += Math.Max(1, GetCurrentVisibleRows());
+            ClampTopRow();
+        }
+
+        public void MoveHome()
+        {
+            _topRow = 0;
+        }
+
+        public void MoveEnd()
+        {
+            _topRow = GetMaximumTopRow();
+        }
+
+        public string[] Render(int screenWidth, int screenHeight, out int top, out int left)
+        {
+            if (screenWidth <= 0 || screenHeight <= 0)
+            {
+                _hasRendered = true;
+                _lastScreenBodyCapacity = 0;
+                _lastVisibleRows = 0;
+                ClampTopRow();
+                top = 1;
+                left = 1;
+                return new string[] { };
+            }
+
+            int effectiveBoxWidth = Math.Min(_boxWidth, screenWidth);
+            _hasRendered = true;
+            _lastScreenBodyCapacity = Math.Max(0, screenHeight - 2);
+            int visibleRows = GetCurrentVisibleRows();
+            _lastVisibleRows = visibleRows;
+            ClampTopRow();
+
+            List<string> viewport = new List<string>(visibleRows);
+            for (int index = 0; index < visibleRows; index++)
+            {
+                int contentIndex = _topRow + index;
+                viewport.Add(contentIndex < _content.Count ? _content[contentIndex] : string.Empty);
+            }
+
+            string title = BuildTitle(effectiveBoxWidth, visibleRows);
+            return OverlayBox.Build(
+                screenWidth,
+                screenHeight,
+                effectiveBoxWidth,
+                title,
+                viewport,
+                out top,
+                out left);
+        }
+
+        private static List<string> CopyContent(IList<string> content)
+        {
+            List<string> copy = new List<string>();
+            if (content != null)
+            {
+                for (int index = 0; index < content.Count; index++)
+                {
+                    copy.Add(content[index] ?? string.Empty);
+                }
+            }
+            return copy;
+        }
+
+        private int GetCurrentVisibleRows()
+        {
+            if (!_hasRendered)
+            {
+                return _configuredBodyRows;
+            }
+            return Math.Min(_configuredBodyRows, _lastScreenBodyCapacity);
+        }
+
+        private int GetCurrentClampRows()
+        {
+            if (_content.Count == 0)
+            {
+                return 0;
+            }
+            return Math.Max(1, GetCurrentVisibleRows());
+        }
+
+        private int GetMaximumTopRow()
+        {
+            if (_content.Count == 0)
+            {
+                return 0;
+            }
+            return Math.Max(0, _content.Count - GetCurrentClampRows());
+        }
+
+        private void ClampTopRow()
+        {
+            int maximumTopRow = GetMaximumTopRow();
+            if (_topRow < 0)
+            {
+                _topRow = 0;
+            }
+            else if (_topRow > maximumTopRow)
+            {
+                _topRow = maximumTopRow;
+            }
+        }
+
+        private string BuildTitle(int effectiveBoxWidth, int visibleRows)
+        {
+            int titleBudget = effectiveBoxWidth == 1 ? 1 : Math.Max(0, effectiveBoxWidth - 4);
+            if (titleBudget == 0)
+            {
+                return string.Empty;
+            }
+
+            string suffix;
+            if (_content.Count == 0)
+            {
+                suffix = "[0/0]";
+            }
+            else if (visibleRows == 0)
+            {
+                suffix = "[0/" + _content.Count + "]";
+            }
+            else
+            {
+                int first = _topRow + 1;
+                int last = Math.Min(_content.Count, _topRow + visibleRows);
+                suffix = "[" + first + "-" + last + "/" + _content.Count + "]";
+            }
+
+            int suffixLength = AnsiText.VisibleLength(suffix);
+            if (suffixLength >= titleBudget)
+            {
+                return AnsiText.TakeVisiblePrefix(suffix, titleBudget);
+            }
+            if (string.IsNullOrEmpty(_title))
+            {
+                return suffix;
+            }
+
+            int baseBudget = titleBudget - suffixLength - 1;
+            if (baseBudget <= 0)
+            {
+                return suffix;
+            }
+            string baseTitle = AnsiText.TakeVisiblePrefix(_title, baseBudget);
+            if (AnsiText.VisibleLength(baseTitle) == 0)
+            {
+                return suffix;
+            }
+            return baseTitle + " " + suffix;
         }
     }
 }

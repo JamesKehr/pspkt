@@ -91,10 +91,12 @@ Analysis Text Box before lines are added.
 | `Tab` | Switch the active box (Text ⇄ Details) |
 | `↑` / `↓` | Move the selection up/down one line |
 | `PgUp` / `PgDn` | Move by a page |
+| `Home` / `End` | **Text:** select the oldest / newest retained packet. **Details:** move to the first / last detail row |
 | `→` / `←` | **Details:** expand / collapse the selected node · **Text:** left/right justify |
 | `Ctrl+→` / `Ctrl+←` | **Details:** expand all / collapse all |
 | `Ctrl+↑` / `Ctrl+↓` | **Details:** previous / next packet (moves the Text selection and reparses) |
 | `Ctrl+PgUp` / `Ctrl+PgDn` | **Details:** page the Text Box up / down a page (moves the Text selection and reparses) without leaving the Details Box |
+| `Ctrl+Home` / `Ctrl+End` | **Details:** select the oldest / newest retained Text packet without changing focus. In Text, Ctrl is ignored and behavior matches plain Home / End |
 | `r` | **Resume** — leave Focus, clear any pause, resume live scrolling |
 | `p` | **Pause** collection (stays in Focus) |
 | `w` | **Save pcapng** |
@@ -148,6 +150,8 @@ into view or collapsed.
   colors readable (blue when its box is active, gray when it is not).
 - Resizing the terminal **rebuilds the layout** in place so the boxes track the new size.
 - The detail tree uses a plain two-space indent (no `├`/`└` connectors) by default.
+- A parser failure for one selected packet is shown as a `packet detail unavailable` node; it
+  does not terminate the Analysis loop.
 
 ## Capture size and runtime warnings
 

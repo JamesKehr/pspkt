@@ -4,6 +4,23 @@
 $classPath = Join-Path -Path $PSScriptRoot -ChildPath '.'
 $parsersPath = Join-Path -Path (Split-Path $PSScriptRoot -Parent) -ChildPath 'Parsers'
 $tuiPath = Join-Path -Path (Split-Path $PSScriptRoot -Parent) -ChildPath 'TUI'
+$testNativeApiEnabled = $env:PSPKT_TEST_NATIVE_API -eq '1'
+$typeCheck = 'PktMonApi' -as [type]
+$requiredTypeNames = @(
+    'PktMonApi',
+    'IPspktNativeApi',
+    'PspktNativeApi',
+    'BoxyBox.ScrollableOverlayBox'
+)
+
+if ($null -ne $typeCheck) {
+    $missingTypes = @($requiredTypeNames | Where-Object { $null -eq ($_ -as [type]) })
+    $buildMarkerField = $typeCheck.GetField('BuildMarker')
+    $buildMarker = if ($null -eq $buildMarkerField) { $null } else { [string]$buildMarkerField.GetValue($null) }
+    if ($missingTypes.Count -gt 0 -or $buildMarker -ne 'pspkt-csharp-r4-20260803') {
+        throw "A fresh PowerShell process is required because stale pspkt C# types are already loaded. Missing current types: $($missingTypes -join ', ')."
+    }
+}
 
 # Collect .cs files from class/, Parsers/, and TUI/ (recursively).
 $csFiles = @()
@@ -14,12 +31,23 @@ if (Test-Path $parsersPath) {
 if (Test-Path $tuiPath) {
     $csFiles += Get-ChildItem -Path $tuiPath -Filter '*.cs' -File -Recurse -ErrorAction SilentlyContinue
 }
+if ($testNativeApiEnabled) {
+    if ($null -ne $typeCheck -and $null -eq ('PspktNativeApiFake' -as [type])) {
+        throw 'PSPKT_TEST_NATIVE_API requires a fresh PowerShell process before pspkt types are loaded.'
+    }
+
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $nativeApiFixturePath = Join-Path $repoRoot 'tests\fixtures\PspktNativeApiFake.cs'
+    if (-not (Test-Path -LiteralPath $nativeApiFixturePath)) {
+        throw "Native API test fixture is missing: $nativeApiFixturePath"
+    }
+    $csFiles += Get-Item -LiteralPath $nativeApiFixturePath
+}
 
 if (-not $csFiles -or $csFiles.Count -eq 0) {
     throw "No C# source files found in $classPath or $parsersPath. Module installation may be corrupt."
 }
 
-$typeCheck = 'PktMonApi' -as [type]
 if ($null -eq $typeCheck) {
     # Collect all source, deduplicate using directives at the top.
     $usingSet = [System.Collections.Generic.HashSet[string]]::new()
@@ -47,10 +75,12 @@ if ($null -eq $typeCheck) {
     } catch {
         throw "Failed to compile pspkt C# classes: $_"
     }
+}
 
-    # create the type accelerator
-    $ExportableTypes =@(
+# create the type accelerator
+$ExportableTypes =@(
         [PktMonApi]
+        [IPspktNativeApi]
         [SpscPacketRingBuffer]
         [PacketParseHelper]
         [PacketFormatter]
@@ -95,6 +125,7 @@ if ($null -eq $typeCheck) {
         [BoxyBox.MenuDefinition]
         [BoxyBox.MenuRenderer]
         [BoxyBox.OverlayBox]
+        [BoxyBox.ScrollableOverlayBox]
         [BoxyBox.Justify]
         [PACKETMONITOR_REALTIME_STREAM_CONFIGURATION]
         [PACKETMONITOR_STREAM_DATA_DESCRIPTOR]
@@ -102,30 +133,53 @@ if ($null -eq $typeCheck) {
         [PACKETMONITOR_STREAM_DATA_CALLBACK]
     )
 
-    # Get the internal TypeAccelerators class to use its static methods.
-    $TypeAcceleratorsClass = [psobject].Assembly.GetType(
-        'System.Management.Automation.TypeAccelerators'
-    )
+# Get the internal TypeAccelerators class to use its static methods.
+$TypeAcceleratorsClass = [psobject].Assembly.GetType(
+    'System.Management.Automation.TypeAccelerators'
+)
 
-    # Ensure none of the types would clobber an existing type accelerator.
-    # If a type accelerator with the same name exists, throw an exception.
-    $ExistingTypeAccelerators = $TypeAcceleratorsClass::Get
-    foreach ($Type in $ExportableTypes) {
-        if ($Type.FullName -in $ExistingTypeAccelerators.Keys) {
-            # silently throw a message to the verbose stream
-            Write-Verbose @"
+# Ensure none of the types would clobber an existing type accelerator.
+# If a type accelerator with the same name exists, throw an exception.
+$ExistingTypeAccelerators = $TypeAcceleratorsClass::Get
+$RegisteredTypeAccelerators = [System.Collections.ArrayList]::new()
+$PspktOwnedAcceleratorTypes = [AppDomain]::CurrentDomain.GetData('pspkt-owned-accelerators')
+if ($null -eq $PspktOwnedAcceleratorTypes) {
+    $PspktOwnedAcceleratorTypes = [hashtable]::Synchronized(@{})
+    [AppDomain]::CurrentDomain.SetData('pspkt-owned-accelerators', $PspktOwnedAcceleratorTypes)
+}
+foreach ($Type in $ExportableTypes) {
+    if ($Type.FullName -in $ExistingTypeAccelerators.Keys) {
+        if (
+            -not $PspktOwnedAcceleratorTypes.ContainsKey($Type.FullName) -or
+            -not [object]::ReferenceEquals(
+                $PspktOwnedAcceleratorTypes[$Type.FullName],
+                $ExistingTypeAccelerators[$Type.FullName]
+            )
+        ) {
+            throw "Type accelerator '$($Type.FullName)' is already registered to a different type."
+        }
+        # silently throw a message to the verbose stream
+        Write-Verbose @"
 Unable to register type accelerator[$($Type.FullName)]. The Accelerator already exists.
 "@
 
-        } else {
-            $TypeAcceleratorsClass::Add($Type.FullName, $Type)
+    } else {
+        $TypeAcceleratorsClass::Add($Type.FullName, $Type)
+        $PspktOwnedAcceleratorTypes[$Type.FullName] = $Type
+        $null = $RegisteredTypeAccelerators.Add($Type)
+    }
+}
+
+# Remove type accelerators when the module is removed.
+$MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
+    $CurrentTypeAccelerators = $TypeAcceleratorsClass::Get
+    foreach($Type in $RegisteredTypeAccelerators) {
+        if (
+            $CurrentTypeAccelerators.ContainsKey($Type.FullName) -and
+            [object]::ReferenceEquals($CurrentTypeAccelerators[$Type.FullName], $Type)
+        ) {
+            $null = $TypeAcceleratorsClass::Remove($Type.FullName)
+            $null = $PspktOwnedAcceleratorTypes.Remove($Type.FullName)
         }
     }
-
-    # Remove type accelerators when the module is removed.
-    $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
-        foreach($Type in $ExportableTypes) {
-            $TypeAcceleratorsClass::Remove($Type.FullName)
-        }
-    }.GetNewClosure()
-}
+}.GetNewClosure()

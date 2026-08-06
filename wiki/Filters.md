@@ -42,8 +42,8 @@ Used by `New-PspktFilter` and `Set-PspktFilter`. Setting a field marks it `IsPre
 | Field | Type | Description |
 |---|---|---|
 | `Name` | `string` | Friendly name shown in session summaries. |
-| `Mac1` | `byte[]` or `string` | First MAC address (e.g. `'00-15-5D-00-48-00'` or `[byte[]]`). |
-| `Mac2` | `byte[]` or `string` | Second MAC address. |
+| `Mac1` | `byte[]` or `string` | First MAC address. Strings accept 12 hex digits, colon pairs, hyphen pairs, or Cisco-dot form. |
+| `Mac2` | `byte[]` or `string` | Second MAC address. Uses the same four string layouts as `Mac1`. |
 | `VlanId` | `uint16` | VLAN ID. |
 | `EtherType` | enum name, int, or hex string | EtherType (e.g. `'IPv4'`, `'ARP'`, `'IPv6'`, `0x0800`, `'0x0806'`). |
 | `DSCP` | enum name or numeric | IPv4 DSCP code point. |
@@ -97,6 +97,33 @@ New-PspktFilter -Name 'vmnic1' -Mac1 '00-15-5D-00-48-00'
 New-PspktFilter -Name 'lab' -Ip1 ([System.Net.IPAddress]'10.0.0.0') -PrefixLength1 24
 ```
 
+Invalid or mixed-delimiter MAC strings throw. `Set-PspktFilter` validates the complete candidate
+before updating the original filter, so a rejected field does not leave earlier parameters applied.
+Raw `PACKETMONITOR_PROTOCOL_CONSTRAINT` values are copied when added and cannot be modified through
+typed filter setters. Raw constraints cannot be combined with VM scope.
+
+Sessions store their own filter snapshots. Changing the original filter object after
+`Add-PspktFilter` does not change the session's pending or committed constraint. Retrieve the
+session-owned filter before activation if you need to adjust pending configuration.
+
+A VM-scoped session activated with no filters materializes broad MAC-only constraints. Because
+pktmon cannot remove native constraints, add all narrowing filters before activation; later filter
+adds and removals are rejected with a recreate-required error.
+
+For every session, filter removal is allowed only before native configuration is committed.
+After activation, committed filters also cannot be changed through `Set-PspktFilter`; recreate
+the session instead of changing or removing managed state that pktmon would continue enforcing
+natively.
+
+The filter object passed to `Add-PspktFilter` keeps a stable identity while the session stores an
+isolated snapshot, so the original object can still be passed to `Remove-PspktFilter` before that
+snapshot is committed. On a restarted session, newly added uncommitted filters may be removed even
+when older filters are already committed.
+
+When a session has VM scope, a filter with an explicit `Mac1` must use one of that VM's
+canonical vmNIC MAC addresses. A foreign pre-stamped MAC is rejected instead of bypassing the
+VM capture boundary.
+
 ---
 
 ## Set-PspktFilter
@@ -105,7 +132,9 @@ New-PspktFilter -Name 'lab' -Ip1 ([System.Net.IPAddress]'10.0.0.0') -PrefixLengt
 Updates an existing pspktFilter.
 
 ### Description
-Accepts a filter from parameter or pipeline and applies any bound filter fields.
+Accepts a filter from parameter or pipeline and applies any bound filter fields. Filters can be
+updated until they are committed to a native session; committed filters require session
+recreation.
 
 ### Syntax
 ```powershell

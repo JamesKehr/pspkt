@@ -317,6 +317,7 @@ public static class PacketBytePool
     // copies sitting in each ring. The boxes are themselves pooled so we don't trade a
     // per-packet byte[] allocation for a per-packet int[] allocation.
     private const int MaxLeaseBoxes = 8192;
+    private const int LeaseCountIndex = 0;
     private static readonly ArrayStack<int[]> _leaseBoxes = new ArrayStack<int[]>(MaxLeaseBoxes);
     // Incremented if a lease refcount is decremented below zero, which can only happen on a
     // double-release bug. Zero in a correct build; the concurrency harness asserts on it.
@@ -333,7 +334,7 @@ public static class PacketBytePool
         {
             box = new int[1];
         }
-        Volatile.Write(ref box[0], initialCount);
+        Volatile.Write(ref box[LeaseCountIndex], initialCount);
         return box;
     }
 
@@ -357,7 +358,7 @@ public static class PacketBytePool
             if (buffer != null) Return(buffer);
             return;
         }
-        int remaining = Interlocked.Decrement(ref lease[0]);
+        int remaining = Interlocked.Decrement(ref lease[LeaseCountIndex]);
         if (remaining == 0)
         {
             if (buffer != null) Return(buffer);
@@ -538,11 +539,131 @@ public struct PACKETMONITOR_PROTOCOL_CONSTRAINT
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 public delegate void PACKETMONITOR_STREAM_DATA_CALLBACK(IntPtr zeroPtr, PACKETMONITOR_STREAM_DATA_DESCRIPTOR descriptor);
 
+public enum PspktNativeOperation
+{
+    Initialize = 0,
+    Uninitialize = 1,
+    EnumDataSources = 2,
+    CreateLiveSession = 3,
+    CloseSessionHandle = 4,
+    CreateRealtimeStream = 5,
+    CloseRealtimeStream = 6,
+    SetSessionActive = 7,
+    AddSingleDataSource = 8,
+    AddCaptureConstraint = 9,
+    AttachOutput = 10
+}
+
+public interface IPspktNativeApi
+{
+    int PacketMonitorInitialize(uint apiVersion, IntPtr reserved, out IntPtr handle);
+    void PacketMonitorUninitialize(IntPtr handle);
+    int PacketMonitorEnumDataSources(
+        IntPtr handle,
+        uint sourceKind,
+        bool showHidden,
+        ulong bufferCapacity,
+        out ulong bytesNeeded,
+        IntPtr buffer);
+    int PacketMonitorCreateLiveSession(IntPtr handle, string sessionName, out IntPtr session);
+    void PacketMonitorCloseSessionHandle(IntPtr handle);
+    int PacketMonitorCreateRealtimeStream(
+        IntPtr handle,
+        ref PACKETMONITOR_REALTIME_STREAM_CONFIGURATION configuration,
+        out IntPtr realtimeStream);
+    void PacketMonitorCloseRealtimeStream(IntPtr realtimeStream);
+    int PacketMonitorSetSessionActive(IntPtr session, bool active);
+    int PacketMonitorAddSingleDataSourceToSession(IntPtr session, IntPtr dataSourceSpec);
+    int PacketMonitorAddCaptureConstraint(IntPtr session, IntPtr captureConstraint);
+    int PacketMonitorAttachOutputToSession(IntPtr session, IntPtr realtimeStream);
+}
+
+public sealed class PspktNativeApi : IPspktNativeApi
+{
+    public int PacketMonitorInitialize(uint apiVersion, IntPtr reserved, out IntPtr handle)
+    {
+        return PktMonApi.PacketMonitorInitialize(apiVersion, reserved, out handle);
+    }
+
+    public void PacketMonitorUninitialize(IntPtr handle)
+    {
+        PktMonApi.PacketMonitorUninitialize(handle);
+    }
+
+    public int PacketMonitorEnumDataSources(
+        IntPtr handle,
+        uint sourceKind,
+        bool showHidden,
+        ulong bufferCapacity,
+        out ulong bytesNeeded,
+        IntPtr buffer)
+    {
+        return PktMonApi.PacketMonitorEnumDataSources(
+            handle,
+            sourceKind,
+            showHidden,
+            bufferCapacity,
+            out bytesNeeded,
+            buffer);
+    }
+
+    public int PacketMonitorCreateLiveSession(IntPtr handle, string sessionName, out IntPtr session)
+    {
+        return PktMonApi.PacketMonitorCreateLiveSession(handle, sessionName, out session);
+    }
+
+    public void PacketMonitorCloseSessionHandle(IntPtr handle)
+    {
+        PktMonApi.PacketMonitorCloseSessionHandle(handle);
+    }
+
+    public int PacketMonitorCreateRealtimeStream(
+        IntPtr handle,
+        ref PACKETMONITOR_REALTIME_STREAM_CONFIGURATION configuration,
+        out IntPtr realtimeStream)
+    {
+        return PktMonApi.PacketMonitorCreateRealtimeStream(
+            handle,
+            ref configuration,
+            out realtimeStream);
+    }
+
+    public void PacketMonitorCloseRealtimeStream(IntPtr realtimeStream)
+    {
+        PktMonApi.PacketMonitorCloseRealtimeStream(realtimeStream);
+    }
+
+    public int PacketMonitorSetSessionActive(IntPtr session, bool active)
+    {
+        return PktMonApi.PacketMonitorSetSessionActive(session, active);
+    }
+
+    public int PacketMonitorAddSingleDataSourceToSession(IntPtr session, IntPtr dataSourceSpec)
+    {
+        return PktMonApi.PacketMonitorAddSingleDataSourceToSession(session, dataSourceSpec);
+    }
+
+    public int PacketMonitorAddCaptureConstraint(IntPtr session, IntPtr captureConstraint)
+    {
+        return PktMonApi.PacketMonitorAddCaptureConstraint(session, captureConstraint);
+    }
+
+    public int PacketMonitorAttachOutputToSession(IntPtr session, IntPtr realtimeStream)
+    {
+        return PktMonApi.PacketMonitorAttachOutputToSession(session, realtimeStream);
+    }
+}
+
 public static class PktMonApi
 {
-    public static PACKETMONITOR_STREAM_DATA_CALLBACK DataCallback;
+    public const string BuildMarker = "pspkt-csharp-r4-20260803";
+    public static readonly PACKETMONITOR_STREAM_DATA_CALLBACK DataCallback =
+        new PACKETMONITOR_STREAM_DATA_CALLBACK(PacketDataCallBack);
     private static SpscPacketRingBuffer _ringBuffer = new SpscPacketRingBuffer(1048576);
     private static volatile bool _captureActive;
+    private static bool _consoleCaptureEnabled = true;
+    private static IntPtr _captureOwner;
+    private static volatile bool _consumerActive;
 
     // File writer integration — when set, packets are also written to file.
     // Use Volatile.Read in the callback to ensure consistent snapshot.
@@ -743,8 +864,15 @@ public static class PktMonApi
             return;
         }
 
-        // One reference for the console ring, plus one for the writer ring when writing to file.
-        int[] lease = writeToFile ? PacketBytePool.RentLease(2) : null;
+        bool writeToConsole = Volatile.Read(ref _consoleCaptureEnabled);
+        int consumerCount = (writeToConsole ? 1 : 0) + (writeToFile ? 1 : 0);
+        if (consumerCount == 0)
+        {
+            PacketBytePool.Return(byteArray);
+            return;
+        }
+
+        int[] lease = consumerCount > 1 ? PacketBytePool.RentLease(consumerCount) : null;
 
         PSPacketData tmp = new PSPacketData
         (
@@ -761,12 +889,13 @@ public static class PktMonApi
         // (PacketLineFormatter.FormatBatch). Adding here would require a Monitor.Enter
         // on every callback, which is the largest avoidable cost on the producer thread.
 
-        bool enqueued = _ringBuffer.Enqueue(tmp);
-        if (!enqueued)
+        if (writeToConsole)
         {
-            // Console consumer will never see it — drop the console reference (returns the
-            // buffer immediately when unshared, or decrements the lease when shared).
-            PacketBytePool.ReleaseBuffer(byteArray, lease);
+            bool enqueued = _ringBuffer.Enqueue(tmp);
+            if (!enqueued)
+            {
+                PacketBytePool.ReleaseBuffer(byteArray, lease);
+            }
         }
 
         // Also write to file if active (use the same snapshot taken above).
@@ -837,6 +966,37 @@ public static class PktMonApi
     }
 
     public static bool IsCaptureActive { get { return _captureActive; } }
+    public static bool IsConsumerActive { get { return _consumerActive; } }
+    public static bool HasCaptureOwner { get { return Volatile.Read(ref _captureOwner) != IntPtr.Zero; } }
+    public static int ConfiguredRingCapacity { get { return _ringBuffer.Capacity; } }
+
+    public static bool TryBeginCapture(IntPtr owner)
+    {
+        if (owner == IntPtr.Zero) return false;
+        return Interlocked.CompareExchange(ref _captureOwner, owner, IntPtr.Zero) == IntPtr.Zero;
+    }
+
+    public static bool IsCaptureOwner(IntPtr owner)
+    {
+        return owner != IntPtr.Zero && Volatile.Read(ref _captureOwner) == owner;
+    }
+
+    public static void EndCapture(IntPtr owner)
+    {
+        if (owner == IntPtr.Zero) return;
+        Interlocked.CompareExchange(ref _captureOwner, IntPtr.Zero, owner);
+    }
+
+    public static void SetConsoleCaptureEnabled(bool enabled)
+    {
+        Volatile.Write(ref _consoleCaptureEnabled, enabled);
+    }
+    public static bool IsConsoleCaptureEnabled { get { return Volatile.Read(ref _consoleCaptureEnabled); } }
+
+    public static void SetConsumerActive(bool active)
+    {
+        _consumerActive = active;
+    }
 
     /// <summary>
     /// Configure the ring buffer capacity. Must be called BEFORE the realtime stream is created.
@@ -915,10 +1075,15 @@ public static class PktMonApi
         catch { }
     }
     
+    public static void PrepareRealtimeStreamConfiguration(
+        ref PACKETMONITOR_REALTIME_STREAM_CONFIGURATION configuration)
+    {
+        configuration.DataCallback = Marshal.GetFunctionPointerForDelegate(DataCallback);
+    }
+
     public static IntPtr CreateRealtimeStream(IntPtr pktmonHandle, PACKETMONITOR_REALTIME_STREAM_CONFIGURATION cfg)
     {
-        DataCallback = new PACKETMONITOR_STREAM_DATA_CALLBACK(PacketDataCallBack);
-        cfg.DataCallback = Marshal.GetFunctionPointerForDelegate(DataCallback);
+        PrepareRealtimeStreamConfiguration(ref cfg);
         IntPtr streamHandle = IntPtr.Zero;
         
         var hr = PacketMonitorCreateRealtimeStream(pktmonHandle, ref cfg, out streamHandle);
@@ -959,6 +1124,7 @@ public class SpscPacketRingBuffer
     private readonly AutoResetEvent _signal = new AutoResetEvent(false);
 
     public long DroppedCount { get { return Volatile.Read(ref _droppedCount); } }
+    public int Capacity { get { return _buffer.Length; } }
 
     public SpscPacketRingBuffer(int capacity)
     {
@@ -1351,7 +1517,8 @@ public class PcapngWriter
     /// </summary>
     public void Stop()
     {
-        if (!_isActive) return;
+        if (!_isActive && _binaryWriter == null && _fileStream == null &&
+            (_writerThread == null || !_writerThread.IsAlive)) return;
         _isActive = false;
 
         bool writerJoined = true;

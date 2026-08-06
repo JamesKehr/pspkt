@@ -9,7 +9,7 @@
 @{
 
 # Script module or binary module file associated with this manifest.
-# RootModule = ''
+RootModule = 'pspkt.psm1'
 
 # Version number of this module.
 ModuleVersion = '0.0.1'
@@ -81,7 +81,41 @@ NestedModules = @(
 
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
 FunctionsToExport = @(
-    "ConvertTo-PspktIpAddress"
+    'ConvertTo-PspktIpAddress',
+    'New-PspktFilter',
+    'Set-PspktFilter',
+    'Add-PspktFilter',
+    'Remove-PspktFilter',
+    'Get-PspktFilter',
+    'Resolve-PspktEnumValue',
+    'Get-PspktComponent',
+    'Get-PspktComponentGroupName',
+    'Get-PspktComponentNICName',
+    'Set-PspktComponent',
+    'Add-PspktComponent',
+    'Remove-PspktComponent',
+    'New-PspktSession',
+    'Get-PspktSession',
+    'Set-PspktSession',
+    'Start-Pspkt',
+    'Stop-Pspkt',
+    'Get-PspktQuickFilter',
+    'Get-PspktParameterTree',
+    'Get-PspktParserColorProfile',
+    'Import-PspktParserColorProfile',
+    'Set-PspktParserColorProfile',
+    'New-PspktParserColorProfile',
+    'Test-PspktParserColorProfile',
+    'Save-PspktParserColorProfile',
+    'Register-PspktComponentMap',
+    'Clear-PspktComponentMap',
+    'Get-PspktCaptureHeader',
+    'Set-PspktDetailLevel',
+    'Get-PspktDetailLevel',
+    'Set-PspktDetailSpacing',
+    'Get-PspktDetailSpacing',
+    'Set-PspktShowTimestamp',
+    'Get-PspktShowTimestamp'
 )
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
@@ -91,7 +125,7 @@ CmdletsToExport = @()
 VariablesToExport = '*'
 
 # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
-AliasesToExport = @()
+AliasesToExport = @('pspkt')
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()
@@ -142,4 +176,3 @@ PrivateData = @{
 # DefaultCommandPrefix = ''
 
 }
-

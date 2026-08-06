@@ -87,6 +87,16 @@ Get-PspktComponent -GroupName 'NIC'
 Get-PspktComponent -Type 'Filter'
 ```
 
+`Add-PspktComponent` buffers pipeline input until the entire batch is validated. For VM-stamped
+components it validates one consistent VM identity and all MAC addresses, applies VM scope, and
+only then adds the components. Invalid or mixed-VM batches leave the session unchanged.
+A VM-stamped pipeline batch must include at least one component carrying the VM's usable MAC
+address. If filtering the pipeline removes that component, add it back or attach the remaining
+components without VM scoping.
+
+Component removal is allowed only before native session configuration is committed. After
+activation, recreate the session so managed component state cannot diverge from pktmon.
+
 ---
 
 ## Get-PspktComponentGroupName

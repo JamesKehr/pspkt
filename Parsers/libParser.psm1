@@ -21,17 +21,45 @@ $script:ColoredIndent3 = "$([char]0x1b)[97m  $($script:DetailIndent)$([char]0x1b
 $script:ComponentRefreshLocked = $false  # When true, prevents mid-capture component map refresh.
 
 # Load sub-parsers.
-Import-Module (Join-Path $PSScriptRoot 'DataLink\ethernet.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Network\ipv4.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Network\ipv6.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Network\icmp.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Network\ndp.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Network\arp.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Transport\tcp.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Application\dns.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Application\dhcp.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Application\http.psm1') -Force -Global
-Import-Module (Join-Path $PSScriptRoot 'Application\smb2.psm1') -Force -Global
+$script:ParserModules = [System.Collections.ArrayList]::new()
+$script:OwnedParserModules = [System.Collections.ArrayList]::new()
+$parserModulePaths = @(
+    'DataLink\ethernet.psm1',
+    'Network\ipv4.psm1',
+    'Network\ipv6.psm1',
+    'Network\icmp.psm1',
+    'Network\ndp.psm1',
+    'Network\arp.psm1',
+    'Transport\tcp.psm1',
+    'Application\dns.psm1',
+    'Application\dhcp.psm1',
+    'Application\http.psm1',
+    'Application\smb2.psm1'
+)
+foreach ($parserModulePath in $parserModulePaths) {
+    $fullParserModulePath = [System.IO.Path]::GetFullPath(
+        (Join-Path $PSScriptRoot $parserModulePath)
+    )
+    $parserModule = Get-Module -All |
+        Where-Object {
+            -not [string]::IsNullOrEmpty($_.Path) -and
+            [System.IO.Path]::GetFullPath($_.Path) -eq $fullParserModulePath
+        } |
+        Select-Object -First 1
+    if ($null -eq $parserModule) {
+        $parserModule = Import-Module $fullParserModulePath -Force -Global -PassThru
+        $null = $script:OwnedParserModules.Add($parserModule)
+    } else {
+        $parserModule = Import-Module $fullParserModulePath -Force -Global -PassThru
+    }
+    $null = $script:ParserModules.Add($parserModule)
+}
+
+$MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
+    foreach ($parserModule in $script:OwnedParserModules) {
+        Remove-Module -ModuleInfo $parserModule -Force -ErrorAction SilentlyContinue
+    }
+}
 
 # --------------------------------------------------------------------------
 # Register drop reason/location enum names into C# formatter for display.
@@ -906,7 +934,13 @@ function Format-ComponentPrefix {
         # Component not in map — refresh from pktmonapi and pktmon.exe.
         # Locked during active capture to prevent stalling the consumer thread.
         try {
-            $components = Get-PspktComponent
+            $expectedComponentModulePath = [System.IO.Path]::GetFullPath(
+                (Join-Path $PSScriptRoot '..\function\PspktComponent.psm1')
+            )
+            $componentModule = Get-Module -All PspktComponent |
+                Where-Object { [System.IO.Path]::GetFullPath($_.Path) -eq $expectedComponentModulePath } |
+                Select-Object -First 1
+            $components = & $componentModule { Get-PspktComponent }
             Register-PspktComponentMap -Components $components
         } catch {
             # Silently ignore — map stays as-is.
@@ -1179,7 +1213,13 @@ function Format-PacketLine {
             -not [PacketLineFormatter]::IsComponentMiss($compId) -and
             -not $script:ComponentRefreshLocked) {
             try {
-                $components = Get-PspktComponent
+                $expectedComponentModulePath = [System.IO.Path]::GetFullPath(
+                    (Join-Path $PSScriptRoot '..\function\PspktComponent.psm1')
+                )
+                $componentModule = Get-Module -All PspktComponent |
+                    Where-Object { [System.IO.Path]::GetFullPath($_.Path) -eq $expectedComponentModulePath } |
+                    Select-Object -First 1
+                $components = & $componentModule { Get-PspktComponent }
                 Register-PspktComponentMap -Components $components
             } catch { }
             if (-not [PacketLineFormatter]::HasComponent($compId)) {

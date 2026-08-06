@@ -12,9 +12,61 @@ param ()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$acceleratorClass = [psobject].Assembly.GetType(
+    'System.Management.Automation.TypeAccelerators'
+)
+$existingAccelerators = $acceleratorClass::Get
+$ownedAcceleratorMap = [AppDomain]::CurrentDomain.GetData('pspkt-owned-accelerators')
+if ($null -eq $ownedAcceleratorMap) { $ownedAcceleratorMap = @{} }
+$requiredAcceleratorNames = @(
+    'PktMonApi', 'IPspktNativeApi', 'PspktNativeApi', 'PacketFormatter',
+    'PacketLineFormatter', 'PacketDetailStore', 'PacketDetailExtractor',
+    'BoxyBox.AnsiText', 'BoxyBox.Box', 'BoxyBox.TextBox', 'BoxyBox.DetailsBox',
+    'BoxyBox.OverlayBox', 'BoxyBox.ScrollableOverlayBox',
+    'pspkt', 'pspktSession', 'pspktFilter', 'pspktComponent',
+    'BitUtils', 'PAUtils', 'PacketData', 'ParsedPacket',
+    'PspktCaptureType', 'PspktLogMode', 'PspktParsingLevel',
+    'ICMP4_TYPE', 'ICMP6_TYPE', 'ETHERTYPE', 'IPv4Protocol',
+    'PKTMON_DROP_REASON', 'PKTMON_DROP_LOCATION'
+)
+$acceleratorSourceFiles = @(
+    'class\loader.psm1',
+    'class\pspktEnum.psm1',
+    'class\pspktUtil.psm1',
+    'class\pspktTypes.psm1',
+    'class\pspktPacketParser.psm1',
+    'class\pspktClass.psm1'
+)
+foreach ($acceleratorSourceFile in $acceleratorSourceFiles) {
+    $acceleratorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot $acceleratorSourceFile) -Raw
+    $exportBlock = [regex]::Match(
+        $acceleratorSource,
+        '(?s)\$ExportableTypes\s*=\s*@\((.*?)\)'
+    )
+    if ($exportBlock.Success) {
+        foreach ($typeMatch in [regex]::Matches($exportBlock.Groups[1].Value, '\[([A-Za-z_][A-Za-z0-9_.+]*)\]')) {
+            $requiredAcceleratorNames += $typeMatch.Groups[1].Value
+        }
+    }
+}
+$requiredAcceleratorNames = @($requiredAcceleratorNames | Sort-Object -Unique)
+foreach ($acceleratorName in $requiredAcceleratorNames) {
+    if (
+        $existingAccelerators.ContainsKey($acceleratorName) -and
+        (
+            -not $ownedAcceleratorMap.ContainsKey($acceleratorName) -or
+            -not [object]::ReferenceEquals(
+                $ownedAcceleratorMap[$acceleratorName],
+                $existingAccelerators[$acceleratorName]
+            )
+        )
+    ) {
+        throw "Type accelerator '$acceleratorName' is already registered by another module."
+    }
+}
 
 # load the classes via loader.psm1
-Import-Module "$PSScriptRoot\class\loader.psm1"
+Import-Module "$PSScriptRoot\class\loader.psm1" -Force
 
 # load the rest of the modules now that the C# type is added
 # load in this order to prevent dependency errors
@@ -35,7 +87,7 @@ Write-Verbose "Loading modules in specific order to ensure dependencies are met.
 
 foreach ($mod in $loadList) {
     Write-Verbose "Loading: $mod"
-    Import-Module "$PSScriptRoot\$mod" -Force -Global
+    Import-Module "$PSScriptRoot\$mod" -Force
 }
 
 
@@ -81,4 +133,4 @@ function ConvertTo-PspktIpAddress {
 
 #endregion UTIL
 
-Export-ModuleMember -Function ConvertTo-PspktIpAddress, New-PspktFilter, Set-PspktFilter, Add-PspktFilter, Remove-PspktFilter, Get-PspktFilter, Get-PspktComponent, Get-PspktComponentGroupName, Get-PspktComponentNICName, Set-PspktComponent, Add-PspktComponent, Remove-PspktComponent, New-PspktSession, Get-PspktSession, Set-PspktSession, Start-Pspkt, Stop-Pspkt, Get-PspktQuickFilter, Get-PspktParameterTree, Get-PspktParserColorProfile, Import-PspktParserColorProfile, Set-PspktParserColorProfile, New-PspktParserColorProfile, Test-PspktParserColorProfile, Save-PspktParserColorProfile, Register-PspktComponentMap, Clear-PspktComponentMap, Get-PspktCaptureHeader, Set-PspktDetailLevel, Get-PspktDetailLevel, Set-PspktDetailSpacing, Get-PspktDetailSpacing, Set-PspktShowTimestamp, Get-PspktShowTimestamp -Alias pspkt
+Export-ModuleMember -Function ConvertTo-PspktIpAddress, New-PspktFilter, Set-PspktFilter, Add-PspktFilter, Remove-PspktFilter, Get-PspktFilter, Resolve-PspktEnumValue, Get-PspktComponent, Get-PspktComponentGroupName, Get-PspktComponentNICName, Set-PspktComponent, Add-PspktComponent, Remove-PspktComponent, New-PspktSession, Get-PspktSession, Set-PspktSession, Start-Pspkt, Stop-Pspkt, Get-PspktQuickFilter, Get-PspktParameterTree, Get-PspktParserColorProfile, Import-PspktParserColorProfile, Set-PspktParserColorProfile, New-PspktParserColorProfile, Test-PspktParserColorProfile, Save-PspktParserColorProfile, Register-PspktComponentMap, Clear-PspktComponentMap, Get-PspktCaptureHeader, Set-PspktDetailLevel, Get-PspktDetailLevel, Set-PspktDetailSpacing, Get-PspktDetailSpacing, Set-PspktShowTimestamp, Get-PspktShowTimestamp -Alias pspkt

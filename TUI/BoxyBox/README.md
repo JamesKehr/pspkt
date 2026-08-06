@@ -65,15 +65,30 @@ All types live in the `BoxyBox` namespace.
 | `TreeNode` | A node with `Text`, a stable `Key` (for expand/collapse persistence), `IsExpanded`, and `Children`. `Add(child)` / `AddLeaf(text)`. |
 | `TreeRow` | One flattened visible row: display string + originating node + depth. |
 | `TreeFlattener` | `Flatten(roots)` honors each node's expanded state; `FlattenAll(roots)` ignores collapse (used for "copy everything"). Every node reserves one column for its `+`/`-` marker immediately left of its text, so a leaf's text (blank marker slot) aligns with sibling expandable nodes' text. Set `UseConnectors = true` to draw `├`/`└` tree connectors instead. |
-| `DetailsBox` | Wraps a `Box` around a tree: selection, scrolling, expand/collapse (`MoveUp/Down`, `PageUp/Down`, `ExpandSelected/CollapseSelected`, `ExpandAll/CollapseAll`), per-`Key` expand-state persistence across trees, `Resize`, `GetVisibleText()` (viewport) and `GetAllText()` (whole tree). |
+| `DetailsBox` | Wraps a `Box` around a tree: selection, scrolling, boundary movement (`MoveToFirstRow/MoveToLastRow`), expand/collapse (`MoveUp/Down`, `PageUp/Down`, `ExpandSelected/CollapseSelected`, `ExpandAll/CollapseAll`), per-`Key` expand-state persistence across trees, `Resize`, `GetVisibleText()` (viewport) and `GetAllText()` (whole tree). |
 
 ### Overlays and menus
 
 | Type | Responsibility |
 |---|---|
 | `OverlayBox` | A centered bordered box for notifications and prompts (e.g. "Copied to clipboard", a save-path prompt). Reports its absolute top/left so the caller can position it over the current frame. |
+| `ScrollableOverlayBox` | A stateful centered overlay viewport. Stores a cloned content list and `TopRow`; supports line, page, Home, and End movement; clamps after `SetContent`, `Resize`, and screen-size changes; and appends `[first-last/total]` to the title. |
 | `MenuItem` / `MenuDefinition` | The in-memory menu model (`Name`, `DisplayName`, `Hotkey`). |
 | `MenuRenderer` | Turns a `MenuDefinition` into option strings: `BuildAuto(def, width)` picks **Full** (`[Hotkey]DisplayName`) when it fits or **Simple** (`[Hotkey]`) when the bar is too narrow. Hotkeys and labels are colored for contrast (`SetColors`). |
+
+`ScrollableOverlayBox.Render(screenWidth, screenHeight, out top, out left)` uses the configured
+body-row count when space permits and blank-pads short content so the overlay height stays stable.
+The title suffix is `[0/0]` for empty content, `[0/total]` when no body row fits, and
+`[first-last/total]` otherwise. The base title is truncated before the suffix, preserving the
+position indicator on narrow screens.
+
+`OverlayBox` and `ScrollableOverlayBox` degrade without scrolling or throwing on tiny screens.
+A one-column overlay is borderless and can show only one cell; for a scrollable title that cell is
+the first character of the position suffix (`[`). A one-row screen renders only the top/title row,
+and non-positive screen dimensions produce no rows.
+
+The Analysis Help popup and its shortcut content are Phase 3 host integration. Phase 2 provides
+only the project-independent scrolling engine.
 
 ---
 
@@ -135,7 +150,7 @@ Its use of BoxyBox is a good end-to-end example:
   `DetailsBox` (bottom), merged on a shared `Cap.Mid` divider. The selected packet's detail
   tree is parsed **just-in-time** and shown in the Details box.
 - **Pause** (`p`) additionally stops ingesting new packets, then enters Focus.
-- Arrow keys navigate; `Tab` switches the active box; the selected row gets a background
+- Arrow keys navigate; `Home` / `End` move to box boundaries; `Tab` switches the active box; the selected row gets a background
   highlight that preserves the parsing colors (`AnsiText.ApplyBackground`).
 - **Save** (`w`) opens an `OverlayBox` prompt and writes a pcapng of the retained packets;
   **Copy** (`Shift+Ctrl+C`) copies the selected line plus the full detail tree

@@ -49,6 +49,11 @@ Recent (post-perf) behavior:
 
 Quick filters (`-DNS`, `-SMB`, `-Ping`, etc.) create one or more pktmon capture filters automatically. When combined with `-IPAddress`, the IP is **AND-merged** into every quick filter (so `-DNS -i 1.1.1.1` becomes "DNS to/from 1.1.1.1" rather than "DNS OR 1.1.1.1"). With `-VM`/`-VMName`, every quick filter and every application-layer auto-imply filter is also **AND-combined with each vmNIC MAC** (one filter per quick-filter × vmNIC pair) so all capture is constrained to the VM's network data path — for example `pspkt -VM <vm> -SmbCommand Create` only matches SMB packets traversing the VM's vmNICs. When `-VM`/`-VMName` is used alone (no quick filter, no app-layer predicate), a standalone MAC filter per vmNIC is added so all VM traffic is captured.
 
+VM scope is validated before session collections or native configuration are mutated. A VM with no
+usable MAC address fails setup rather than falling back to an unscoped capture. A newly-created
+real-time stream remains owner-registered during attachment; attachment failure rolls back the
+session reference and closes the stream exactly once.
+
 ## Parameter sets
 
 | Set | Required |
@@ -167,7 +172,7 @@ See [Drop Triggers](./Drop-Triggers.md) for full details.
 
 | Parameter | Alias | Type | Default | Description |
 |---|---|---|---|---|
-| `-WriteFile` | `-w` | `string` | — | Path to a pcapng file. `.pcapng` is appended if missing. Always runs in async mode (writer thread + ring buffer). |
+| `-WriteFile` | `-w` | `string` | — | Path to a pcapng file. `.pcapng` is appended if missing. Always runs in async mode (writer thread + ring buffer). Without console real-time mode, returns the active session for a later `Stop-Pspkt`. |
 | `-RealTime` | `-rt` | `switch` | — | With `-WriteFile`, also write live colored output to the console. Without this, file writes silently. |
 | `-FileSize` | — | `uint32` | `512` | Max MiB per pcapng file before rotating. Effective only with `-NumFiles > 1`. Range 1-65535. |
 | `-FlushDisk` | `-fd` | `switch` | — | Flushes the BinaryWriter after every drained batch (durability). Without this, flushes only at stop (throughput). |
@@ -219,7 +224,9 @@ help when the consumer can't keep up with sustained bursts.
 
 ## Output
 
-None. Output is streamed to the console in real time. When `-WriteFile` or `-WriteEtl` is set, the corresponding file path and packet count are reported at stop.
+Normally none; output is streamed to the console in real time. File-only `-WriteFile` returns the
+active `pspktSession` so the caller can later pipe it to `Stop-Pspkt`. `-WriteEtl` returns after
+starting the external pktmon ETL capture.
 
 When the capture stops, a status line is shown:
 

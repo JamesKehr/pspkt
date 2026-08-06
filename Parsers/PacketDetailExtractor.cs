@@ -41,15 +41,18 @@ public sealed class PacketDetailStore
 
     private readonly Record[] _ring;
     private readonly int _capacity;
+    private long _latestSequence;
 
     public PacketDetailStore(int capacity)
     {
         _capacity = capacity < 16 ? 16 : capacity;
         _ring = new Record[_capacity];
+        _latestSequence = -1;
         for (int i = 0; i < _capacity; i++) _ring[i].Seq = -1;
     }
 
     public int Capacity { get { return _capacity; } }
+    public long LatestSequence { get { return _latestSequence; } }
 
     /// <summary>
     /// Stores a copy of the full packet descriptor (metadata + packet bytes) for sequence
@@ -80,6 +83,7 @@ public sealed class PacketDetailStore
         _ring[slot].CompId = compId;
         _ring[slot].EdgeId = edgeId;
         _ring[slot].Direction = direction;
+        if (seq > _latestSequence) _latestSequence = seq;
     }
 
     /// <summary>
@@ -176,6 +180,7 @@ public sealed class PacketDetailStore
             _ring[i].Seq = -1;
             _ring[i].Data = null;
         }
+        _latestSequence = -1;
     }
 }
 
