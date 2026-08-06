@@ -248,5 +248,5 @@ if ($executedPassedTests.Count -eq 0 -or $result.PassedCount -eq 0) {
 }
 
 if ($PassThru.IsPresent) {
-    Write-Output -NoEnumerate $result
+    return ,$result
 }

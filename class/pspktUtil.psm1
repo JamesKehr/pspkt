@@ -80,7 +80,7 @@ class PAUtils {
             return $physicalAddress
         }
 
-        return [PhysicalAddress]::new([byte[]](0))
+        throw "The value is not a valid MAC address. MacAddress: $rawMac"
     }
 
     static [string] FormatPhysicalAddress([string]$macAddress) {
@@ -121,8 +121,14 @@ $TypeAcceleratorsClass = [psobject].Assembly.GetType(
 # Ensure none of the types would clobber an existing type accelerator.
 # If a type accelerator with the same name exists, throw an exception.
 $ExistingTypeAccelerators = $TypeAcceleratorsClass::Get
+$RegisteredTypeAccelerators = [System.Collections.ArrayList]::new()
+$PspktOwnedAcceleratorTypes = [AppDomain]::CurrentDomain.GetData('pspkt-owned-accelerators')
+if ($null -eq $PspktOwnedAcceleratorTypes) { $PspktOwnedAcceleratorTypes = [hashtable]::Synchronized(@{}); [AppDomain]::CurrentDomain.SetData('pspkt-owned-accelerators', $PspktOwnedAcceleratorTypes) }
 foreach ($Type in $ExportableTypes) {
     if ($Type.FullName -in $ExistingTypeAccelerators.Keys) {
+        if (-not $PspktOwnedAcceleratorTypes.ContainsKey($Type.FullName) -or -not [object]::ReferenceEquals($PspktOwnedAcceleratorTypes[$Type.FullName], $ExistingTypeAccelerators[$Type.FullName])) {
+            throw "Type accelerator '$($Type.FullName)' is already registered to a different type."
+        }
         # silently throw a message to the verbose stream
         Write-Verbose @"
 Unable to register type accelerator[$($Type.FullName)]. The Accelerator already exists.
@@ -130,12 +136,21 @@ Unable to register type accelerator[$($Type.FullName)]. The Accelerator already 
 
     } else {
         $TypeAcceleratorsClass::Add($Type.FullName, $Type)
+        $PspktOwnedAcceleratorTypes[$Type.FullName] = $Type
+        $null = $RegisteredTypeAccelerators.Add($Type)
     }
 }
 
 # Remove type accelerators when the module is removed.
 $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
-    foreach($Type in $ExportableTypes) {
-        $TypeAcceleratorsClass::Remove($Type.FullName)
+    $CurrentTypeAccelerators = $TypeAcceleratorsClass::Get
+    foreach($Type in $RegisteredTypeAccelerators) {
+        if (
+            $CurrentTypeAccelerators.ContainsKey($Type.FullName) -and
+            [object]::ReferenceEquals($CurrentTypeAccelerators[$Type.FullName], $Type)
+        ) {
+            $null = $TypeAcceleratorsClass::Remove($Type.FullName)
+            $null = $PspktOwnedAcceleratorTypes.Remove($Type.FullName)
+        }
     }
 }.GetNewClosure()

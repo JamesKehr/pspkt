@@ -13,7 +13,7 @@ public sealed class PspktNativeApiFake : IPspktNativeApi
         _callCounts = new Dictionary<PspktNativeOperation, int>();
         _callSequence = new List<PspktNativeOperation>();
         _throwingOperations = new HashSet<PspktNativeOperation>();
-        EnumData = Array.Empty<byte>();
+        EnumData = new byte[] { };
     }
 
     public int InitializeStatus { get; set; }

@@ -1326,7 +1326,7 @@ namespace BoxyBox
         public void MoveUp()   { if (_selected > 0) { _selected--; EnsureVisible(); } }
         public void MoveDown() { if (_selected < _rows.Count - 1) { _selected++; EnsureVisible(); } }
         public void PageUp()   { _selected = Math.Max(0, _selected - ContentRows); EnsureVisible(); }
-        public void PageDown() { _selected = Math.Min(_rows.Count - 1, _selected + ContentRows); EnsureVisible(); }
+        public void PageDown() { _selected = Math.Max(0, Math.Min(_rows.Count - 1, _selected + ContentRows)); EnsureVisible(); }
         public void MoveToFirstRow()
         {
             _selected = 0;
@@ -1580,7 +1580,7 @@ namespace BoxyBox
             {
                 top = 1;
                 left = 1;
-                return Array.Empty<string>();
+                return new string[] { };
             }
 
             if (boxWidth < 1) boxWidth = 1;
@@ -1730,7 +1730,7 @@ namespace BoxyBox
                 ClampTopRow();
                 top = 1;
                 left = 1;
-                return Array.Empty<string>();
+                return new string[] { };
             }
 
             int effectiveBoxWidth = Math.Min(_boxWidth, screenWidth);

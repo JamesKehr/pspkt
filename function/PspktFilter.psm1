@@ -161,6 +161,8 @@ function Update-PspktFilterInternal {
         $EncapType
     )
 
+    $Filter.ThrowIfCommitted()
+
     if ($Filter.IsRawConstraint()) {
         throw "Raw protocol constraints cannot be modified through Set-PspktFilter."
     }

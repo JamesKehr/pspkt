@@ -172,7 +172,7 @@ See [Drop Triggers](./Drop-Triggers.md) for full details.
 
 | Parameter | Alias | Type | Default | Description |
 |---|---|---|---|---|
-| `-WriteFile` | `-w` | `string` | — | Path to a pcapng file. `.pcapng` is appended if missing. Always runs in async mode (writer thread + ring buffer). |
+| `-WriteFile` | `-w` | `string` | — | Path to a pcapng file. `.pcapng` is appended if missing. Always runs in async mode (writer thread + ring buffer). Without console real-time mode, returns the active session for a later `Stop-Pspkt`. |
 | `-RealTime` | `-rt` | `switch` | — | With `-WriteFile`, also write live colored output to the console. Without this, file writes silently. |
 | `-FileSize` | — | `uint32` | `512` | Max MiB per pcapng file before rotating. Effective only with `-NumFiles > 1`. Range 1-65535. |
 | `-FlushDisk` | `-fd` | `switch` | — | Flushes the BinaryWriter after every drained batch (durability). Without this, flushes only at stop (throughput). |
@@ -224,7 +224,9 @@ help when the consumer can't keep up with sustained bursts.
 
 ## Output
 
-None. Output is streamed to the console in real time. When `-WriteFile` or `-WriteEtl` is set, the corresponding file path and packet count are reported at stop.
+Normally none; output is streamed to the console in real time. File-only `-WriteFile` returns the
+active `pspktSession` so the caller can later pipe it to `Stop-Pspkt`. `-WriteEtl` returns after
+starting the external pktmon ETL capture.
 
 When the capture stops, a status line is shown:
 

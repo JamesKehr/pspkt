@@ -656,10 +656,14 @@ public sealed class PspktNativeApi : IPspktNativeApi
 
 public static class PktMonApi
 {
+    public const string BuildMarker = "pspkt-csharp-r4-20260803";
     public static readonly PACKETMONITOR_STREAM_DATA_CALLBACK DataCallback =
         new PACKETMONITOR_STREAM_DATA_CALLBACK(PacketDataCallBack);
     private static SpscPacketRingBuffer _ringBuffer = new SpscPacketRingBuffer(1048576);
     private static volatile bool _captureActive;
+    private static bool _consoleCaptureEnabled = true;
+    private static IntPtr _captureOwner;
+    private static volatile bool _consumerActive;
 
     // File writer integration — when set, packets are also written to file.
     // Use Volatile.Read in the callback to ensure consistent snapshot.
@@ -860,8 +864,15 @@ public static class PktMonApi
             return;
         }
 
-        // One reference for the console ring, plus one for the writer ring when writing to file.
-        int[] lease = writeToFile ? PacketBytePool.RentLease(2) : null;
+        bool writeToConsole = Volatile.Read(ref _consoleCaptureEnabled);
+        int consumerCount = (writeToConsole ? 1 : 0) + (writeToFile ? 1 : 0);
+        if (consumerCount == 0)
+        {
+            PacketBytePool.Return(byteArray);
+            return;
+        }
+
+        int[] lease = consumerCount > 1 ? PacketBytePool.RentLease(consumerCount) : null;
 
         PSPacketData tmp = new PSPacketData
         (
@@ -878,12 +889,13 @@ public static class PktMonApi
         // (PacketLineFormatter.FormatBatch). Adding here would require a Monitor.Enter
         // on every callback, which is the largest avoidable cost on the producer thread.
 
-        bool enqueued = _ringBuffer.Enqueue(tmp);
-        if (!enqueued)
+        if (writeToConsole)
         {
-            // Console consumer will never see it — drop the console reference (returns the
-            // buffer immediately when unshared, or decrements the lease when shared).
-            PacketBytePool.ReleaseBuffer(byteArray, lease);
+            bool enqueued = _ringBuffer.Enqueue(tmp);
+            if (!enqueued)
+            {
+                PacketBytePool.ReleaseBuffer(byteArray, lease);
+            }
         }
 
         // Also write to file if active (use the same snapshot taken above).
@@ -954,6 +966,37 @@ public static class PktMonApi
     }
 
     public static bool IsCaptureActive { get { return _captureActive; } }
+    public static bool IsConsumerActive { get { return _consumerActive; } }
+    public static bool HasCaptureOwner { get { return Volatile.Read(ref _captureOwner) != IntPtr.Zero; } }
+    public static int ConfiguredRingCapacity { get { return _ringBuffer.Capacity; } }
+
+    public static bool TryBeginCapture(IntPtr owner)
+    {
+        if (owner == IntPtr.Zero) return false;
+        return Interlocked.CompareExchange(ref _captureOwner, owner, IntPtr.Zero) == IntPtr.Zero;
+    }
+
+    public static bool IsCaptureOwner(IntPtr owner)
+    {
+        return owner != IntPtr.Zero && Volatile.Read(ref _captureOwner) == owner;
+    }
+
+    public static void EndCapture(IntPtr owner)
+    {
+        if (owner == IntPtr.Zero) return;
+        Interlocked.CompareExchange(ref _captureOwner, IntPtr.Zero, owner);
+    }
+
+    public static void SetConsoleCaptureEnabled(bool enabled)
+    {
+        Volatile.Write(ref _consoleCaptureEnabled, enabled);
+    }
+    public static bool IsConsoleCaptureEnabled { get { return Volatile.Read(ref _consoleCaptureEnabled); } }
+
+    public static void SetConsumerActive(bool active)
+    {
+        _consumerActive = active;
+    }
 
     /// <summary>
     /// Configure the ring buffer capacity. Must be called BEFORE the realtime stream is created.
@@ -1081,6 +1124,7 @@ public class SpscPacketRingBuffer
     private readonly AutoResetEvent _signal = new AutoResetEvent(false);
 
     public long DroppedCount { get { return Volatile.Read(ref _droppedCount); } }
+    public int Capacity { get { return _buffer.Length; } }
 
     public SpscPacketRingBuffer(int capacity)
     {
@@ -1473,7 +1517,8 @@ public class PcapngWriter
     /// </summary>
     public void Stop()
     {
-        if (!_isActive) return;
+        if (!_isActive && _binaryWriter == null && _fileStream == null &&
+            (_writerThread == null || !_writerThread.IsAlive)) return;
         _isActive = false;
 
         bool writerJoined = true;

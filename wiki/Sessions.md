@@ -91,7 +91,7 @@ Set-PspktSession -Session <pspktSession> [-Name <string>] [-Active <bool>]
 |---|---|---|---|
 | `-Session` | `pspktSession` | Yes (pipeline) | The session to update. |
 | `-Name` | `string` | No | New session name. |
-| `-Active` | `bool` | No | Toggle session active state. |
+| `-Active` | `bool` | No | Reserved for compatibility; direct changes are rejected. Use `Start-Pspkt` or `Stop-Pspkt`. |
 | `-CaptureType` | `PspktCaptureType` | No | `All`, `Flow`, or `Drop`. |
 | `-LogMode` | `PspktLogMode` | No | Stream mode (e.g. `RealTime`). |
 | `-PacketSize` | `uint32` | No | Max bytes to log per packet. 0 = full packet. |
@@ -108,6 +108,10 @@ Deactivate and close the session; create a new session rather than retrying the 
 Session close is best-effort across all attached streams and the native session handle. Managed
 handles and owner registries are invalidated even when a native close reports an error, and all
 cleanup errors are surfaced after the remaining cleanup steps run.
+
+Setup failures roll back streams, filters, and components added by that `Start-Pspkt` invocation.
+If native activation was attempted, the session is torn down because pktmon constraints cannot be
+rolled back safely.
 
 ### Output
 `pspktSession`

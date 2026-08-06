@@ -4,6 +4,10 @@ using namespace System.Collections.Concurrent
 [CmdletBinding()]
 param ()
 
+$script:PspktFilterModule = Import-Module "$PSScriptRoot\PspktFilter.psm1" -ErrorAction Stop -PassThru
+$script:PspktComponentModule = Import-Module "$PSScriptRoot\PspktComponent.psm1" -ErrorAction Stop -PassThru
+$script:PspktParserModule = Import-Module "$PSScriptRoot\..\Parsers\libParser.psm1" -ErrorAction Stop -PassThru
+
 # --------------------------------------------------------------------------
 # DNS QTYPE / RCODE name lookup tables (private helpers).
 # Used by Start-Pspkt's -DnsType / -DnsRcode parameter resolution.
@@ -954,7 +958,7 @@ function Get-PspktVMMacList {
 
     if ($null -eq $adapters -or @($adapters).Count -eq 0) {
         if (-not $NoWarning.IsPresent) {
-            Write-Warning "VM '$label' has no virtual network adapters discoverable via Get-VMNetworkAdapter. No per-NIC MAC filter will be applied."
+            Write-Warning "VM '$label' has no virtual network adapters discoverable via Get-VMNetworkAdapter. VM-scoped capture cannot start without a usable vmNIC MAC address."
         }
         return @()
     }
@@ -1085,12 +1089,12 @@ function Update-PspktSessionInternal {
         $CountersOnly
     )
 
-    if ($PSBoundParameters.ContainsKey('Name')) {
-        $Session.Name = $Name
+    if ($PSBoundParameters.ContainsKey('Active')) {
+        throw "Active cannot be changed through Set-PspktSession. Use Start-Pspkt or Stop-Pspkt."
     }
 
-    if ($PSBoundParameters.ContainsKey('Active')) {
-        $Session.SetSessionActive($Active)
+    if ($PSBoundParameters.ContainsKey('Name')) {
+        $Session.Name = $Name
     }
 
     if ($PSBoundParameters.ContainsKey('CaptureType')) {
@@ -1148,13 +1152,48 @@ function New-PspktSession {
         $Name
     )
 
-    $pspktInstance = [pspkt]::new()
-    $pspktInstance.PacketMonitorInitialize()
+    return New-PspktSessionInternal -Name $Name -PspktInstance ([pspkt]::new())
+}
 
-    $session = $pspktInstance.PacketMonitorCreateLiveSession($Name)
-    $session.Pspkt = $pspktInstance
+<#
+.SYNOPSIS
+Creates a live session using a supplied pktmon owner.
 
-    return $session
+.OUTPUTS
+pspktSession
+#>
+function New-PspktSessionInternal {
+    [CmdletBinding()]
+    [OutputType([pspktSession])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $Name,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNull()]
+        [pspkt]
+        $PspktInstance
+    )
+
+    $PspktInstance.PacketMonitorInitialize()
+    try {
+        return $PspktInstance.PacketMonitorCreateLiveSession($Name)
+    } catch {
+        $createError = $_
+        if (
+            $PspktInstance.OpenPktmonSessions.Count -eq 0 -and
+            $PspktInstance.OpenPktmonRealTimeStreams.Count -eq 0
+        ) {
+            try {
+                $PspktInstance.PacketMonitorUninitialize()
+            } catch {
+                throw "$($createError.Exception.Message) Cleanup failed: $($_.Exception.Message)"
+            }
+        }
+        throw $createError
+    }
 }
 
 <#
@@ -1264,7 +1303,7 @@ Session to update.
 New name for the session.
 
 .PARAMETER Active
-Set session active state directly.
+Reserved for compatibility. Direct active-state changes are rejected; use Start-Pspkt or Stop-Pspkt so capture ownership and file-writer cleanup remain coordinated.
 
 .PARAMETER CaptureType
 Capture type: All, Flow, or Drop.
@@ -1428,6 +1467,69 @@ function Get-PspktTuiTextBoundaryAction {
         HasSelection = $hasSelection
         SelectedSeq = [long]$selectedSeq
     }
+}
+
+<#
+.SYNOPSIS
+Resolves Ctrl+C modifier combinations to Analysis input actions.
+
+.OUTPUTS
+Copy, Stop, or None.
+#>
+function Get-PspktTuiControlCAction {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ConsoleKey]
+        $Key,
+
+        [Parameter(Mandatory = $true)]
+        [bool]
+        $Control,
+
+        [Parameter(Mandatory = $true)]
+        [bool]
+        $Shift
+    )
+
+    if (-not $Control -or $Key -ne [ConsoleKey]::C) {
+        return 'None'
+    }
+    if ($Shift) {
+        return 'Copy'
+    }
+    return 'Stop'
+}
+
+<#
+.SYNOPSIS
+Returns the sequence cached after a packet-detail lookup.
+
+.OUTPUTS
+The selected sequence after a successful lookup or a permanent miss; Int64.MinValue while the packet may still arrive.
+#>
+function Get-PspktTuiLoadedDetailSequence {
+    [CmdletBinding()]
+    [OutputType([long])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [long]
+        $Sequence,
+
+        [Parameter(Mandatory = $true)]
+        [bool]
+        $LookupSucceeded,
+
+        [Parameter(Mandatory = $true)]
+        [long]
+        $LatestStoredSequence
+    )
+
+    if ($LookupSucceeded -or $Sequence -le $LatestStoredSequence) {
+        return $Sequence
+    }
+    return [long]::MinValue
 }
 
 <#
@@ -1812,7 +1914,8 @@ function Invoke-PspktAnalysisLoop {
     # lines and the Details tree render with the active profile's colors. The standard
     # real-time branch gets this for free via Get-PspktCaptureHeader; the Analysis branch
     # does not call that, so sync explicitly here (lazy-loads + InitColorScheme on first use).
-    $null = Get-PspktColorScheme
+    $parserModule = $script:PspktParserModule
+    $null = & $parserModule { Get-PspktColorScheme }
 
     # Text Box uses the Default single-line parse (level 0) with the compact component
     # prefix (name omitted — shown in the Details box in a later phase).
@@ -1928,7 +2031,10 @@ function Invoke-PspktAnalysisLoop {
                 -Direction $dir
         }
         $detailsBox.SetTree($roots)
-        $detailsState.LoadedSeq = $seq
+        $detailsState.LoadedSeq = Get-PspktTuiLoadedDetailSequence `
+            -Sequence $seq `
+            -LookupSucceeded ($got -and $null -ne $pktBytes) `
+            -LatestStoredSequence $detailStore.LatestSequence
     }
 
     $applyTextBoundary = {
@@ -2085,6 +2191,13 @@ function Invoke-PspktAnalysisLoop {
         [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $pRegion.BuildFrame($pLines) + [BoxyBox.ScreenRegion]::EndSyncOutput())
         while ($true) {
             $k = [Console]::ReadKey($true)
+            $promptCtrl = ($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0
+            $promptShift = ($k.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
+            $promptAction = Get-PspktTuiControlCAction `
+                -Key $k.Key `
+                -Control $promptCtrl `
+                -Shift $promptShift
+            if ($promptAction -eq 'Stop') { return 'no' }
             if ($k.Key -eq [ConsoleKey]::Y) { return 'yes' }
             if ($k.Key -eq [ConsoleKey]::N -or $k.Key -eq [ConsoleKey]::Enter) { return 'no' }
             if ($k.Key -eq [ConsoleKey]::Escape) { return 'cancel' }
@@ -2123,11 +2236,11 @@ function Invoke-PspktAnalysisLoop {
     $frameWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $frameIntervalMs = 33
 
-    # Capture Shift+Ctrl+C as input (for the copy hotkey) rather than terminating; 's' stops.
     $prevTreatCtrlC = $false
     try { $prevTreatCtrlC = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $true } catch { }
 
     [PktMonApi]::SetCaptureActive($true)
+    [PktMonApi]::SetConsumerActive($true)
     [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen() + [BoxyBox.ScreenRegion]::HideCursor())
 
     try {
@@ -2186,10 +2299,18 @@ function Invoke-PspktAnalysisLoop {
                 $ch = [char]::ToLower($key.KeyChar)
                 $ctrl  = ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0
                 $shift = ($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
+                $controlCAction = Get-PspktTuiControlCAction `
+                    -Key $key.Key `
+                    -Control $ctrl `
+                    -Shift $shift
 
-                # Shift+Ctrl+C: copy the selected Text line + the full parsed detail tree
-                # (every node/child, regardless of scroll position or collapse state).
-                if ($ctrl -and $shift -and $key.Key -eq [ConsoleKey]::C) {
+                if ($controlCAction -eq 'Stop') {
+                    $stopRequested = $true
+                    $stopWasTrigger = $false
+                    continue
+                }
+
+                if ($controlCAction -eq 'Copy') {
                     if ($focused) {
                         $copyLines = [System.Collections.Generic.List[string]]::new()
                         $selLine = $textBox.GetLineBySeq($selectedSeq)
@@ -2370,6 +2491,8 @@ function Invoke-PspktAnalysisLoop {
                         -VisibleRows $textFocusBox.ContentRows
                     if ($selectedSeq -ne $viewport.SelectedSeq) {
                         $selectedSeq = $viewport.SelectedSeq
+                    }
+                    if ($detailsState.LoadedSeq -ne $selectedSeq) {
                         & $loadDetails $selectedSeq
                     }
                     $topSeq = $viewport.TopSeq
@@ -2980,8 +3103,8 @@ indicate actual data loss and always fire. For full suppression of every Write-W
 PowerShell -WarningAction SilentlyContinue.
 
 .OUTPUTS
-None. Output is streamed to the console in real time. When -WriteFile or -WriteEtl is set, the corresponding
-file path and packet count are reported on stop.
+Normally none. File-only -WriteFile returns the active pspktSession so it can be stopped later with
+Stop-Pspkt. -WriteEtl returns after starting the external pktmon ETL capture.
 
 .EXAMPLE
 PS> pspkt
@@ -3751,6 +3874,35 @@ function Start-Pspkt {
         }
 
         $createdSession = $false
+        $pcapngWriter = $null
+        $createdStream = $null
+        $sessionActivationAttempted = $false
+        $preserveCapture = $false
+        $captureOwnershipAcquired = $false
+        $captureOwnerHandle = [IntPtr]::Zero
+        $vmMacList = @()
+        $vmScopeRequested = (
+            $PSBoundParameters.ContainsKey('VM') -or
+            ($PSBoundParameters.ContainsKey('VMName') -and -not [string]::IsNullOrEmpty($VMName))
+        )
+        if ($vmScopeRequested) {
+            $vmLabel = if ($PSBoundParameters.ContainsKey('VM')) { "$($VM.Name)" } else { $VMName }
+            $vmMacList = Get-PspktVMMacList -VM $VM -VMName $VMName -NoWarning:$NoWarning.IsPresent
+            if ($vmMacList.Count -eq 0) {
+                throw "VM '$vmLabel' has no usable vmNIC MAC addresses. Start the VM at least once to allocate a MAC, assign a static MAC via Set-VMNetworkAdapter -StaticMacAddress, or capture without -VM."
+            }
+        }
+
+        if ($null -ne $Session -and $Session.Active) {
+            throw "Session '$($Session.Name)' is already active. Stop it before starting again."
+        }
+        if (
+            [PktMonApi]::HasCaptureOwner -or
+            [PktMonApi]::IsCaptureActive -or
+            $null -ne [PktMonApi]::FileWriter
+        ) {
+            throw "Another pspkt capture is already active in this PowerShell process."
+        }
 
         # Create a session if one was not provided.
         if ($PSCmdlet.ParameterSetName -eq 'Default') {
@@ -3759,6 +3911,47 @@ function Start-Pspkt {
             $Session.PacketSize  = $PacketSize
             $Session.LogMode     = [PspktLogMode]::RealTime
             $createdSession = $true
+        }
+
+        $initialComponentCount = $Session.Components.Count
+        $initialFilterCount = $Session.Filters.Count
+        $initialVmScope = $Session.GetVmScopeSnapshot()
+        $initialRingCapacity = [PktMonApi]::ConfiguredRingCapacity
+        $initialSessionState = [pscustomobject]@{
+            CaptureType = $Session.CaptureType
+            LogMode = $Session.LogMode
+            EventFlags = $Session.EventFlags
+            PacketSize = $Session.PacketSize
+            FileSize = $Session.FileSize
+            FileName = $Session.FileName
+            CountersOnly = $Session.CountersOnly
+            CaptureCleanupPending = $Session.CaptureCleanupPending
+        }
+        if ($Session.Handle -eq [IntPtr]::Zero) {
+            throw "Session '$($Session.Name)' has a null handle. It may have been torn down."
+        }
+        if ($null -eq $Session.Pspkt) {
+            throw "Session '$($Session.Name)' has no associated pspkt instance."
+        }
+
+        $managedCaptureRequested = -not (
+            $PSBoundParameters.ContainsKey('WriteEtl') -and
+            -not [string]::IsNullOrEmpty($WriteEtl)
+        )
+        if ($managedCaptureRequested) {
+            $captureOwnerHandle = $Session.Handle
+            $captureOwnershipAcquired = [PktMonApi]::TryBeginCapture($captureOwnerHandle)
+            if (-not $captureOwnershipAcquired) {
+                if ($createdSession) {
+                    try {
+                        Stop-Pspkt -Session $Session -Teardown
+                    } catch {
+                        throw "Another pspkt capture is already active in this PowerShell process. Cleanup failed: $($_.Exception.Message)"
+                    }
+                }
+                throw "Another pspkt capture is already active in this PowerShell process."
+            }
+            $Session.CaptureCleanupPending = $true
         }
 
         try {
@@ -3774,24 +3967,11 @@ function Start-Pspkt {
         # capture is constrained to the VM's network data path. The resolved
         # list is also reused later to skip the standalone QF-VM-MAC-* filters
         # when quick filters already provide the scope.
-        $vmMacList = @()
-        $vmScopeRequested = (
-            $PSBoundParameters.ContainsKey('VM') -or
-            ($PSBoundParameters.ContainsKey('VMName') -and -not [string]::IsNullOrEmpty($VMName))
-        )
-        if ($vmScopeRequested) {
-            $vmMacList = Get-PspktVMMacList -VM $VM -VMName $VMName -NoWarning:$NoWarning.IsPresent
-            if ($vmMacList.Count -eq 0) {
-                throw "VM scope requires at least one usable MAC address."
-            }
-        }
         $vmScopingActive = $vmScopeRequested
-        $vmExpansionApplied = $false
 
         # Persist VM scoping on the session object so any subsequent Add-PspktFilter
         # calls (outside Start-Pspkt) also auto-MAC-stamp their filters.
         if ($vmScopingActive) {
-            $vmLabel = if ($PSBoundParameters.ContainsKey('VM')) { "$($VM.Name)" } else { $VMName }
             $Session.SetVmScope($vmLabel, $vmMacList)
         }
 
@@ -3967,58 +4147,15 @@ function Start-Pspkt {
                 } else {
                     'IPv6'
                 }
-                if ($vmScopingActive) {
-                    foreach ($macStr in $vmMacList) {
-                        $null = $quickFilters.Add(
-                            (New-PspktFilter `
-                                -Name "QF-VM-IP-$macStr" `
-                                -Mac1 $macStr `
-                                -EtherType $ipEtherType `
-                                -Ip1 $parsedIP)
-                        )
-                    }
-                    $vmExpansionApplied = $true
-                } else {
-                    $null = $quickFilters.Add(
-                        (New-PspktFilter -Name "QF-IP-$IPAddress" -EtherType $ipEtherType -Ip1 $parsedIP)
-                    )
-                }
+                $null = $quickFilters.Add(
+                    (New-PspktFilter -Name "QF-IP-$IPAddress" -EtherType $ipEtherType -Ip1 $parsedIP)
+                )
             }
-        }
-
-        # VM scoping: when -VM / -VMName is active and the user supplied any
-        # quick filter or any application-layer predicate auto-implied one,
-        # AND-combine each filter with each VM-NIC MAC. Pktmon filters
-        # OR-combine across the session-level filter list, so the only way to
-        # express "(VM MAC) AND (protocol scope)" is to bake both into a
-        # single filter object — expanded across the cartesian product of
-        # quick filters x VM MACs.
-        if ($vmScopingActive -and $quickFilters.Count -gt 0 -and -not $vmExpansionApplied) {
-            $expanded = [System.Collections.ArrayList]::new()
-            foreach ($qf in $quickFilters) {
-                foreach ($macStr in $vmMacList) {
-                    $clone = Copy-PspktFilter -Filter $qf -NameSuffix "-VM-$macStr"
-                    $clone.SetMac1($macStr)
-                    $null = $expanded.Add($clone)
-                }
-            }
-
-            # pktmon supports a maximum of 32 filters per session. The
-            # cartesian expansion (N quick filters × M vmNICs) can exceed
-            # this limit when many quick filters combine with a multi-NIC VM.
-            # Fail fast with a clear message rather than letting the native
-            # API return a cryptic error at session activation.
-            if ($expanded.Count -gt 32) {
-                throw "VM AND-scoping expanded $($quickFilters.Count) quick filter(s) x $($vmMacList.Count) vmNIC(s) into $($expanded.Count) filters, exceeding pktmon's 32-filter limit. Reduce the number of quick filters or application-layer predicates, or use fewer vmNICs."
-            }
-
-            $quickFilters = $expanded
-            $vmExpansionApplied = $true
         }
 
         # Add all quick filters to the session.
-        foreach ($qf in $quickFilters) {
-            Add-PspktFilter -Filter $qf -Session $Session
+        if ($quickFilters.Count -gt 0) {
+            @($quickFilters) | Add-PspktFilter -Session $Session
         }
 
         # Determine real-time mode.
@@ -4085,21 +4222,10 @@ function Start-Pspkt {
             }
         }
 
-        if ($Session.Active) {
-            throw "Session '$($Session.Name)' is already active. Stop it before starting again."
-        }
-        if ($Session.Handle -eq [IntPtr]::Zero) {
-            throw "Session '$($Session.Name)' has a null handle. It may have been torn down."
-        }
-        if ($null -eq $Session.Pspkt) {
-            throw "Session '$($Session.Name)' has no associated pspkt instance."
-        }
-
-        # Reuse an existing valid stream if one is already attached.
         $hasValidStream = $false
-        $createdStream = $null
-        if ($useRealTime) {
-            foreach ($existingStream in $Session.OutputStream) {
+        $needsRealtimeStream = $useRealTime -or $hasWriteFile
+        if ($needsRealtimeStream) {
+            foreach ($existingStream in @($Session.OutputStream)) {
                 if ($null -ne $existingStream -and $existingStream.Handle -ne [IntPtr]::Zero) {
                     $hasValidStream = $true
                     break
@@ -4107,8 +4233,6 @@ function Start-Pspkt {
             }
 
             if (-not $hasValidStream) {
-                # Use session's PacketSize as stream truncation to get enough data for parsers.
-                # PacketSize 0 means full packet; map to 65535 for the stream (max uint16).
                 $streamTruncation = $TruncationSize
                 if ($streamTruncation -eq 0 -and $Session.PacketSize -gt 0) {
                     $streamTruncation = [uint16][Math]::Min($Session.PacketSize, 65535)
@@ -4116,18 +4240,15 @@ function Start-Pspkt {
                     $streamTruncation = [uint16]65535
                 }
 
-                # Scale the effective buffer-size multiplier by -BufferLevel (Default = no change),
-                # then use it to size BOTH the pktmon driver buffer and the user-mode SPSC ring.
                 $effectiveBufferMultiplier = Get-PspktBufferLevelMultiplier -BaseMultiplier $BufferSizeMultiplier -Level $BufferLevel
 
-                # Scale the user-mode SPSC ring buffer with the effective multiplier as well.
-                # Base ring size is 1M entries; multiplier scales linearly with a sane cap.
-                # Use [long] for the product + clamp before the [int] cast: a large multiplier
-                # can push baseRingCap * multiplier past int.MaxValue, and casting an
-                # out-of-range double straight to [int] throws.
                 $baseRingCap = 1048576
-                $targetRingCap = [long]$baseRingCap * [long]$effectiveBufferMultiplier
-                if ($targetRingCap -lt $baseRingCap) { $targetRingCap = $baseRingCap }
+                $targetRingCap = if ($useRealTime) {
+                    [long]$baseRingCap * [long]$effectiveBufferMultiplier
+                } else {
+                    [long]1024
+                }
+                if ($useRealTime -and $targetRingCap -lt $baseRingCap) { $targetRingCap = $baseRingCap }
                 if ($targetRingCap -gt 67108864) { $targetRingCap = 67108864 } # cap at 64M entries
                 $targetRingCap = [int]$targetRingCap
                 $appliedRingCap = [PktMonApi]::ConfigureRingBuffer($targetRingCap)
@@ -4155,20 +4276,6 @@ function Start-Pspkt {
                     $cleanupMessages = [System.Collections.ArrayList]::new()
                     if ($null -ne $attachCleanupError) {
                         $null = $cleanupMessages.Add($attachCleanupError.Exception.Message)
-                    }
-                    if ($createdSession) {
-                        try {
-                            if ($Session.Handle -ne [IntPtr]::Zero) {
-                                $Session.Pspkt.PacketMonitorCloseSessionHandle($Session)
-                            }
-                        } catch {
-                            $null = $cleanupMessages.Add($_.Exception.Message)
-                        }
-                        try {
-                            $Session.Pspkt.PacketMonitorUninitialize()
-                        } catch {
-                            $null = $cleanupMessages.Add($_.Exception.Message)
-                        }
                     }
                     if ($cleanupMessages.Count -gt 0) {
                         throw "$($attachError.Exception.Message) Cleanup failed: $($cleanupMessages -join '; ')"
@@ -4210,19 +4317,10 @@ function Start-Pspkt {
                 # the capture. As soon as the VM starts and its traffic
                 # appears on the host NIC, the filter matches.
                 if ($null -eq $componentsToAdd -or @($componentsToAdd).Count -eq 0) {
-                    if ($vmMacList.Count -gt 0) {
-                        if (-not $NoWarning.IsPresent) {
-                            Write-Warning "VM '$vmLabel' has no live pktmon vmNIC components (VM is Off / Saved?). Falling back to host NIC components; capture starts matching as soon as VM traffic appears on the wire."
-                        }
-                        $componentsToAdd = $Session.Pspkt.EnumPktmonDataSources($true, 1)
-                    } else {
-                        # No MACs, no live components — refuse to proceed
-                        # rather than silently capture nothing or (worse)
-                        # capture all host traffic without VM scoping.
-                        # Common causes: dynamic-MAC VM that has never been
-                        # started, VM with zero vmNICs.
-                        throw "VM '$vmLabel' has no live pktmon components and no discoverable vmNIC MAC addresses (dynamic-MAC VM that has never been started? VM has no vmNIC?). Start the VM at least once to allocate a MAC, assign a static MAC via Set-VMNetworkAdapter -StaticMacAddress, or capture without -VM."
+                    if (-not $NoWarning.IsPresent) {
+                        Write-Warning "VM '$vmLabel' has no live pktmon vmNIC components (VM is Off / Saved?). Falling back to host NIC components; capture starts matching as soon as VM traffic appears on the wire."
                     }
+                    $componentsToAdd = $Session.Pspkt.EnumPktmonDataSources($true, 1)
                 }
 
             } elseif ($Component.Count -eq 1 -and $Component[0] -eq 'NICs') {
@@ -4260,30 +4358,12 @@ function Start-Pspkt {
 
             if ($null -ne $componentsToAdd) {
                 foreach ($comp in $componentsToAdd) {
-                    if ($null -ne $comp -and $comp.Pointer -ne [IntPtr]::Zero) {
+                    if ($null -ne $comp) {
                         $Session.AddSingleDataSourceToSession($comp)
                     }
                 }
             }
             Write-Verbose "Total components added to session: $($Session.Components.Count)"
-        }
-
-        try {
-            $Session.SetSessionActive($true)
-        }
-        catch {
-            # Roll back the stream we just created if activation fails.
-            if ($null -ne $createdStream) {
-                $Session.Pspkt.PacketMonitorCloseRealtimeStream($createdStream)
-            }
-            # If we created the session, tear it down on failure.
-            if ($createdSession) {
-                if ($Session.Handle -ne [IntPtr]::Zero) {
-                    $Session.Pspkt.PacketMonitorCloseSessionHandle($Session)
-                }
-                $Session.Pspkt.PacketMonitorUninitialize()
-            }
-            throw
         }
 
         # Real-time blocking read loop. Ctrl+C triggers the finally block for cleanup.
@@ -4293,7 +4373,8 @@ function Start-Pspkt {
         [PktMonApi]::ResetDroppedCount()
         [PktMonApi]::ClearSeenComponentIds()
         [PktMonApi]::InitTimestampBaseline()
-        Reset-PspktLineCounter
+        $parserModule = $script:PspktParserModule
+        & $parserModule { Reset-PspktLineCounter }
 
         # Set detail level based on ParsingLevel enum.
         Set-PspktDetailLevel -Level ([int]$ParsingLevel)
@@ -4304,6 +4385,7 @@ function Start-Pspkt {
         # Always clear first so a predicate left over from a prior capture in the
         # same PS session can't silently filter this one.
         [PacketLineFormatter]::ClearAppPredicates()
+        [PacketLineFormatter]::SetIcmpDisplayFilter($false, $false)
         # Clear the SMB2 TID/FID name tables so discovered tree/file names from a prior
         # capture in the same PS session never leak into this one.
         [Smb2Parser]::ResetState()
@@ -4563,7 +4645,6 @@ function Start-Pspkt {
         }
 
         # --- Pcapng file writer setup ---
-        $pcapngWriter = $null
         if ($PSBoundParameters.ContainsKey('WriteFile') -and -not [string]::IsNullOrEmpty($WriteFile)) {
             # Resolve the file path to absolute.
             $pcapngPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WriteFile)
@@ -4597,11 +4678,45 @@ function Start-Pspkt {
             $pcapngWriter.Start($pcapngPath, $useAsync, $ringCap, $FlushDisk.IsPresent, $maxBytes, [int]$NumFiles)
 
             # Register with the callback so packets are captured to file.
+            $Session.CaptureFileWriter = $pcapngWriter
             [PktMonApi]::FileWriter = $pcapngWriter
 
             if ($FlushDisk.IsPresent) { $modeLabel = "FlushDisk" } else { $modeLabel = "WriteOnStop" }
             $rotInfo = if ($NumFiles -gt 1) { " [rotation: $NumFiles x $($FileSize)MiB]" } else { '' }
             Write-Host "File writer started: $pcapngPath ($modeLabel)$rotInfo" -ForegroundColor DarkCyan
+        }
+
+        try {
+            [PktMonApi]::SetConsoleCaptureEnabled($useRealTime)
+            $sessionActivationAttempted = $true
+            $Session.SetSessionActive($true)
+            [PktMonApi]::SetCaptureActive($true)
+        }
+        catch {
+            $activationError = $_
+            $activationCleanupErrors = [System.Collections.ArrayList]::new()
+            if ($null -ne $pcapngWriter) {
+                try {
+                    if ([object]::ReferenceEquals([PktMonApi]::FileWriter, $pcapngWriter)) {
+                        [PktMonApi]::FileWriter = $null
+                    }
+                    $pcapngWriter.Stop()
+                    $Session.CaptureFileWriter = $null
+                } catch {
+                    $null = $activationCleanupErrors.Add($_.Exception.Message)
+                }
+            }
+            if ($null -ne $createdStream -and $createdStream.Handle -ne [IntPtr]::Zero) {
+                try {
+                    $Session.Pspkt.PacketMonitorCloseRealtimeStream($createdStream)
+                } catch {
+                    $null = $activationCleanupErrors.Add($_.Exception.Message)
+                }
+            }
+            if ($activationCleanupErrors.Count -gt 0) {
+                throw "$($activationError.Exception.Message) Cleanup failed: $($activationCleanupErrors -join '; ')"
+            }
+            throw $activationError
         }
 
         # The real-time consumer loop writes formatted output directly via
@@ -4633,24 +4748,33 @@ function Start-Pspkt {
         # past setup even when -pl Analysis is combined with a non-TUI path like -WriteEtl.
         if ($analysisWarningCapture) { Remove-Item -Path function:Write-Warning -ErrorAction SilentlyContinue }
 
+        $filterModule = $script:PspktFilterModule
+        $resolveEnumValue = {
+            param($enumType, $value)
+            & $filterModule {
+                param($targetEnumType, $targetValue)
+                Resolve-PspktEnumValue -EnumType $targetEnumType -Value $targetValue
+            } $enumType $value
+        }
+
         try {
           if ($useRealTime -and ($ParsingLevel -eq [PspktParsingLevel]::Analysis)) {
             # --- Analysis mode: BoxyBox TUI (scrolling Text Box) ---
-            $script:ComponentRefreshLocked = $true
+            & $parserModule { $script:ComponentRefreshLocked = $true }
 
             # Resolve drop-trigger values (mirrors the standard real-time branch).
             [int]$aPauseLoc = 0; [int]$aPauseReason = 0; [int]$aStopLoc = 0; [int]$aStopReason = 0
             if ($PSBoundParameters.ContainsKey('PauseOnLocation') -and $PauseOnLocation) {
-                $aPauseLoc = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_LOCATION]) -Value $PauseOnLocation)
+                $aPauseLoc = [int](& $resolveEnumValue ([PKTMON_DROP_LOCATION]) $PauseOnLocation)
             }
             if ($PSBoundParameters.ContainsKey('PauseOnReason') -and $PauseOnReason) {
-                $aPauseReason = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_REASON]) -Value $PauseOnReason)
+                $aPauseReason = [int](& $resolveEnumValue ([PKTMON_DROP_REASON]) $PauseOnReason)
             }
             if ($PSBoundParameters.ContainsKey('StopOnLocation') -and $StopOnLocation) {
-                $aStopLoc = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_LOCATION]) -Value $StopOnLocation)
+                $aStopLoc = [int](& $resolveEnumValue ([PKTMON_DROP_LOCATION]) $StopOnLocation)
             }
             if ($PSBoundParameters.ContainsKey('StopOnReason') -and $StopOnReason) {
-                $aStopReason = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_REASON]) -Value $StopOnReason)
+                $aStopReason = [int](& $resolveEnumValue ([PKTMON_DROP_REASON]) $StopOnReason)
             }
 
             [PacketLineFormatter]::SetDropTriggers(
@@ -4695,23 +4819,23 @@ function Start-Pspkt {
             [int]$stopLocValue = 0
             [int]$stopReasonValue = 0
             if ($PSBoundParameters.ContainsKey('PauseOnLocation') -and $PauseOnLocation) {
-                $pauseLocValue = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_LOCATION]) -Value $PauseOnLocation)
+                $pauseLocValue = [int](& $resolveEnumValue ([PKTMON_DROP_LOCATION]) $PauseOnLocation)
             }
             if ($PSBoundParameters.ContainsKey('PauseOnReason') -and $PauseOnReason) {
-                $pauseReasonValue = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_REASON]) -Value $PauseOnReason)
+                $pauseReasonValue = [int](& $resolveEnumValue ([PKTMON_DROP_REASON]) $PauseOnReason)
             }
             if ($PSBoundParameters.ContainsKey('StopOnLocation') -and $StopOnLocation) {
-                $stopLocValue = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_LOCATION]) -Value $StopOnLocation)
+                $stopLocValue = [int](& $resolveEnumValue ([PKTMON_DROP_LOCATION]) $StopOnLocation)
             }
             if ($PSBoundParameters.ContainsKey('StopOnReason') -and $StopOnReason) {
-                $stopReasonValue = [int](Resolve-PspktEnumValue -EnumType ([PKTMON_DROP_REASON]) -Value $StopOnReason)
+                $stopReasonValue = [int](& $resolveEnumValue ([PKTMON_DROP_REASON]) $StopOnReason)
             }
 
             $pauseHint = if ($pauseEnabled -and $Pause.IsPresent) { " Press 'p' to pause." } else { '' }
             Write-Host "Capturing packets in real-time. Press Ctrl+C to stop...$pauseHint" -ForegroundColor Cyan
             Write-Host (Get-PspktCaptureHeader)
             # Lock component refresh during capture to prevent stalling the consumer.
-            $script:ComponentRefreshLocked = $true
+            & $parserModule { $script:ComponentRefreshLocked = $true }
             $stream = $Session.OutputStream[0]
             $paused = $false
             $stopRequested = $false
@@ -4748,6 +4872,7 @@ function Start-Pspkt {
 
             # Mark capture active so the C# ring buffer wakes its waiter on stop.
             [PktMonApi]::SetCaptureActive($true)
+            [PktMonApi]::SetConsumerActive($true)
 
             while ($Session.Active -and -not $stopRequested) {
                 # --- Key press handling (non-blocking) ---
@@ -4907,13 +5032,14 @@ function Start-Pspkt {
             return
           } else {
             # --- File-only mode (pcapng): return session to console ---
+            $preserveCapture = $true
             Write-Host "Capturing to file: $pcapngPath" -ForegroundColor Cyan
             Write-Host "Use Stop-Pspkt to stop capture and save the file." -ForegroundColor Cyan
             return $Session
           }
         }
         finally {
-            $script:ComponentRefreshLocked = $false
+            & $parserModule {                         $script:ComponentRefreshLocked = $false }
 
             # Restore the console's original output encoding if we changed it.
             if ($null -ne $originalOutputEncoding) {
@@ -4926,85 +5052,150 @@ function Start-Pspkt {
 
             # Clear any application-layer predicate so it can't leak into a later capture.
             [PacketLineFormatter]::ClearAppPredicates()
+            [PacketLineFormatter]::SetIcmpDisplayFilter($false, $false)
             # Free the SMB2 TID/FID name tables (can grow large on long captures).
             [Smb2Parser]::ResetState()
             # Free any in-progress TLS handshake reassembly buffers.
             [TlsParser]::ResetReassembly()
 
-            # Mark capture inactive (wakes any consumer/writer waiters).
-            [PktMonApi]::SetCaptureActive($false)
+            if (-not $preserveCapture) {
+                [PktMonApi]::SetCaptureActive($false)
+                [PktMonApi]::SetConsoleCaptureEnabled($true)
 
-            # Stop pcapng file writer if active.
-            if ($null -ne $pcapngWriter -and $pcapngWriter.IsActive) {
-                [PktMonApi]::FileWriter = $null
-                $pcapngWriter.Stop()
-                $fileDrops = $pcapngWriter.FileDroppedCount
-                $dropSuffix = if ($fileDrops -gt 0) { "; FileDrops: $fileDrops" } else { '' }
-                Write-Host "File saved: $($pcapngWriter.FileName) ($($pcapngWriter.PacketCount) packets$dropSuffix)" -ForegroundColor DarkCyan
-                if ($fileDrops -gt 0) {
-                    Write-Warning "Pcapng file writer dropped $fileDrops packet(s) because the writer thread couldn't keep up. The file is missing data - consider a faster disk, larger -BufferSizeMultiplier, or remove -FlushDisk."
+                if ($null -ne $pcapngWriter) {
+                    if ([object]::ReferenceEquals([PktMonApi]::FileWriter, $pcapngWriter)) {
+                        [PktMonApi]::FileWriter = $null
+                    }
+                    $pcapngWriter.Stop()
+                    $Session.CaptureFileWriter = $null
+                    $fileDrops = $pcapngWriter.FileDroppedCount
+                    $dropSuffix = if ($fileDrops -gt 0) { "; FileDrops: $fileDrops" } else { '' }
+                    Write-Host "File saved: $($pcapngWriter.FileName) ($($pcapngWriter.PacketCount) packets$dropSuffix)" -ForegroundColor DarkCyan
+                    if ($fileDrops -gt 0) {
+                        Write-Warning "Pcapng file writer dropped $fileDrops packet(s) because the writer thread couldn't keep up. The file is missing data - consider a faster disk, larger -BufferSizeMultiplier, or remove -FlushDisk."
+                    }
+                    $lastErr = $pcapngWriter.LastError
+                    if (-not [string]::IsNullOrEmpty($lastErr)) {
+                        Write-Warning "Pcapng writer reported an error: $lastErr"
+                    }
                 }
-                $lastErr = $pcapngWriter.LastError
-                if (-not [string]::IsNullOrEmpty($lastErr)) {
-                    Write-Warning "Pcapng writer reported an error: $lastErr"
-                }
-            }
 
-            # Drain the console ring so any pooled buffers still parked in it (packets produced
-            # but not yet consumed when the loop exited) are released back to the pool instead of
-            # being stranded until the next capture reconfigures the ring. Safe here: the consumer
-            # loop has exited, so this runs on the (sole) consumer thread. Any packets the still-live
-            # native producer delivers after this point are console-only (FileWriter was cleared
-            # above) and are released by the next capture's ring reconfigure.
-            [PktMonApi]::ClearPacketBuffer()
+                [PktMonApi]::ClearPacketBuffer()
 
-            if ($useRealTime) {
-                $missedWrite = [PacketData]::MissedPacketWriteCount
-                $missedRead  = [PacketData]::MissedPacketReadCount
-                $missedTotal = $missedWrite + $missedRead
-                $bufferDropped = [PktMonApi]::DroppedCount
-                Write-Host "`nStopping capture... [Captured: $packetCount; Drops: $droppedCount; Missed: $missedTotal; BufferOverflow: $bufferDropped]" -ForegroundColor Cyan
+                if ($useRealTime) {
+                    $missedWrite = [PacketData]::MissedPacketWriteCount
+                    $missedRead  = [PacketData]::MissedPacketReadCount
+                    $missedTotal = $missedWrite + $missedRead
+                    $bufferDropped = [PktMonApi]::DroppedCount
+                    Write-Host "`nStopping capture... [Captured: $packetCount; Drops: $droppedCount; Missed: $missedTotal; BufferOverflow: $bufferDropped]" -ForegroundColor Cyan
 
-                # Session summary: list components that appeared in capture.
-                $seenIds = [PktMonApi]::GetSeenComponentIds()
-                if ($seenIds.Count -gt 0 -and $null -ne $components) {
-                    Write-Host "`nComponents:" -ForegroundColor DarkGray
-                    foreach ($comp in $components) {
-                        if ([int]$comp.Id -in $seenIds) {
-                            $compLine = "  {0}:{1} {2}" -f [int]$comp.ParentId, [int]$comp.Id, $comp.Name
-                            Write-Host $compLine -ForegroundColor DarkGray
+                    $seenIds = [PktMonApi]::GetSeenComponentIds()
+                    if ($seenIds.Count -gt 0 -and $null -ne $components) {
+                        Write-Host "`nComponents:" -ForegroundColor DarkGray
+                        foreach ($comp in $components) {
+                            if ([int]$comp.Id -in $seenIds) {
+                                $compLine = "  {0}:{1} {2}" -f [int]$comp.ParentId, [int]$comp.Id, $comp.Name
+                                Write-Host $compLine -ForegroundColor DarkGray
+                            }
                         }
                     }
-                }
 
-                # List filters used in this session.
-                if ($Session.Filters.Count -gt 0) {
-                    Write-Host "Filters:" -ForegroundColor DarkGray
-                    foreach ($f in $Session.Filters) {
-                        Write-Host "  $($f.Name)" -ForegroundColor DarkGray
+                    if ($Session.Filters.Count -gt 0) {
+                        Write-Host "Filters:" -ForegroundColor DarkGray
+                        foreach ($f in $Session.Filters) {
+                            Write-Host "  $($f.Name)" -ForegroundColor DarkGray
+                        }
                     }
+                } else {
+                    Write-Host "`nStopping capture..." -ForegroundColor Cyan
                 }
-            } else {
-                Write-Host "`nStopping capture..." -ForegroundColor Cyan
+                Stop-Pspkt -Session $Session -Teardown -ConsumerContext
             }
-            Stop-Pspkt -Session $Session -Teardown
         }
         }
         catch {
             $setupError = $_
-            $setupCleanupError = $null
+            $setupCleanupErrors = [System.Collections.ArrayList]::new()
             if ($analysisWarningCapture) {
                 Remove-Item -Path function:Write-Warning -ErrorAction SilentlyContinue
             }
-            if ($createdSession -and $null -ne $Session) {
+            [PacketLineFormatter]::ClearAppPredicates()
+            [Smb2Parser]::ResetState()
+            [TlsParser]::ResetReassembly()
+            if (
+                $null -ne $Session -and
+                $sessionActivationAttempted -and
+                $Session.Active -and
+                $Session.Handle -ne [IntPtr]::Zero
+            ) {
+                try {
+                    $Session.SetSessionActive($false)
+                } catch {
+                    $null = $setupCleanupErrors.Add($_.Exception.Message)
+                }
+            }
+            [PktMonApi]::SetConsoleCaptureEnabled($true)
+            if ($null -ne $pcapngWriter) {
+                try {
+                    if ([object]::ReferenceEquals([PktMonApi]::FileWriter, $pcapngWriter)) {
+                        [PktMonApi]::FileWriter = $null
+                    }
+                    $pcapngWriter.Stop()
+                    $Session.CaptureFileWriter = $null
+                } catch {
+                    $null = $setupCleanupErrors.Add($_.Exception.Message)
+                }
+            }
+            if (
+                $null -ne $createdStream -and
+                $createdStream.Handle -ne [IntPtr]::Zero -and
+                $null -ne $Session -and
+                $null -ne $Session.Pspkt
+            ) {
+                try {
+                    $Session.Pspkt.PacketMonitorCloseRealtimeStream($createdStream)
+                } catch {
+                    $null = $setupCleanupErrors.Add($_.Exception.Message)
+                }
+            }
+            if (($createdSession -or $Session.Faulted) -and $null -ne $Session) {
                 try {
                     Stop-Pspkt -Session $Session -Teardown
                 } catch {
-                    $setupCleanupError = $_
+                    $null = $setupCleanupErrors.Add($_.Exception.Message)
+                }
+            } elseif ($null -ne $Session) {
+                try {
+                    $Session.RollbackConfiguration(
+                        $initialComponentCount,
+                        $initialFilterCount,
+                        $initialVmScope
+                    )
+                    $Session.CaptureType = $initialSessionState.CaptureType
+                    $Session.LogMode = $initialSessionState.LogMode
+                    $Session.EventFlags = $initialSessionState.EventFlags
+                    $Session.PacketSize = $initialSessionState.PacketSize
+                    $Session.FileSize = $initialSessionState.FileSize
+                    $Session.FileName = $initialSessionState.FileName
+                    $Session.CountersOnly = $initialSessionState.CountersOnly
+                    $Session.CaptureCleanupPending = $initialSessionState.CaptureCleanupPending
+                    if ([PktMonApi]::ConfiguredRingCapacity -ne $initialRingCapacity) {
+                        [void][PktMonApi]::ConfigureRingBuffer($initialRingCapacity)
+                    }
+                } catch {
+                    $null = $setupCleanupErrors.Add($_.Exception.Message)
                 }
             }
-            if ($null -ne $setupCleanupError) {
-                throw "$($setupError.Exception.Message) Cleanup failed: $($setupCleanupError.Exception.Message)"
+            if ($setupCleanupErrors.Count -gt 0) {
+                if ($captureOwnershipAcquired) {
+                    [PktMonApi]::EndCapture($captureOwnerHandle)
+                    $Session.CaptureCleanupPending = $initialSessionState.CaptureCleanupPending
+                }
+                throw "$($setupError.Exception.Message) Cleanup failed: $($setupCleanupErrors -join '; ')"
+            }
+            if ($captureOwnershipAcquired) {
+                [PktMonApi]::EndCapture($captureOwnerHandle)
+                $Session.CaptureCleanupPending = $initialSessionState.CaptureCleanupPending
             }
             throw $setupError
         }
@@ -5042,22 +5233,70 @@ function Stop-Pspkt {
 
         [Parameter(Mandatory = $false)]
         [switch]
-        $Teardown
+        $Teardown,
+
+        [Parameter(Mandatory = $false, DontShow = $true)]
+        [switch]
+        $ConsumerContext
     )
 
     process {
-        if ($Teardown) {
-            # Deactivate if still active.
+        $captureOwnerHandle = $Session.Handle
+        $ownsCapture = (
+            [PktMonApi]::IsCaptureOwner($captureOwnerHandle) -or
+            ($Session.CaptureCleanupPending -and -not [PktMonApi]::HasCaptureOwner)
+        )
+
+        if ($ownsCapture -and [PktMonApi]::IsConsumerActive -and -not $ConsumerContext.IsPresent) {
             if ($Session.Active -and $Session.Handle -ne [IntPtr]::Zero) {
                 $Session.SetSessionActive($false)
             }
+            $consumerDeadline = [DateTime]::UtcNow.AddSeconds(5)
+            while ([PktMonApi]::IsConsumerActive -and [DateTime]::UtcNow -lt $consumerDeadline) {
+                Start-Sleep -Milliseconds 10
+            }
+            if ([PktMonApi]::IsConsumerActive) {
+                throw "Capture consumer did not stop within 5 seconds."
+            }
+            return
+        }
 
-            # Close all attached real-time streams (snapshot to avoid mutation during enumeration).
+        if ($Teardown) {
+            $cleanupErrors = [System.Collections.ArrayList]::new()
+
+            if ($Session.Active -and $Session.Handle -ne [IntPtr]::Zero) {
+                try {
+                    $Session.SetSessionActive($false)
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
+            }
+
+            $fw = $Session.CaptureFileWriter
+            if ($null -ne $fw) {
+                try {
+                    if ([object]::ReferenceEquals([PktMonApi]::FileWriter, $fw)) {
+                        [PktMonApi]::FileWriter = $null
+                    }
+                    $fw.Stop()
+                    $Session.CaptureFileWriter = $null
+                    if (-not [string]::IsNullOrEmpty($fw.LastError)) {
+                        Write-Warning "Pcapng writer reported an error: $($fw.LastError)"
+                    }
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
+            }
+
             if ($null -ne $Session.Pspkt) {
                 $streams = @($Session.OutputStream)
                 foreach ($stream in $streams) {
                     if ($null -ne $stream -and $stream.Handle -ne [IntPtr]::Zero) {
-                        $Session.Pspkt.PacketMonitorCloseRealtimeStream($stream)
+                        try {
+                            $Session.Pspkt.PacketMonitorCloseRealtimeStream($stream)
+                        } catch {
+                            $null = $cleanupErrors.Add($_.Exception.Message)
+                        }
                     }
                 }
             }
@@ -5067,63 +5306,141 @@ function Stop-Pspkt {
             # packet byte[] pool can retain hundreds of MB more; both are static and would
             # otherwise persist until the next capture. Clear the managed flag first so
             # ConfigureRingBuffer is allowed to shrink the ring, then drop the pooled arrays.
-            [PktMonApi]::SetCaptureActive($false)
-            try { [void][PktMonApi]::ConfigureRingBuffer(1024) } catch { }
-            [PacketBytePool]::Clear()
+            if ($ownsCapture) {
+                try {
+                    [PktMonApi]::SetCaptureActive($false)
+                    [PktMonApi]::SetConsoleCaptureEnabled($true)
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
+                try {
+                    [void][PktMonApi]::ConfigureRingBuffer(1024)
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
+                try {
+                    [PacketBytePool]::Clear()
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
+            }
 
             # The above freed the buffers on the managed heap, but .NET keeps the segments
             # committed and Windows keeps the pages resident, so the process working set doesn't
             # drop on its own. Force a GC (with LOH compaction) and trim the working set so the
             # memory actually returns to the OS after a large capture.
-            [PktMonApi]::ReleaseCaptureMemory()
+            if ($ownsCapture) {
+                try {
+                    [PktMonApi]::ReleaseCaptureMemory()
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
+            }
 
             # Reset the SPSC ring buffer dropped counter for a clean next session.
-            [PktMonApi]::ResetDroppedCount()
+            if ($ownsCapture) {
+                try {
+                    [PktMonApi]::ResetDroppedCount()
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
+                }
+            }
 
             # Close the session handle.
+            if ($ownsCapture) {
+                [PktMonApi]::EndCapture($captureOwnerHandle)
+                $Session.CaptureCleanupPending = $false
+            } elseif ($Session.CaptureCleanupPending) {
+                $Session.CaptureCleanupPending = $false
+            }
             if ($Session.Handle -ne [IntPtr]::Zero) {
-                if ($null -ne $Session.Pspkt) {
-                    $Session.Pspkt.PacketMonitorCloseSessionHandle($Session)
-                } else {
-                    $Session.CloseSessionHandle()
+                try {
+                    if ($null -ne $Session.Pspkt) {
+                        $Session.Pspkt.PacketMonitorCloseSessionHandle($Session)
+                    } else {
+                        $Session.CloseSessionHandle()
+                    }
+                } catch {
+                    $null = $cleanupErrors.Add($_.Exception.Message)
                 }
             }
 
             # Uninitialize the pktmon API.
-            if ($null -ne $Session.Pspkt) {
-                $Session.Pspkt.PacketMonitorUninitialize()
-                $Session.Pspkt = $null
+            $sessionOwner = $Session.Pspkt
+            if ($null -ne $sessionOwner) {
+                $uninitialized = $false
+                if (
+                    $sessionOwner.OpenPktmonSessions.Count -eq 0 -and
+                    $sessionOwner.OpenPktmonRealTimeStreams.Count -eq 0
+                ) {
+                    try {
+                        $sessionOwner.PacketMonitorUninitialize()
+                        $uninitialized = $true
+                    } catch {
+                        $null = $cleanupErrors.Add($_.Exception.Message)
+                    }
+                } else {
+                    $uninitialized = $true
+                }
+                if ($uninitialized -and $Session.Handle -eq [IntPtr]::Zero) {
+                    $Session.Pspkt = $null
+                }
             }
 
+            if ($cleanupErrors.Count -gt 0) {
+                if ($ConsumerContext.IsPresent) {
+                    [PktMonApi]::SetConsumerActive($false)
+                }
+                throw "Session teardown failed: $($cleanupErrors -join '; ')"
+            }
+
+            if ($ConsumerContext.IsPresent) {
+                [PktMonApi]::SetConsumerActive($false)
+            }
             return
         }
 
         # Simple stop — deactivate only.
-        if (-not $Session.Active) {
-            Write-Verbose "Session '$($Session.Name)' is already inactive."
-            return $Session
-        }
-
-        if ($Session.Handle -eq [IntPtr]::Zero) {
-            throw "Session '$($Session.Name)' has a null handle."
-        }
-
-        $Session.SetSessionActive($false)
-
-        # Stop pcapng file writer if still active.
-        $fw = [PktMonApi]::FileWriter
-        if ($null -ne $fw -and $fw.IsActive) {
-            [PktMonApi]::FileWriter = $null
-            $fw.Stop()
-            $fileDrops = $fw.FileDroppedCount
-            $dropSuffix = if ($fileDrops -gt 0) { "; FileDrops: $fileDrops" } else { '' }
-            Write-Host "File saved: $($fw.FileName) ($($fw.PacketCount) packets$dropSuffix)" -ForegroundColor DarkCyan
-            if ($fileDrops -gt 0) {
-                Write-Warning "Pcapng file writer dropped $fileDrops packet(s) because the writer thread couldn't keep up."
+        if ($Session.Active -or $ownsCapture) {
+            if ($Session.Handle -eq [IntPtr]::Zero) {
+                throw "Session '$($Session.Name)' has a null handle."
             }
-            $lastErr = $fw.LastError
-            if (-not [string]::IsNullOrEmpty($lastErr)) {
-                Write-Warning "Pcapng writer reported an error: $lastErr"
+            $Session.SetSessionActive($false)
+        } else {
+            Write-Verbose "Session '$($Session.Name)' is already inactive."
+        }
+
+        if ($ownsCapture) {
+            $fw = $Session.CaptureFileWriter
+            if ($null -ne $fw) {
+                if ([object]::ReferenceEquals([PktMonApi]::FileWriter, $fw)) {
+                    [PktMonApi]::FileWriter = $null
+                }
+                $fw.Stop()
+                $Session.CaptureFileWriter = $null
+                $fileDrops = $fw.FileDroppedCount
+                $dropSuffix = if ($fileDrops -gt 0) { "; FileDrops: $fileDrops" } else { '' }
+                Write-Host "File saved: $($fw.FileName) ($($fw.PacketCount) packets$dropSuffix)" -ForegroundColor DarkCyan
+                if ($fileDrops -gt 0) {
+                    Write-Warning "Pcapng file writer dropped $fileDrops packet(s) because the writer thread couldn't keep up."
+                }
+                $lastErr = $fw.LastError
+                if (-not [string]::IsNullOrEmpty($lastErr)) {
+                    Write-Warning "Pcapng writer reported an error: $lastErr"
+                }
+            }
+            [PktMonApi]::SetCaptureActive($false)
+            [PktMonApi]::SetConsoleCaptureEnabled($true)
+            [PktMonApi]::ClearPacketBuffer()
+            [PktMonApi]::EndCapture($captureOwnerHandle)
+            $Session.CaptureCleanupPending = $false
+        }
+
+        if ($null -ne $Session.Pspkt) {
+            foreach ($stream in @($Session.OutputStream)) {
+                if ($null -ne $stream -and $stream.Handle -ne [IntPtr]::Zero) {
+                    $Session.Pspkt.PacketMonitorCloseRealtimeStream($stream)
+                }
             }
         }
 
