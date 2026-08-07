@@ -453,7 +453,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
                 $writer.Stop()
                 $writer.IsActive | Should -BeFalse
 
-                # File should exist after stop.
                 Test-Path $tmpFile | Should -BeTrue
                 # Should have at least the SHB + IDB (28 + 20 = 48 bytes).
                 (Get-Item $tmpFile).Length | Should -BeGreaterOrEqual 48
@@ -474,7 +473,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
                 $writer = [PcapngWriter]::new()
                 $writer.Start($tmpFile, $false, 1024)
 
-                # Create a fake packet with ethernet frame data.
                 $data = [byte[]]::new(100)
                 [System.Random]::new(42).NextBytes($data)
                 $pkt = [PSPacketData]::new($data, 100, 0, 14, 86, 0, 0)
@@ -482,7 +480,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
                 $writer.PacketCount | Should -Be 1
 
                 $writer.Stop()
-                # File should be larger than just headers (48 bytes).
                 (Get-Item $tmpFile).Length | Should -BeGreaterThan 48
             }
             finally {
@@ -695,7 +692,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $ctxQuery = [DnsContext]::new()
             $null = [DnsParser]::TryParseDns($script:dnsRespNxd,        12345, 53, [ref]$ctxResp)
             $null = [DnsParser]::TryParseDns($script:dnsQueryExampleA,  53, 12345, [ref]$ctxQuery)
-            # Response with NXDomain matches.
             $p.Evaluate([ref]$ctxResp)  | Should -BeTrue
             # Query is unaffected by Rcodes filter — Rcodes only consulted when Qr==1.
             $p.Evaluate([ref]$ctxQuery) | Should -BeTrue
@@ -1950,7 +1946,7 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $null = [HttpParser]::TryParseHttp($script:httpReqGet, [ref]$ctx)
             $expected = 'HTTP: GET, URI: api.example.com/api/users?id=1'
             [HttpParser]::FormatHttpDefaultFromContext([ref]$ctx) | Should -Be $expected
-            [HttpParser]::FormatHttpFromContext([ref]$ctx)        | Should -Be $expected   # Detailed == Default
+            [HttpParser]::FormatHttpFromContext([ref]$ctx)        | Should -Be $expected
         }
 
         It 'HttpParser Default response line (Status Code + Phrase, no URI)' {
@@ -2637,8 +2633,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
         BeforeAll {
             $script:smbStartCmd = Get-Command -Name Start-Pspkt -ErrorAction Stop
 
-            # Builds an SMB2 Create request for the supplied filename. Returns the
-            # full byte array including Direct-TCP framing.
             function script:New-Smb2CreateRequest {
                 param([string]$Filename, [byte]$Flags = 0, [uint32]$Status = 0, [int]$Command = 5)
                 $filenameUtf16 = [System.Text.Encoding]::Unicode.GetBytes($Filename)
@@ -2673,7 +2667,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
                 return [byte[]]($framing + $body)
             }
 
-            # Builds an SMB2 TreeConnect request for the supplied share path.
             function script:New-Smb2TreeConnectRequest {
                 param([string]$Path)
                 $pathUtf16 = [System.Text.Encoding]::Unicode.GetBytes($Path)
@@ -2934,7 +2927,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
 
     Context 'SMB2 spec formatter (Phase 1)' {
         BeforeAll {
-            # Builds a framed SMB2 message (Direct-TCP length prefix + SMB2 header + body).
             function script:New-Smb2Msg {
                 param(
                     [int]$Command, [byte]$Flags = 0, [uint32]$Status = 0,
@@ -3287,7 +3279,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             }
             function script:U32le2 { param([uint32]$v) [byte[]](($v -band 0xff), (($v -shr 8) -band 0xff), (($v -shr 16) -band 0xff), (($v -shr 24) -band 0xff)) }
 
-            # Flattens a List<BoxyBox.TreeNode> into newline-joined, ANSI-stripped text.
             function script:Smb2TreeText {
                 param($Roots)
                 $acc = [System.Collections.Generic.List[string]]::new()
@@ -3412,8 +3403,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             [BoxyBox.AnsiText]::StripAnsi($roots[1].Text) | Should -Match '^SMB2 TREE_DISCONNECT'
         }
 
-        # ---- Phase 2b: per-command body subtrees ----
-
         It 'builds a CREATE request body with decoded fields' {
             $name = [System.Text.Encoding]::Unicode.GetBytes('reports\q3.xlsx')
             $cb = [byte[]]::new(56); $cb[0]=57; $cb[3]=0x09      # RequestedOplockLevel BATCH
@@ -3537,8 +3526,6 @@ Describe 'pspkt module exports and command behavior' -Tag 'Unit' -Skip:(-not (Te
             $ctxt | Should -Match 'Output Buffer Length: 16'
             $ctxt | Should -Not -Match 'Byte Count'
         }
-
-        # ---- Phase 2c: FileInfo result parsing ----
 
         It 'parses QUERY_DIRECTORY response entries using the correlated info class' {
             [Smb2Parser]::ResetState()
@@ -6227,7 +6214,6 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
             [BoxyBox.AnsiText]::VisibleLength($f.Substring($f.IndexOf('H') + 1)) | Should -Be 3
         }
         It 'produces frame rows that are each exactly Width visible columns' {
-            # Split the concatenated frame at each cursor-move and check the content width.
             $rowContents = $script:frame -split "$($script:ESC)\[\d+;\d+H" | Where-Object { $_ -ne '' }
             $rowContents.Count | Should -Be 5
             foreach ($rc in $rowContents) {
@@ -7251,7 +7237,6 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
     }
 
     Context 'Network parser Details trees' {
-        # Helper: find a root node by key.
         function script:GetNode($roots, $key) { $roots | Where-Object { $_.Key -eq $key } | Select-Object -First 1 }
 
         It 'IPv4 renders the full Wireshark-style bitfield breakdown (DF set)' {
@@ -7814,28 +7799,230 @@ Describe 'BoxyBox TUI render engine' -Tag 'Unit' {
     Context 'Get-PspktTuiMenu' {
         BeforeAll {
             $script:mod = Get-Module -All PspktSession | Select-Object -First 1
+            $script:emptyMenuRoot = Join-Path $env:TEMP (
+                'pspkt-empty-menus-{0}' -f [guid]::NewGuid().ToString('N')
+            )
+            $null = New-Item -ItemType Directory -Path $script:emptyMenuRoot
         }
-        It 'loads the shipped Details menu with 6 items' {
-            $def = & $script:mod { Get-PspktTuiMenu -Box 'Details' }
-            $def.Box | Should -Be 'Details'
-            $def.Menu.Count | Should -Be 6
-            $def.Menu[0].Name | Should -Be 'Expand'
-            # The Ctrl+PgUp/PgDn "page the Text Box" hotkey is present in Details focus.
-            ($def.Menu | Where-Object { $_.Name -eq 'PageText' -and $_.Hotkey -eq 'Ctrl+PgUp|PgDn' }).Count | Should -Be 1
+
+        AfterAll {
+            Remove-Item -LiteralPath $script:emptyMenuRoot -Recurse -Force
         }
-        It 'loads TextLive and TextFocus menus' {
-            $live  = & $script:mod { Get-PspktTuiMenu -Box 'TextLive' }
-            $focus = & $script:mod { Get-PspktTuiMenu -Box 'TextFocus' }
-            $live.Menu.Count  | Should -BeGreaterThan 0
-            $focus.Menu.Count | Should -BeGreaterThan 0
-            ($focus.Menu | Where-Object { $_.Name -eq 'Copy' }).Count | Should -Be 1
-            # Pause ('p') is offered in both live and focus modes.
-            ($live.Menu  | Where-Object { $_.Name -eq 'Pause' -and $_.Hotkey -eq 'P' }).Count | Should -Be 1
-            ($focus.Menu | Where-Object { $_.Name -eq 'Pause' -and $_.Hotkey -eq 'P' }).Count | Should -Be 1
+
+        It 'loads the exact shipped Analysis menus' {
+            $live = & $script:mod {
+                Get-PspktTuiMenu -Box 'TextLive' -UserMenuRoot $args[0]
+            } $script:emptyMenuRoot
+            $focus = & $script:mod {
+                Get-PspktTuiMenu -Box 'TextFocus' -UserMenuRoot $args[0]
+            } $script:emptyMenuRoot
+            $details = & $script:mod {
+                Get-PspktTuiMenu -Box 'Details' -UserMenuRoot $args[0]
+            } $script:emptyMenuRoot
+            $leftArrow = [char]0x2190
+            $upArrow = [char]0x2191
+            $rightArrow = [char]0x2192
+            $downArrow = [char]0x2193
+
+            (@($live.Menu | ForEach-Object { "$($_.Name)/$($_.Hotkey)" }) -join ',') |
+                Should -BeExactly 'Help/H,Focus/F,Stop/S'
+            (@($focus.Menu | ForEach-Object { "$($_.Name)/$($_.Hotkey)" }) -join ',') |
+                Should -BeExactly 'Resume/R,Pause/P,Stop/S,Save/W,Switch/Tab,Copy/Shift+Ctrl+C,Help/H'
+            (@($details.Menu | ForEach-Object { "$($_.Name)/$($_.Hotkey)" }) -join ',') |
+                Should -BeExactly "Expand/$rightArrow,Collapse/$leftArrow,ExpandAll/Ctrl+$rightArrow,CollapseAll/Ctrl+$leftArrow,PrevNext/Ctrl+$upArrow$downArrow,PageText/Ctrl+PgUp|PgDn,Help/H"
         }
+
         It 'returns an empty definition for an unknown box' {
-            $def = & $script:mod { Get-PspktTuiMenu -Box 'DoesNotExist' }
+            $def = & $script:mod {
+                Get-PspktTuiMenu -Box 'DoesNotExist' -UserMenuRoot $args[0]
+            } $script:emptyMenuRoot
             $def.Menu.Count | Should -Be 0
+        }
+
+        It 'keeps Help input code-owned when a user menu omits Help' {
+            $overrideRoot = Join-Path $env:TEMP (
+                'pspkt-override-menus-{0}' -f [guid]::NewGuid().ToString('N')
+            )
+            $null = New-Item -ItemType Directory -Path $overrideRoot
+            try {
+                @'
+{
+  "Box": "TextLive",
+  "Menu": [
+    { "Name": "Focus", "DisplayName": "Custom focus", "Hotkey": "X" }
+  ]
+}
+'@ | Set-Content -LiteralPath (
+                    Join-Path $overrideRoot 'TextLive.json'
+                ) -Encoding UTF8
+
+                $menu = & $script:mod {
+                    Get-PspktTuiMenu -Box 'TextLive' -UserMenuRoot $args[0]
+                } $overrideRoot
+                $helpAction = & $script:mod {
+                    Get-PspktTuiHelpInputAction `
+                        -HelpVisible $false `
+                        -Key ([ConsoleKey]::H) `
+                        -KeyChar 'h' `
+                        -Control $false `
+                        -Shift $false `
+                        -Alt $false
+                }
+
+                $menu.Menu.Count | Should -Be 1
+                $menu.Menu[0].Hotkey | Should -BeExactly 'X'
+                $helpAction | Should -BeExactly 'Open'
+            } finally {
+                Remove-Item -LiteralPath $overrideRoot -Recurse -Force
+            }
+        }
+    }
+
+    Context 'Analysis Help helpers' {
+        BeforeAll {
+            $script:mod = Get-Module -All PspktSession | Select-Object -First 1
+        }
+
+        It 'loads and formats the shipped Analysis Help content' {
+            $content = & $script:mod { Get-PspktTuiHelpContent }
+
+            $content.Title | Should -BeExactly 'Analysis Help'
+            $content.Lines.Count | Should -Be 44
+            $content.Lines[0] | Should -BeExactly 'Global (Help closed)'
+            $content.Lines[1] | Should -BeExactly (
+                '  {0,-24} {1}' -f 'H', 'Open Help.'
+            )
+            $content.Lines[43] | Should -BeExactly (
+                '  While Help is open, all other shortcuts are ignored.'
+            )
+        }
+
+        It 'classifies the complete Analysis Help input matrix' {
+            $cases = @(
+                @{ Visible = $false; Key = 'H'; Char = 'h'; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'Open' },
+                @{ Visible = $false; Key = 'H'; Char = 'H'; Ctrl = $false; Shift = $true;  Alt = $false; Expected = 'Open' },
+                @{ Visible = $false; Key = 'H'; Char = [char]8; Ctrl = $true; Shift = $false; Alt = $false; Expected = 'None' },
+                @{ Visible = $false; Key = 'S'; Char = 's'; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'None' },
+                @{ Visible = $false; Key = 'C'; Char = [char]3; Ctrl = $true; Shift = $true; Alt = $false; Expected = 'None' },
+                @{ Visible = $true; Key = 'Escape'; Char = [char]27; Ctrl = $true; Shift = $true; Alt = $true; Expected = 'Close' },
+                @{ Visible = $true; Key = 'H'; Char = 'h'; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'Close' },
+                @{ Visible = $true; Key = 'S'; Char = 'S'; Ctrl = $false; Shift = $true; Alt = $false; Expected = 'Stop' },
+                @{ Visible = $true; Key = 'UpArrow'; Char = [char]0; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'MoveUp' },
+                @{ Visible = $true; Key = 'DownArrow'; Char = [char]0; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'MoveDown' },
+                @{ Visible = $true; Key = 'PageUp'; Char = [char]0; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'PageUp' },
+                @{ Visible = $true; Key = 'PageDown'; Char = [char]0; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'PageDown' },
+                @{ Visible = $true; Key = 'Home'; Char = [char]0; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'MoveHome' },
+                @{ Visible = $true; Key = 'End'; Char = [char]0; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'MoveEnd' },
+                @{ Visible = $true; Key = 'UpArrow'; Char = [char]0; Ctrl = $true; Shift = $false; Alt = $false; Expected = 'Consumed' },
+                @{ Visible = $true; Key = 'W'; Char = 'w'; Ctrl = $false; Shift = $false; Alt = $false; Expected = 'Consumed' }
+            )
+
+            foreach ($case in $cases) {
+                $actual = & $script:mod {
+                    Get-PspktTuiHelpInputAction `
+                        -HelpVisible $args[0] `
+                        -Key ([ConsoleKey]::$($args[1])) `
+                        -KeyChar ([char]$args[2]) `
+                        -Control $args[3] `
+                        -Shift $args[4] `
+                        -Alt $args[5]
+                } $case.Visible $case.Key $case.Char $case.Ctrl $case.Shift $case.Alt
+
+                $actual | Should -BeExactly $case.Expected
+            }
+        }
+
+        It 'renders Analysis Help within the box area and handles zero height' {
+            $overlay = [BoxyBox.ScrollableOverlayBox]::new(
+                20,
+                2,
+                'Analysis Help',
+                [System.Collections.Generic.List[string]]@(
+                    'one', 'two', 'three', 'four', 'five',
+                    'six', 'seven', 'eight', 'nine', 'ten'
+                )
+            )
+
+            $frame = & $script:mod {
+                Get-PspktTuiHelpOverlayFrame `
+                    -Overlay $args[0] `
+                    -ConsoleWidth 80 `
+                    -ConsoleHeight 24 `
+                    -AreaTop 2
+            } $overlay
+
+            $frame.Top | Should -BeGreaterOrEqual 2
+            $frame.Width | Should -Be 76
+            $frame.Count | Should -Be 20
+            $overlay.ConfiguredBodyRows | Should -Be 18
+
+            $emptyFrame = & $script:mod {
+                Get-PspktTuiHelpOverlayFrame `
+                    -Overlay $args[0] `
+                    -ConsoleWidth 80 `
+                    -ConsoleHeight 1 `
+                    -AreaTop 2
+            } $overlay
+
+            $emptyFrame.Count | Should -Be 0
+            $emptyFrame.Lines.Count | Should -Be 0
+        }
+
+        It 'suspends refreshes and resumes transient deadlines exactly' {
+            $now = [datetime]'2026-01-02T03:04:05Z'
+            $suspended = & $script:mod {
+                Update-PspktTuiDeferredDeadline `
+                    -Action Suspend `
+                    -Now $args[0] `
+                    -Until $args[0].AddSeconds(2) `
+                    -Remaining ([timespan]::Zero) `
+                    -Duration ([timespan]::FromSeconds(3))
+            } $now
+
+            $suspended.Until | Should -Be ([datetime]::MaxValue)
+            $suspended.Remaining | Should -Be ([timespan]::FromSeconds(2))
+
+            $refreshed = & $script:mod {
+                Update-PspktTuiDeferredDeadline `
+                    -Action RefreshSuspended `
+                    -Now $args[0] `
+                    -Until ([datetime]::MaxValue) `
+                    -Remaining ([timespan]::FromSeconds(2)) `
+                    -Duration ([timespan]::FromSeconds(3))
+            } $now
+
+            $refreshed.Until | Should -Be ([datetime]::MaxValue)
+            $refreshed.Remaining | Should -Be ([timespan]::FromSeconds(3))
+
+            $resumed = & $script:mod {
+                Update-PspktTuiDeferredDeadline `
+                    -Action Resume `
+                    -Now $args[0] `
+                    -Until ([datetime]::MaxValue) `
+                    -Remaining ([timespan]::FromSeconds(2)) `
+                    -Duration ([timespan]::FromSeconds(3))
+            } $now
+
+            $resumed.Until | Should -Be $now.AddSeconds(2)
+            $resumed.Remaining | Should -Be ([timespan]::Zero)
+        }
+
+        It 'loads Analysis Help in a fresh child process' {
+            $command = @"
+Import-Module '$script:modulePath' -Force -ErrorAction Stop
+`$sessionModule = Get-Module -All PspktSession |
+    Where-Object { `$_.Path -like '*function\PspktSession.psm1' } |
+    Select-Object -First 1
+`$content = & `$sessionModule { Get-PspktTuiHelpContent }
+"Title=`$(`$content.Title);Lines=`$(`$content.Lines.Count)"
+"@
+            $encodedCommand = [Convert]::ToBase64String(
+                [Text.Encoding]::Unicode.GetBytes($command)
+            )
+            $hostPath = (Get-Process -Id $PID).Path
+            $output = @(& $hostPath -NoProfile -EncodedCommand $encodedCommand)
+
+            ($output -join "`n") | Should -Match 'Title=Analysis Help;Lines=44'
         }
     }
 
@@ -8303,6 +8490,71 @@ Describe 'pspkt test prechecks' -Tag 'Precheck' {
         Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Invoke-Tests.ps1') | Should -BeTrue
     }
 
+    It 'ships the exact Analysis Help definition' {
+        $helpPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'TUI\AnalysisHelp.json'
+        Test-Path -LiteralPath $helpPath | Should -BeTrue
+
+        $canonicalHelp = (
+            Get-Content -LiteralPath $helpPath -Raw -Encoding UTF8
+        ) -replace "`r`n", "`n"
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            $canonicalHash = (
+                $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonicalHelp)) |
+                    ForEach-Object { $_.ToString('x2') }
+            ) -join ''
+        } finally {
+            $sha.Dispose()
+        }
+        $canonicalHash |
+            Should -BeExactly '3489bfb4e4c7793a26fef27f8e6c035d7aa80c28e694d02a974cc3bafd25a107'
+
+        $help = Get-Content -LiteralPath $helpPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+        $globalBindings = @(
+            ($help.Sections | Where-Object { $_.Id -eq 'Global' }).Bindings
+        )
+        $leftArrow = [char]0x2190
+        $upArrow = [char]0x2191
+        $rightArrow = [char]0x2192
+        $downArrow = [char]0x2193
+        $menuExpectations = [ordered]@{
+            TextLive = 'Help/H,Focus/F,Stop/S'
+            TextFocus = 'Resume/R,Pause/P,Stop/S,Save/W,Switch/Tab,Copy/Shift+Ctrl+C,Help/H'
+            Details = "Expand/$rightArrow,Collapse/$leftArrow,ExpandAll/Ctrl+$rightArrow,CollapseAll/Ctrl+$leftArrow,PrevNext/Ctrl+$upArrow$downArrow,PageText/Ctrl+PgUp|PgDn,Help/H"
+        }
+
+        foreach ($menuEntry in $menuExpectations.GetEnumerator()) {
+            $menuPath = Join-Path (
+                Split-Path -Parent $PSScriptRoot
+            ) "TUI\BoxyBox\menus\$($menuEntry.Key).json"
+            $menu = Get-Content -LiteralPath $menuPath -Raw -Encoding UTF8 |
+                ConvertFrom-Json
+            (@($menu.Menu | ForEach-Object { "$($_.Name)/$($_.Hotkey)" }) -join ',') |
+                Should -BeExactly $menuEntry.Value
+
+            $sectionBindings = @(
+                ($help.Sections | Where-Object { $_.Id -eq $menuEntry.Key }).Bindings
+            )
+            $effectiveBindings = @($globalBindings + $sectionBindings)
+            foreach ($item in $menu.Menu) {
+                $matchingBindings = @(
+                    $effectiveBindings |
+                        Where-Object { $_.Action -eq $item.Name }
+                )
+                $matchingBindings.Count | Should -Be 1
+                $displayHotkey = if (
+                    $null -ne $matchingBindings[0].PSObject.Properties['MenuHotkey']
+                ) {
+                    [string]$matchingBindings[0].MenuHotkey
+                } else {
+                    [string]$matchingBindings[0].Key
+                }
+                [string]$item.Hotkey | Should -BeExactly $displayHotkey
+            }
+        }
+    }
+
     It 'reports when elevated shell is required for full unit tests' {
         if (-not $script:runningAsAdmin) {
             Set-ItResult -Inconclusive -Because 'pspkt.psm1 has #Requires -RunAsAdministrator'
@@ -8386,6 +8638,107 @@ Describe 'pspkt test prechecks' -Tag 'Precheck' {
             )
             $startSource | Should -Not -Match 'QF-VM-MAC-\$macStr'
             $startSource | Should -Match 'QF-IP-\$IPAddress'
+        }
+    }
+
+    Context 'Analysis Help wiring' {
+        It 'wires modal Help into the non-blocking Analysis loop' {
+            $repoRoot = Split-Path -Parent $PSScriptRoot
+            $sessionPath = Join-Path $repoRoot 'function\PspktSession.psm1'
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                $sessionPath,
+                [ref]$tokens,
+                [ref]$parseErrors
+            )
+            $analysisFunction = $ast.Find(
+                {
+                    param($node)
+                    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                        $node.Name -eq 'Invoke-PspktAnalysisLoop'
+                },
+                $true
+            )
+            $analysisSource = $analysisFunction.Extent.Text
+
+            $parseErrors.Count | Should -Be 0
+            $analysisSource | Should -Match 'Get-PspktTuiHelpContent'
+            $analysisSource | Should -Match '\[BoxyBox\.ScrollableOverlayBox\]::new'
+            $analysisSource | Should -Match '\$helpState\s*=\s*\[pscustomobject\]'
+            $analysisSource | Should -Match '\$dismissHelp\s*=\s*\{'
+            $analysisSource | Should -Match (
+                'if \(\$controlCAction -eq ''Stop''\)[\s\S]*?' +
+                'Get-PspktTuiHelpInputAction[\s\S]*?' +
+                'if \(\$controlCAction -eq ''Copy''\)'
+            )
+            $analysisSource | Should -Match 'Get-PspktTuiHelpOverlayFrame'
+            $analysisSource | Should -Match '\$composed \+= \$helpRegion\.BuildFrame'
+            $analysisSource | Should -Match '\$helpState\.TransitionPending'
+            $analysisSource | Should -Match '\$helpState\.ResidueCount'
+            $analysisSource | Should -Match '\$warnState\.Suspended'
+            $analysisSource | Should -Match 'Update-PspktTuiDeferredDeadline'
+            $analysisSource | Should -Match '\$warnActive = \$warnShouldShow'
+            $analysisSource | Should -Match '\(H\)elp \(F\)ocus \(S\)top'
+            $analysisSource | Should -Match '\(H\)elp \(R\)esume \(S\)top'
+            $analysisSource | Should -Match (
+                '&\s+\$dismissHelp\s+-ForVisibleClose\s+-DeferResume'
+            )
+            $modalIf = $analysisFunction.Body.Find(
+                {
+                    param($node)
+                    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+                        $node.Clauses.Count -gt 0 -and
+                        $node.Clauses[0].Item1.Extent.Text -match
+                            '\$helpAction\s+-ne\s+''None'''
+                },
+                $true
+            )
+            $modalIf | Should -Not -BeNullOrEmpty
+            $modalContinues = @(
+                $modalIf.FindAll(
+                    {
+                        param($node)
+                        $node -is [System.Management.Automation.Language.ContinueStatementAst]
+                    },
+                    $true
+                )
+            )
+            $modalContinues.Count | Should -Be 0
+            $analysisSource | Should -Match (
+                '\$pktCount = \$Session\.DrainAllRawPackets\(\)[\s\S]*?' +
+                'if \(\$helpState\.ResumeTransientsPending\)[\s\S]*?' +
+                '# A runtime warning'
+            )
+            $resumeIf = $analysisFunction.Body.Find(
+                {
+                    param($node)
+                    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+                        $node.Clauses.Count -gt 0 -and
+                        $node.Clauses[0].Item1.Extent.Text -match
+                            '\$helpState\.ResumeTransientsPending'
+                },
+                $true
+            )
+            $resumeIf | Should -Not -BeNullOrEmpty
+            $ancestorConditions = [System.Collections.Generic.List[string]]::new()
+            $ancestor = $resumeIf.Parent
+            while ($null -ne $ancestor) {
+                if ($ancestor -is [System.Management.Automation.Language.IfStatementAst]) {
+                    foreach ($clause in $ancestor.Clauses) {
+                        $null = $ancestorConditions.Add($clause.Item1.Extent.Text)
+                    }
+                }
+                $ancestor = $ancestor.Parent
+            }
+            ($ancestorConditions -join "`n") |
+                Should -Not -Match '\$activeBox\s+-eq\s+''details'''
+            ($ancestorConditions -join "`n") |
+                Should -Not -Match '\$pktCount\s+-gt\s+0'
+            $analysisSource | Should -Match (
+                '# --- Save-on-exit \(Analysis retention buffer\) ---[\s\S]*?' +
+                '&\s+\$dismissHelp'
+            )
         }
     }
 

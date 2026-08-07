@@ -73,7 +73,7 @@ All types live in the `BoxyBox` namespace.
 |---|---|
 | `OverlayBox` | A centered bordered box for notifications and prompts (e.g. "Copied to clipboard", a save-path prompt). Reports its absolute top/left so the caller can position it over the current frame. |
 | `ScrollableOverlayBox` | A stateful centered overlay viewport. Stores a cloned content list and `TopRow`; supports line, page, Home, and End movement; clamps after `SetContent`, `Resize`, and screen-size changes; and appends `[first-last/total]` to the title. |
-| `MenuItem` / `MenuDefinition` | The in-memory menu model (`Name`, `DisplayName`, `Hotkey`). |
+| `MenuItem` / `MenuDefinition` | The in-memory presentation model (`Name`, `DisplayName`, `Hotkey`); the host owns input dispatch. |
 | `MenuRenderer` | Turns a `MenuDefinition` into option strings: `BuildAuto(def, width)` picks **Full** (`[Hotkey]DisplayName`) when it fits or **Simple** (`[Hotkey]`) when the bar is too narrow. Hotkeys and labels are colored for contrast (`SetColors`). |
 
 `ScrollableOverlayBox.Render(screenWidth, screenHeight, out top, out left)` uses the configured
@@ -87,8 +87,8 @@ A one-column overlay is borderless and can show only one cell; for a scrollable 
 the first character of the position suffix (`[`). A one-row screen renders only the top/title row,
 and non-positive screen dimensions produce no rows.
 
-The Analysis Help popup and its shortcut content are Phase 3 host integration. Phase 2 provides
-only the project-independent scrolling engine.
+pspkt's Analysis host uses `ScrollableOverlayBox` for its modal Help shortcut reference.
+The shortcut content and input policy remain outside this project-independent engine.
 
 ---
 
@@ -119,7 +119,7 @@ written on top of the base frame for transient prompts/notifications.
 
 ## Menu JSON
 
-Menus are data, not code, so they can be re-labelled or localized without recompiling. Each
+Menus are presentation data, so they can be re-labelled or localized without recompiling. Each
 box loads `menus/<Box>.json`; a user override may be placed at
 `$HOME/.pspkt/menus/<Box>.json` (pspkt's loader checks the override first).
 
@@ -130,13 +130,18 @@ box loads `menus/<Box>.json`; a user override may be placed at
     { "Name": "Expand",      "DisplayName": "Expand",      "Hotkey": "\u2192" },
     { "Name": "Collapse",    "DisplayName": "Collapse",    "Hotkey": "\u2190" },
     { "Name": "ExpandAll",   "DisplayName": "Expand all",  "Hotkey": "Ctrl+\u2192" },
-    { "Name": "CollapseAll", "DisplayName": "Collapse all","Hotkey": "Ctrl+\u2190" }
+    { "Name": "CollapseAll", "DisplayName": "Collapse all","Hotkey": "Ctrl+\u2190" },
+    { "Name": "PrevNext",    "DisplayName": "Prev|Next pkt","Hotkey": "Ctrl+\u2191\u2193" },
+    { "Name": "PageText",    "DisplayName": "Page text",   "Hotkey": "Ctrl+PgUp|PgDn" },
+    { "Name": "Help",        "DisplayName": "Help",        "Hotkey": "H" }
   ]
 }
 ```
 
 Each item renders as `[Hotkey]DisplayName` (Full) or `[Hotkey]` (Simple). `MenuRenderer`
-decides which mode fits the current width.
+decides which mode fits the current width. The host's key handlers remain authoritative.
+User overrides change only displayed metadata; shipped `Name` and `Hotkey` values are
+validated against the pspkt Help action contract.
 
 ---
 
@@ -150,6 +155,8 @@ Its use of BoxyBox is a good end-to-end example:
   `DetailsBox` (bottom), merged on a shared `Cap.Mid` divider. The selected packet's detail
   tree is parsed **just-in-time** and shown in the Details box.
 - **Pause** (`p`) additionally stops ingesting new packets, then enters Focus.
+- **Help** (`h`) opens a modal `ScrollableOverlayBox`. Help consumes its own navigation keys
+  while packet draining and base rendering continue; `h` or `Esc` closes it.
 - Arrow keys navigate; `Home` / `End` move to box boundaries; `Tab` switches the active box; the selected row gets a background
   highlight that preserves the parsing colors (`AnsiText.ApplyBackground`).
 - **Save** (`w`) opens an `OverlayBox` prompt and writes a pcapng of the retained packets;
