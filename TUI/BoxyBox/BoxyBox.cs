@@ -1,15 +1,4 @@
 // BoxyBox — a project-independent text user interface (TUI) rendering engine.
-//
-// Phase 1: core render primitives.
-//   * AnsiText       — visible-length + column-accurate helpers that ignore SGR escapes.
-//   * TextJustify    — left/right justification and ellipsis truncation to a fixed width.
-//   * BoxChars       — the box-drawing glyph set (single-line body, double-line menu bar).
-//   * MenuBar        — composes a bottom border with embedded "══(H)otkey text══" items.
-//   * Box            — composes a full bordered box (top border, content rows, menu bar)
-//                      into an array of fixed-width lines.
-//   * ScreenRegion   — emits a frame to a fixed console region using absolute cursor
-//                      positioning so the console itself never scrolls.
-//
 // The engine intentionally has no dependency on pspkt types so it can be lifted out
 // and reused by any project.
 
@@ -19,7 +8,6 @@ using System.Text;
 
 namespace BoxyBox
 {
-    /// <summary>Text alignment within a fixed-width column.</summary>
     public enum Justify
     {
         Left,
@@ -617,7 +605,6 @@ namespace BoxyBox
             return _cachedMenu;
         }
 
-        /// <summary>Builds a single content row with side borders.</summary>
         private string ContentLine(string text)
         {
             int inner = Width - 2;
@@ -826,7 +813,6 @@ namespace BoxyBox
             return sb == null ? string.Empty : sb.ToString();
         }
 
-        /// <summary>Forces the next <see cref="Diff"/> to re-emit every row (e.g. after a full-screen clear).</summary>
         public void Invalidate()
         {
             for (int i = 0; i < Height; i++) _prev[i] = null;
@@ -877,7 +863,6 @@ namespace BoxyBox
 
         public Box Box { get { return _box; } }
 
-        /// <summary>Absolute sequence number of the oldest retained line.</summary>
         public long BaseSeq { get { return _baseSeq; } }
 
         /// <summary>Exclusive upper bound: the sequence number the next appended line will get.</summary>
@@ -901,23 +886,18 @@ namespace BoxyBox
             set { _box.MenuStyle = value; }
         }
 
-        /// <summary>Total lines currently retained (post-trim).</summary>
         public int LineCount { get { return _lines.Count; } }
 
-        /// <summary>Number of visible content rows.</summary>
         public int ContentRows { get { return _box.ContentRows; } }
 
-        /// <summary>Bounded capacity (retained line count target).</summary>
         public int Capacity { get { return _capacity; } }
 
-        /// <summary>Returns the line at an absolute index, or null if out of range.</summary>
         public string GetLine(int index)
         {
             if (index < 0 || index >= _lines.Count) return null;
             return _lines[index];
         }
 
-        /// <summary>Appends a single line, trimming the oldest lines when over capacity.</summary>
         public void Append(string line)
         {
             _lines.Add(line ?? string.Empty);
@@ -952,7 +932,6 @@ namespace BoxyBox
             _lines.Clear();
         }
 
-        /// <summary>Returns the line for an absolute sequence number, or null if not retained.</summary>
         public string GetLineBySeq(long seq)
         {
             long idx = seq - _baseSeq;
@@ -1100,14 +1079,12 @@ namespace BoxyBox
 
         public bool HasChildren { get { return Children != null && Children.Count > 0; } }
 
-        /// <summary>Adds a child node and returns it (for chaining).</summary>
         public TreeNode Add(TreeNode child)
         {
             if (child != null) Children.Add(child);
             return child;
         }
 
-        /// <summary>Adds a leaf child with the given text and returns this node.</summary>
         public TreeNode AddLeaf(string text)
         {
             Children.Add(new TreeNode(text));
@@ -1351,7 +1328,6 @@ namespace BoxyBox
                 _expandState[node.Key] = node.IsExpanded;
         }
 
-        /// <summary>Expands the selected node (if it has children). No-op on leaves.</summary>
         public void ExpandSelected()
         {
             TreeNode n = SelectedNode();
@@ -1379,7 +1355,6 @@ namespace BoxyBox
             }
             else
             {
-                // Move to and collapse the parent, if any.
                 int depth = _rows[_selected].Depth;
                 if (depth > 0)
                 {
@@ -1421,7 +1396,6 @@ namespace BoxyBox
         public void ExpandAll()   { SetAllExpanded(_roots, true);  Rebuild(); }
         public void CollapseAll() { SetAllExpanded(_roots, false); Rebuild(); }
 
-        /// <summary>Renders the tree into the box, highlighting the selected row.</summary>
         public string[] Render(string highlightOn, string highlightOff)
         {
             int rows = ContentRows;
@@ -1469,7 +1443,7 @@ namespace BoxyBox
 
     public sealed class MenuItem
     {
-        public string Name;        // logical id (matched by the loop's key handler)
+        public string Name;        // shipped action id; user overrides are display-only
         public string DisplayName; // shown text (may include a leading space)
         public string Hotkey;      // key label shown in brackets
 
@@ -1555,7 +1529,6 @@ namespace BoxyBox
             return used <= width;
         }
 
-        /// <summary>Builds Full options if they fit the width, otherwise Simple.</summary>
         public static List<string> BuildAuto(MenuDefinition def, int width)
         {
             return BuildOptions(def, FullFits(def, width));
@@ -1608,7 +1581,6 @@ namespace BoxyBox
                 return lines.ToArray();
             }
 
-            // Top border with centered title.
             string t = title ?? string.Empty;
             int titleBudget = Math.Max(0, boxWidth - 4);
             if (AnsiText.VisibleLength(t) > titleBudget) t = AnsiText.TakeVisiblePrefix(t, titleBudget);

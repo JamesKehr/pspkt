@@ -78,6 +78,7 @@ Analysis Text Box before lines are added.
 
 | Key | Action |
 |---|---|
+| `h` | **Help**: open the scrollable shortcut reference |
 | `f` | **Focus** — freeze scrolling, split the screen, select the middle line |
 | `p` | **Pause** — stop collecting new packets *and* enter Focus (frozen snapshot) |
 | `s` | **Stop** — end the capture |
@@ -88,6 +89,7 @@ Analysis Text Box before lines are added.
 
 | Key | Action |
 |---|---|
+| `h` | **Help**: open the scrollable shortcut reference |
 | `Tab` | Switch the active box (Text ⇄ Details) |
 | `↑` / `↓` | Move the selection up/down one line |
 | `PgUp` / `PgDn` | Move by a page |
@@ -102,6 +104,21 @@ Analysis Text Box before lines are added.
 | `w` | **Save pcapng** |
 | `Shift+Ctrl+C` | **Copy** the selected Text line + the full detail tree to the clipboard |
 | `s` | **Stop** |
+
+### Help overlay
+
+| Key | Action |
+|---|---|
+| `h` / `Esc` | Close Help |
+| `↑` / `↓` | Scroll one Help line |
+| `PgUp` / `PgDn` | Scroll one Help page |
+| `Home` / `End` | Move to the first / last Help line |
+| `s` / `Ctrl+C` | Stop the capture |
+
+Help is modal: every other shortcut is ignored until you close it. Packet draining,
+formatting, and the base Analysis view continue behind the overlay. Opening Help always
+starts at the first line. The compact Live menu shows Help, Focus, and Stop; `p` and `w`
+remain functional and are documented inside Help.
 
 ---
 
@@ -149,6 +166,7 @@ into view or collapsed.
 - The selected row gets a distinct **background highlight** that keeps the foreground parsing
   colors readable (blue when its box is active, gray when it is not).
 - Resizing the terminal **rebuilds the layout** in place so the boxes track the new size.
+- Help remains open across a resize and reclamps its scroll position to the new viewport.
 - The detail tree uses a plain two-space indent (no `├`/`└` connectors) by default.
 - A parser failure for one selected packet is shown as a `packet detail unavailable` node; it
   does not terminate the Analysis loop.
@@ -165,16 +183,21 @@ into view or collapsed.
   (e.g. the PacketSize/ParsingLevel auto-bumps, which are collected and shown at first paint)
   and any warning raised while the capture runs. Suppress the auto-bump warnings at their
   source with `-NoWarning`.
+- While Help is open, warning and notification countdowns are suspended. Their remaining
+  display time resumes after Help closes, so transient information is not lost behind the modal.
 
 ---
 
 ## Menu customization
 
-The bottom menu bars are JSON-defined, so you can re-label items or change hotkeys (including
-for localization). Built-in menus live under `TUI/BoxyBox/menus/`
+The bottom menu bars are JSON-defined. User overrides can re-label or reorder displayed items
+for localization. Built-in menus live under `TUI/BoxyBox/menus/`
 (`TextLive.json`, `TextFocus.json`, `Details.json`); place an override at
 `"$HOME/.pspkt/menus/<Box>.json"`. Each item is `{ "Name", "DisplayName", "Hotkey" }` and
 renders as `[Hotkey]DisplayName`, collapsing to `[Hotkey]` when the console is narrow.
+User-override fields are presentation-only: they do not rebind the fixed Analysis keys or
+change Help. Shipped `Name` and `Hotkey` values are validated against the Help action contract.
+Keep custom `Hotkey` text aligned with the real key to avoid a misleading override.
 
 ---
 

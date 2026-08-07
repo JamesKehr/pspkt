@@ -1,0 +1,70 @@
+{
+  "Title": "Analysis Help",
+  "Sections": [
+    {
+      "Id": "Global",
+      "DisplayName": "Global (Help closed)",
+      "Bindings": [
+        { "Action": "Help", "Chords": ["H"], "Key": "H", "Description": "Open Help." },
+        { "Action": "Stop", "Chords": ["S"], "Key": "S", "Description": "Stop the capture." },
+        { "Action": "StopCtrlC", "Chords": ["Ctrl+C"], "Key": "Ctrl+C", "Description": "Stop the capture." },
+        { "Action": "Save", "Chords": ["W"], "Key": "W", "Description": "Save retained packets to pcapng." }
+      ]
+    },
+    {
+      "Id": "TextLive",
+      "DisplayName": "Live Text",
+      "Bindings": [
+        { "Action": "Focus", "Chords": ["F"], "Key": "F", "Description": "Enter Focus view." },
+        { "Action": "Pause", "Chords": ["P"], "Key": "P", "Description": "Pause collection and enter Focus view." }
+      ]
+    },
+    {
+      "Id": "TextFocus",
+      "DisplayName": "Focused Text",
+      "Bindings": [
+        { "Action": "Resume", "Chords": ["R"], "Key": "R", "Description": "Resume live capture." },
+        { "Action": "Pause", "Chords": ["P"], "Key": "P", "Description": "Pause collection." },
+        { "Action": "Switch", "Chords": ["Tab"], "Key": "Tab", "Description": "Switch the active box." },
+        { "Action": "Copy", "Chords": ["Shift+Ctrl+C"], "Key": "Shift+Ctrl+C", "Description": "Copy the selected packet and full detail tree." },
+        { "Action": "MoveLine", "Chords": ["UpArrow", "DownArrow"], "Key": "Up / Down", "Description": "Move one packet." },
+        { "Action": "MovePage", "Chords": ["PageUp", "PageDown"], "Key": "PgUp / PgDn", "Description": "Move one packet page." },
+        { "Action": "Boundary", "Chords": ["Home", "End"], "Key": "Home / End", "Description": "Select the oldest or newest retained packet." },
+        { "Action": "Justify", "Chords": ["LeftArrow", "RightArrow"], "Key": "Left / Right", "Description": "Left- or right-justify Text." }
+      ]
+    },
+    {
+      "Id": "Details",
+      "DisplayName": "Focused Details",
+      "Bindings": [
+        { "Action": "Resume", "Chords": ["R"], "Key": "R", "Description": "Resume live capture." },
+        { "Action": "Pause", "Chords": ["P"], "Key": "P", "Description": "Pause collection." },
+        { "Action": "Switch", "Chords": ["Tab"], "Key": "Tab", "Description": "Switch the active box." },
+        { "Action": "Copy", "Chords": ["Shift+Ctrl+C"], "Key": "Shift+Ctrl+C", "Description": "Copy the selected packet and full detail tree." },
+        { "Action": "MoveLine", "Chords": ["UpArrow", "DownArrow"], "Key": "Up / Down", "Description": "Move one detail row." },
+        { "Action": "MovePage", "Chords": ["PageUp", "PageDown"], "Key": "PgUp / PgDn", "Description": "Move one detail page." },
+        { "Action": "Boundary", "Chords": ["Home", "End"], "Key": "Home / End", "Description": "Move to the first or last detail row." },
+        { "Action": "TextBoundary", "Chords": ["Ctrl+Home", "Ctrl+End"], "Key": "Ctrl+Home / Ctrl+End", "Description": "Select the oldest or newest retained packet." },
+        { "Action": "Expand", "Chords": ["RightArrow"], "Key": "Right", "MenuHotkey": "\u2192", "Description": "Expand the selected node." },
+        { "Action": "Collapse", "Chords": ["LeftArrow"], "Key": "Left", "MenuHotkey": "\u2190", "Description": "Collapse the selected or parent node." },
+        { "Action": "ExpandAll", "Chords": ["Ctrl+RightArrow"], "Key": "Ctrl+Right", "MenuHotkey": "Ctrl+\u2192", "Description": "Expand all nodes." },
+        { "Action": "CollapseAll", "Chords": ["Ctrl+LeftArrow"], "Key": "Ctrl+Left", "MenuHotkey": "Ctrl+\u2190", "Description": "Collapse all nodes." },
+        { "Action": "PrevNext", "Chords": ["Ctrl+UpArrow", "Ctrl+DownArrow"], "Key": "Ctrl+Up / Ctrl+Down", "MenuHotkey": "Ctrl+\u2191\u2193", "Description": "Select the previous or next packet." },
+        { "Action": "PageText", "Chords": ["Ctrl+PageUp", "Ctrl+PageDown"], "Key": "Ctrl+PgUp / Ctrl+PgDn", "MenuHotkey": "Ctrl+PgUp|PgDn", "Description": "Page Text while Details remains active." }
+      ]
+    },
+    {
+      "Id": "HelpOverlay",
+      "DisplayName": "Help Overlay",
+      "Bindings": [
+        { "Action": "CloseHelp", "Chords": ["H", "Escape"], "Key": "H / Esc", "Description": "Close Help." },
+        { "Action": "Stop", "Chords": ["S"], "Key": "S", "Description": "Stop the capture." },
+        { "Action": "StopCtrlC", "Chords": ["Ctrl+C"], "Key": "Ctrl+C", "Description": "Stop the capture." },
+        { "Action": "ScrollLine", "Chords": ["UpArrow", "DownArrow"], "Key": "Up / Down", "Description": "Scroll one Help line." },
+        { "Action": "ScrollPage", "Chords": ["PageUp", "PageDown"], "Key": "PgUp / PgDn", "Description": "Scroll one Help page." },
+        { "Action": "ScrollBoundary", "Chords": ["Home", "End"], "Key": "Home / End", "Description": "Move to the first or last Help line." }
+      ],
+      "Footer": "While Help is open, all other shortcuts are ignored."
+    }
+  ]
+}

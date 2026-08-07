@@ -8,11 +8,6 @@ $script:PspktFilterModule = Import-Module "$PSScriptRoot\PspktFilter.psm1" -Erro
 $script:PspktComponentModule = Import-Module "$PSScriptRoot\PspktComponent.psm1" -ErrorAction Stop -PassThru
 $script:PspktParserModule = Import-Module "$PSScriptRoot\..\Parsers\libParser.psm1" -ErrorAction Stop -PassThru
 
-# --------------------------------------------------------------------------
-# DNS QTYPE / RCODE name lookup tables (private helpers).
-# Used by Start-Pspkt's -DnsType / -DnsRcode parameter resolution.
-# --------------------------------------------------------------------------
-
 # QTYPE names supported by the in-tree DnsParser. Names match the DnsParser.GetTypeName
 # return values so users can reuse what they see on screen.
 $script:DnsTypeNameToNumber = @{
@@ -67,16 +62,13 @@ function Resolve-PspktDnsType {
         throw "DnsType value cannot be empty."
     }
 
-    # Hex prefix.
     if ($key -match '^0[xX][0-9A-Fa-f]+$') {
         return [Convert]::ToInt32($key.Substring(2), 16)
     }
-    # Plain integer.
     $parsed = 0
     if ([int]::TryParse($key, [ref]$parsed)) {
         return $parsed
     }
-    # Name lookup (case-insensitive via uppercase key).
     $upper = $key.ToUpperInvariant()
     if ($script:DnsTypeNameToNumber.ContainsKey($upper)) {
         return [int]$script:DnsTypeNameToNumber[$upper]
@@ -113,7 +105,6 @@ function Resolve-PspktDnsRcode {
     if ([int]::TryParse($key, [ref]$parsed)) {
         return $parsed
     }
-    # Case-insensitive name lookup.
     foreach ($name in $script:DnsRcodeNameToNumber.Keys) {
         if ([string]::Equals($name, $key, [System.StringComparison]::OrdinalIgnoreCase)) {
             return [int]$script:DnsRcodeNameToNumber[$name]
@@ -121,12 +112,6 @@ function Resolve-PspktDnsRcode {
     }
     throw "Unknown DNS RCODE '$Value'. Use a name (NoError, FormErr, ServFail, NXDomain, NotImp, Refused) or an integer."
 }
-
-# --------------------------------------------------------------------------
-# TLS version / content-type / handshake-type name lookup tables (private helpers).
-# Used by Start-Pspkt's -TlsVersion / -TlsContentType / -TlsHandshakeType
-# parameter resolution. Names mirror TlsParser.Get*Name output.
-# --------------------------------------------------------------------------
 
 # Versions: accept short forms ("1.2"), long forms ("TLS1.2", "TLS 1.2"), and
 # numeric / hex inputs (770, 0x0303). Internally stored as the 16-bit wire value.
@@ -193,7 +178,6 @@ function Resolve-PspktTlsVersion {
     if ([int]::TryParse($key, [ref]$parsed)) {
         return $parsed
     }
-    # Normalize: strip spaces, uppercase.
     $norm = ($key -replace '\s+', '').ToUpperInvariant()
     if ($script:TlsVersionNameToNumber.ContainsKey($norm)) {
         return [int]$script:TlsVersionNameToNumber[$norm]
@@ -275,10 +259,6 @@ function Resolve-PspktTlsHandshakeType {
     throw "Unknown TLS handshake type '$Value'. Use a name (ClientHello, ServerHello, Certificate, ServerKeyExchange, ServerHelloDone, ClientKeyExchange, CertificateVerify, CertificateRequest, EncryptedExtensions, NewSessionTicket, Finished, HelloRequest) or an integer."
 }
 
-# --------------------------------------------------------------------------
-# HTTP method / status helpers used by Start-Pspkt's -HttpMethod / -HttpStatus.
-# --------------------------------------------------------------------------
-
 # Standard HTTP/1.1 methods (RFC 7231) plus PATCH (RFC 5789). Used only as a
 # soft sanity-check for -HttpMethod values; non-standard methods are still
 # accepted (uppercased) so users can filter on custom verbs (e.g. WebDAV).
@@ -346,7 +326,6 @@ function Resolve-PspktHttpStatus {
         throw "HttpStatus value cannot be empty."
     }
 
-    # Class pattern: "1xx", "2xx", ... "5xx" (case insensitive).
     if ($key -match '^([1-5])[xX][xX]$') {
         return [PSCustomObject]@{ Code = 0; Class = [int]$Matches[1] }
     }
@@ -366,12 +345,9 @@ function Resolve-PspktHttpStatus {
     throw "Unknown HTTP status '$Value'. Use a 3-digit code (200, 404, 503), a class pattern ('2xx','4xx','5xx'), or a hex string."
 }
 
-# --------------------------------------------------------------------------
-# DHCP message-type helpers used by Start-Pspkt's -DhcpMessageType.
 # DHCPv4 and DHCPv6 use overlapping numeric spaces. A name unique to one
 # family resolves to that family only; a name shared by both (e.g. "Request")
 # resolves to both; an integer also resolves to both.
-# --------------------------------------------------------------------------
 
 # DHCPv4 message types (option 53 values).
 $script:DhcpV4MessageTypeNameToNumber = @{
@@ -460,10 +436,6 @@ function Resolve-PspktDhcpMessageType {
     }
     return [PSCustomObject]@{ V4 = $v4; V6 = $v6 }
 }
-
-# --------------------------------------------------------------------------
-# SMB2 helpers used by Start-Pspkt's -SmbCommand / -SmbStatus.
-# --------------------------------------------------------------------------
 
 # SMB2 command codes (per [MS-SMB2] section 2.2.1).
 $script:Smb2CommandNameToNumber = @{
@@ -619,12 +591,6 @@ function Resolve-PspktSmb2Status {
     throw "Unknown SMB2 status '$Value'. Use a class name (Success, Informational, Warning, Error), a status name (ACCESS_DENIED, NO_SUCH_FILE, OBJECT_NAME_NOT_FOUND, LOGON_FAILURE, SHARING_VIOLATION, BAD_NETWORK_NAME, NETWORK_ACCESS_DENIED, ...), or an integer / hex value."
 }
 
-# --------------------------------------------------------------------------
-# ICMP / ICMPv6 type-name resolvers used by Start-Pspkt's -IcmpType /
-# -Icmpv6Type. ICMPv4 uses the existing [ICMP4_TYPE] enum; ICMPv6 has its
-# own (extensible) hashtable since the codebase doesn't define a v6 enum yet.
-# --------------------------------------------------------------------------
-
 # ICMPv6 type names — short and long forms accepted, case-insensitive on input.
 # Sources: RFC 4443 (core), RFC 4861 (NDP), RFC 2710 (MLD).
 $script:Icmpv6TypeNameToNumber = @{
@@ -741,10 +707,6 @@ function Resolve-PspktIcmpv6Type {
     throw "Unknown ICMPv6 type '$Value'. Use a name (EchoRequest, EchoReply, RouterSolicitation/RS, RouterAdvertisement/RA, NeighborSolicitation/NS, NeighborAdvertisement/NA, Redirect, DestinationUnreachable, PacketTooBig, TimeExceeded, ParameterProblem, ...), or an integer / hex value."
 }
 
-# --------------------------------------------------------------------------
-# Quick-filter coverage check used by application-layer predicate auto-imply.
-# --------------------------------------------------------------------------
-
 <#
 .SYNOPSIS
 Returns $true when at least one filter in $Filters already lets packets matching
@@ -828,10 +790,6 @@ function Test-PspktQuickFilterCoverage {
     return $false
 }
 
-# --------------------------------------------------------------------------
-# Hyper-V VM scoping helpers used by Start-Pspkt's -VM / -VMName parameters.
-# --------------------------------------------------------------------------
-
 <#
 .SYNOPSIS
 Returns the list of MAC addresses for a Hyper-V VM's vmNICs, including
@@ -899,7 +857,6 @@ function Get-PspktVMMacList {
 
     $macs = [System.Collections.ArrayList]::new()
 
-    # Early-out: caller didn't ask for VM scoping at all.
     if ($null -eq $VM -and [string]::IsNullOrEmpty($VMName)) {
         return @()
     }
@@ -932,7 +889,6 @@ function Get-PspktVMMacList {
     # still tell us "the VM has a vmNIC, the MAC just isn't allocated").
     $adapters = $null
 
-    # Step 1: parameter-form Get-VMNetworkAdapter.
     if ($null -ne $vmObj) {
         $adapters = Get-VMNetworkAdapter -VM $vmObj -ErrorAction SilentlyContinue
     }
@@ -1258,12 +1214,10 @@ function Get-PspktSession {
         }
 
         if ($inFilterTable) {
-            # Skip header and separator lines
             if ($line -match '^\s*#\s+Name' -or $line -match '^\s*-+\s+-+') {
                 continue
             }
 
-            # Parse filter rows: number followed by data columns
             if ($line -match '^\s*(\d+)\s+(.+)') {
                 $parts = $line.Trim() -split '\s{2,}'
                 $filterObj = [PSCustomObject]@{
@@ -1379,10 +1333,6 @@ function Set-PspktSession {
     }
 }
 
-# --------------------------------------------------------------------------
-# Analysis mode consumer loop (BoxyBox TUI).
-# --------------------------------------------------------------------------
-
 <#
 .SYNOPSIS
 Loads a BoxyBox TUI menu definition (JSON) for a box, honoring user overrides.
@@ -1390,11 +1340,15 @@ Loads a BoxyBox TUI menu definition (JSON) for a box, honoring user overrides.
 .DESCRIPTION
 Menus are JSON files of {Name, DisplayName, Hotkey} items rendered as
 "[Hotkey]DisplayName". A user copy at $HOME\.pspkt\menus\<Box>.json overrides the
-shipped default at TUI\BoxyBox\menus\<Box>.json, allowing custom text/hotkeys and
-localization. Returns a BoxyBox.MenuDefinition (empty on any load failure).
+shipped default at TUI\BoxyBox\menus\<Box>.json, allowing custom display text and
+localization. Menu hotkeys are presentation-only; runtime bindings remain fixed in
+the Analysis input handler. Returns a BoxyBox.MenuDefinition (empty on any load failure).
 
 .PARAMETER Box
 Menu name: TextLive, TextFocus, or Details.
+
+.PARAMETER UserMenuRoot
+Directory containing optional user menu overrides. Defaults to $HOME\.pspkt\menus.
 
 .OUTPUTS
 BoxyBox.MenuDefinition
@@ -1405,11 +1359,16 @@ function Get-PspktTuiMenu {
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
         [string]
-        $Box
+        $Box,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $UserMenuRoot = (Join-Path $HOME '.pspkt\menus')
     )
 
     $def = [BoxyBox.MenuDefinition]::new($Box)
-    $userPath    = Join-Path $HOME ".pspkt\menus\$Box.json"
+    $userPath    = Join-Path $UserMenuRoot "$Box.json"
     $shippedPath = Join-Path $PSScriptRoot "..\TUI\BoxyBox\menus\$Box.json"
     $path = if (Test-Path -LiteralPath $userPath) { $userPath }
             elseif (Test-Path -LiteralPath $shippedPath) { $shippedPath }
@@ -1427,6 +1386,506 @@ function Get-PspktTuiMenu {
         }
     }
     return $def
+}
+
+<#
+.SYNOPSIS
+Loads and validates the shipped Analysis Help content.
+
+.OUTPUTS
+A PSCustomObject containing Title, Lines, and Sections.
+#>
+function Get-PspktTuiHelpContent {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
+
+    $helpPath = Join-Path $PSScriptRoot '..\TUI\AnalysisHelp.json'
+    if (-not (Test-Path -LiteralPath $helpPath)) {
+        throw [System.IO.InvalidDataException]::new(
+            "The shipped Analysis Help file was not found: $helpPath"
+        )
+    }
+
+    try {
+        $json = Get-Content -LiteralPath $helpPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw [System.IO.InvalidDataException]::new(
+            "The shipped Analysis Help file is not valid JSON: $helpPath",
+            $_.Exception
+        )
+    }
+
+    $requireProperty = {
+        param(
+            [Parameter(Mandatory = $true)]
+            [object]
+            $InputObject,
+
+            [Parameter(Mandatory = $true)]
+            [string]
+            $Name,
+
+            [Parameter(Mandatory = $true)]
+            [string]
+            $Context
+        )
+
+        $property = $InputObject.PSObject.Properties[$Name]
+        if ($null -eq $property) {
+            throw [System.IO.InvalidDataException]::new(
+                "Analysis Help $Context is missing required property '$Name'."
+            )
+        }
+        return $property.Value
+    }
+
+    $title = [string](& $requireProperty $json 'Title' 'root')
+    if ($title -ne 'Analysis Help') {
+        throw [System.IO.InvalidDataException]::new(
+            "Analysis Help Title must be 'Analysis Help'."
+        )
+    }
+
+    $expectedSections = [ordered]@{
+        Global = @('Help', 'Stop', 'StopCtrlC', 'Save')
+        TextLive = @('Focus', 'Pause')
+        TextFocus = @(
+            'Resume', 'Pause', 'Switch', 'Copy',
+            'MoveLine', 'MovePage', 'Boundary', 'Justify'
+        )
+        Details = @(
+            'Resume', 'Pause', 'Switch', 'Copy',
+            'MoveLine', 'MovePage', 'Boundary', 'TextBoundary',
+            'Expand', 'Collapse', 'ExpandAll', 'CollapseAll',
+            'PrevNext', 'PageText'
+        )
+        HelpOverlay = @(
+            'CloseHelp', 'Stop', 'StopCtrlC',
+            'ScrollLine', 'ScrollPage', 'ScrollBoundary'
+        )
+    }
+
+    $sections = @(& $requireProperty $json 'Sections' 'root')
+    if ($sections.Count -ne $expectedSections.Count) {
+        throw [System.IO.InvalidDataException]::new(
+            "Analysis Help must contain exactly $($expectedSections.Count) sections."
+        )
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $sectionIndex = 0
+    foreach ($sectionEntry in $expectedSections.GetEnumerator()) {
+        $section = $sections[$sectionIndex]
+        if ($null -eq $section) {
+            throw [System.IO.InvalidDataException]::new(
+                "Analysis Help section $sectionIndex is null."
+            )
+        }
+
+        $sectionId = [string](& $requireProperty $section 'Id' "section $sectionIndex")
+        if ($sectionId -ne $sectionEntry.Key) {
+            throw [System.IO.InvalidDataException]::new(
+                "Analysis Help section $sectionIndex must be '$($sectionEntry.Key)'."
+            )
+        }
+
+        $displayName = [string](
+            & $requireProperty $section 'DisplayName' "section '$sectionId'"
+        )
+        if ([string]::IsNullOrWhiteSpace($displayName)) {
+            throw [System.IO.InvalidDataException]::new(
+                "Analysis Help section '$sectionId' has an empty DisplayName."
+            )
+        }
+        $null = $lines.Add($displayName)
+
+        $bindings = @(
+            & $requireProperty $section 'Bindings' "section '$sectionId'"
+        )
+        $expectedActions = @($sectionEntry.Value)
+        if ($bindings.Count -ne $expectedActions.Count) {
+            throw [System.IO.InvalidDataException]::new(
+                "Analysis Help section '$sectionId' has an unexpected binding count."
+            )
+        }
+
+        for ($bindingIndex = 0; $bindingIndex -lt $bindings.Count; $bindingIndex++) {
+            $binding = $bindings[$bindingIndex]
+            if ($null -eq $binding) {
+                throw [System.IO.InvalidDataException]::new(
+                    "Analysis Help section '$sectionId' binding $bindingIndex is null."
+                )
+            }
+
+            $bindingContext = "section '$sectionId' binding $bindingIndex"
+            $action = [string](
+                & $requireProperty $binding 'Action' $bindingContext
+            )
+            if ($action -ne $expectedActions[$bindingIndex]) {
+                throw [System.IO.InvalidDataException]::new(
+                    "Analysis Help $bindingContext must be action '$($expectedActions[$bindingIndex])'."
+                )
+            }
+
+            $chords = @(& $requireProperty $binding 'Chords' $bindingContext)
+            if ($chords.Count -eq 0 -or @(
+                $chords | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }
+            ).Count -gt 0) {
+                throw [System.IO.InvalidDataException]::new(
+                    "Analysis Help $bindingContext has invalid Chords."
+                )
+            }
+
+            $key = [string](& $requireProperty $binding 'Key' $bindingContext)
+            $description = [string](
+                & $requireProperty $binding 'Description' $bindingContext
+            )
+            if (
+                [string]::IsNullOrWhiteSpace($key) -or
+                [string]::IsNullOrWhiteSpace($description)
+            ) {
+                throw [System.IO.InvalidDataException]::new(
+                    "Analysis Help $bindingContext has an empty Key or Description."
+                )
+            }
+
+            $null = $lines.Add(
+                ('  {0,-24} {1}' -f $key, $description).TrimEnd()
+            )
+        }
+
+        $footerProperty = $section.PSObject.Properties['Footer']
+        if ($sectionId -eq 'HelpOverlay') {
+            if (
+                $null -eq $footerProperty -or
+                [string]$footerProperty.Value -ne
+                    'While Help is open, all other shortcuts are ignored.'
+            ) {
+                throw [System.IO.InvalidDataException]::new(
+                    'Analysis Help HelpOverlay Footer is invalid.'
+                )
+            }
+            $null = $lines.Add('  ' + [string]$footerProperty.Value)
+        } elseif ($null -ne $footerProperty) {
+            throw [System.IO.InvalidDataException]::new(
+                "Analysis Help section '$sectionId' must not define Footer."
+            )
+        }
+
+        if ($sectionIndex -lt $sections.Count - 1) {
+            $null = $lines.Add('')
+        }
+        $sectionIndex++
+    }
+
+    $leftArrow = [char]0x2190
+    $upArrow = [char]0x2191
+    $rightArrow = [char]0x2192
+    $downArrow = [char]0x2193
+    $requiredMenus = [ordered]@{
+        TextLive = 'Help/H,Focus/F,Stop/S'
+        TextFocus = 'Resume/R,Pause/P,Stop/S,Save/W,Switch/Tab,Copy/Shift+Ctrl+C,Help/H'
+        Details = "Expand/$rightArrow,Collapse/$leftArrow,ExpandAll/Ctrl+$rightArrow,CollapseAll/Ctrl+$leftArrow,PrevNext/Ctrl+$upArrow$downArrow,PageText/Ctrl+PgUp|PgDn,Help/H"
+    }
+    $globalBindings = @(
+        ($sections | Where-Object { $_.Id -eq 'Global' }).Bindings
+    )
+    foreach ($menuEntry in $requiredMenus.GetEnumerator()) {
+        $menuPath = Join-Path $PSScriptRoot (
+            "..\TUI\BoxyBox\menus\$($menuEntry.Key).json"
+        )
+        try {
+            $menu = Get-Content -LiteralPath $menuPath -Raw -Encoding UTF8 |
+                ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw [System.IO.InvalidDataException]::new(
+                "The shipped Analysis menu '$($menuEntry.Key)' is invalid: $menuPath",
+                $_.Exception
+            )
+        }
+
+        $actualMenu = @(
+            $menu.Menu | ForEach-Object { "$($_.Name)/$($_.Hotkey)" }
+        ) -join ','
+        if ($actualMenu -ne $menuEntry.Value) {
+            throw [System.IO.InvalidDataException]::new(
+                "The shipped Analysis menu '$($menuEntry.Key)' does not match Analysis Help."
+            )
+        }
+
+        $sectionBindings = @(
+            ($sections | Where-Object { $_.Id -eq $menuEntry.Key }).Bindings
+        )
+        $effectiveBindings = @($globalBindings + $sectionBindings)
+        foreach ($item in $menu.Menu) {
+            $matchingBindings = @(
+                $effectiveBindings |
+                    Where-Object { $_.Action -eq $item.Name }
+            )
+            if ($matchingBindings.Count -ne 1) {
+                throw [System.IO.InvalidDataException]::new(
+                    "Analysis Help action '$($item.Name)' is missing or duplicated for '$($menuEntry.Key)'."
+                )
+            }
+            $displayHotkey = if (
+                $null -ne $matchingBindings[0].PSObject.Properties['MenuHotkey']
+            ) {
+                [string]$matchingBindings[0].MenuHotkey
+            } else {
+                [string]$matchingBindings[0].Key
+            }
+            if ([string]$item.Hotkey -ne $displayHotkey) {
+                throw [System.IO.InvalidDataException]::new(
+                    "Analysis Help hotkey for '$($item.Name)' does not match '$($menuEntry.Key)'."
+                )
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Title = $title
+        Lines = [string[]]$lines.ToArray()
+        Sections = $sections
+    }
+}
+
+<#
+.SYNOPSIS
+Classifies a console key for the Analysis Help modal.
+
+.PARAMETER HelpVisible
+Whether the Help overlay is currently visible.
+
+.PARAMETER Key
+The ConsoleKey value.
+
+.PARAMETER KeyChar
+The character reported for the key.
+
+.PARAMETER Control
+Whether Control is pressed.
+
+.PARAMETER Shift
+Whether Shift is pressed.
+
+.PARAMETER Alt
+Whether Alt is pressed.
+
+.OUTPUTS
+None, Open, Close, Stop, Consumed, MoveUp, MoveDown, PageUp, PageDown, MoveHome, or MoveEnd.
+#>
+function Get-PspktTuiHelpInputAction {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [bool]
+        $HelpVisible,
+
+        [Parameter(Mandatory = $true)]
+        [ConsoleKey]
+        $Key,
+
+        [Parameter(Mandatory = $true)]
+        [char]
+        $KeyChar,
+
+        [Parameter(Mandatory = $true)]
+        [bool]
+        $Control,
+
+        [Parameter(Mandatory = $true)]
+        [bool]
+        $Shift,
+
+        [Parameter(Mandatory = $true)]
+        [bool]
+        $Alt
+    )
+
+    if (-not $HelpVisible) {
+        if (-not $Control -and -not $Alt -and $Key -eq [ConsoleKey]::H) {
+            return 'Open'
+        }
+        return 'None'
+    }
+
+    if ($Key -eq [ConsoleKey]::Escape) {
+        return 'Close'
+    }
+
+    if (-not $Control -and -not $Alt) {
+        switch ($Key) {
+            'H'        { return 'Close' }
+            'S'        { return 'Stop' }
+            'UpArrow'  { return 'MoveUp' }
+            'DownArrow' { return 'MoveDown' }
+            'PageUp'   { return 'PageUp' }
+            'PageDown' { return 'PageDown' }
+            'Home'     { return 'MoveHome' }
+            'End'      { return 'MoveEnd' }
+        }
+    }
+
+    return 'Consumed'
+}
+
+<#
+.SYNOPSIS
+Renders the Analysis Help overlay within the Analysis box area.
+
+.PARAMETER Overlay
+The scrollable Help overlay.
+
+.PARAMETER ConsoleWidth
+The current console width.
+
+.PARAMETER ConsoleHeight
+The current console height.
+
+.PARAMETER AreaTop
+The first console row owned by the Analysis boxes.
+
+.OUTPUTS
+A PSCustomObject containing Lines, Top, Left, Width, and Count.
+#>
+function Get-PspktTuiHelpOverlayFrame {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [BoxyBox.ScrollableOverlayBox]
+        $Overlay,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $ConsoleWidth,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $ConsoleHeight,
+
+        [Parameter(Mandatory = $true)]
+        [int]
+        $AreaTop
+    )
+
+    $availableHeight = [Math]::Max(0, $ConsoleHeight - $AreaTop + 1)
+    if ($availableHeight -eq 0) {
+        return [pscustomobject]@{
+            Lines = [string[]]@()
+            Top = $AreaTop
+            Left = 1
+            Width = 0
+            Count = 0
+        }
+    }
+
+    $width = [Math]::Max(1, [Math]::Min(80, $ConsoleWidth - 4))
+    $bodyRows = [Math]::Max(1, $availableHeight - 5)
+    $Overlay.Resize($width, $bodyRows)
+
+    $relativeTop = 0
+    $left = 0
+    $lines = $Overlay.Render(
+        $ConsoleWidth,
+        $availableHeight,
+        [ref]$relativeTop,
+        [ref]$left
+    )
+    if ($lines.Count -eq 0) {
+        return [pscustomobject]@{
+            Lines = [string[]]@()
+            Top = $AreaTop
+            Left = 1
+            Width = 0
+            Count = 0
+        }
+    }
+
+    return [pscustomobject]@{
+        Lines = [string[]]$lines
+        Top = $relativeTop + $AreaTop - 1
+        Left = $left
+        Width = [BoxyBox.AnsiText]::VisibleLength($lines[0])
+        Count = $lines.Count
+    }
+}
+
+<#
+.SYNOPSIS
+Updates a suspended transient-overlay deadline.
+
+.PARAMETER Action
+Suspend, RefreshSuspended, or Resume.
+
+.PARAMETER Now
+The current UTC time.
+
+.PARAMETER Until
+The current absolute deadline.
+
+.PARAMETER Remaining
+The stored remaining duration.
+
+.PARAMETER Duration
+The duration used when refreshing a suspended deadline.
+
+.OUTPUTS
+A PSCustomObject containing Until and Remaining.
+#>
+function Update-PspktTuiDeferredDeadline {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Suspend', 'RefreshSuspended', 'Resume')]
+        [string]
+        $Action,
+
+        [Parameter(Mandatory = $true)]
+        [datetime]
+        $Now,
+
+        [Parameter(Mandatory = $true)]
+        [datetime]
+        $Until,
+
+        [Parameter(Mandatory = $true)]
+        [timespan]
+        $Remaining,
+
+        [Parameter(Mandatory = $true)]
+        [timespan]
+        $Duration
+    )
+
+    switch ($Action) {
+        'Suspend' {
+            $remainingDuration = $Until - $Now
+            if ($remainingDuration -lt [timespan]::Zero) {
+                $remainingDuration = [timespan]::Zero
+            }
+            return [pscustomobject]@{
+                Until = [datetime]::MaxValue
+                Remaining = $remainingDuration
+            }
+        }
+        'RefreshSuspended' {
+            return [pscustomobject]@{
+                Until = [datetime]::MaxValue
+                Remaining = $Duration
+            }
+        }
+        'Resume' {
+            return [pscustomobject]@{
+                Until = $Now.Add($Remaining)
+                Remaining = [timespan]::Zero
+            }
+        }
+    }
 }
 
 <#
@@ -1711,7 +2170,6 @@ function Split-PspktWarningText {
     $words = ($Text -split '\s+') | Where-Object { $_.Length -gt 0 }
 
     foreach ($word in $words) {
-        # Hard-split any single word longer than the line width.
         $chunk = $word
         while ($chunk.Length -gt $Width) {
             if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].Length -eq 0) {
@@ -1829,7 +2287,6 @@ function New-PspktCaptureFileName {
     )
 
     $tag = if ([string]::IsNullOrWhiteSpace($FilterTag)) { 'all' } else { $FilterTag }
-    # Keep only file-name-safe characters; collapse everything else away.
     $tag = ($tag -replace '[^A-Za-z0-9_-]', '')
     if ([string]::IsNullOrWhiteSpace($tag)) { $tag = 'all' }
     $ts = $Timestamp.ToString('yyyyMMdd-HHmmss')
@@ -1849,7 +2306,8 @@ TextBox rendered to a fixed console region (no console scroll). Focus ('f') spli
 the screen into a Text box + Details box (Wireshark-style JIT parse tree), 'r'
 resumes, 's' stops. Pause ('p') stops collecting new packets (nothing more is added
 to the Text box or JIT store) and enters Focus so the frozen buffer can be inspected;
-'r' resumes collection. Shift+Ctrl+C copies the selection; the Save hotkey writes the
+'r' resumes collection. Help ('h') opens a modal scrollable shortcut reference without
+stopping packet draining. Shift+Ctrl+C copies the selection; the Save hotkey writes the
 retained packets to a pcapng file via an overlay prompt. Menus are JSON-driven and switch
 between Full (hotkey+text) and Simple (hotkey only) by console width.
 
@@ -1909,6 +2367,46 @@ function Invoke-PspktAnalysisLoop {
 
     $stream = $Session.OutputStream[0]
     $ESC = [char]27
+    $prevDetail = Get-PspktDetailLevel
+    $prevTreatCtrlC = $false
+    $detailLevelChanged = $false
+    $textBoxModeChanged = $false
+    $controlCModeChanged = $false
+    $consoleOwned = $false
+    $areaTop = 2
+    $areaHeight = 6
+    $frameBuffer = $null
+    $helpState = [pscustomobject]@{
+        Visible = $false
+        Drawn = $false
+        TransitionPending = $false
+        ResumeTransientsPending = $false
+        LastTop = 0
+        LastLeft = 0
+        LastWidth = 0
+        LastCount = 0
+        ResidueTop = 0
+        ResidueLeft = 0
+        ResidueWidth = 0
+        ResidueCount = 0
+    }
+    $notifyState = [pscustomobject]@{
+        Text = $null
+        Until = [DateTime]::MinValue
+        Remaining = [timespan]::Zero
+        Suspended = $false
+        Drawn = $false
+    }
+    $warnState = [pscustomobject]@{
+        Text = $null
+        Until = [DateTime]::MinValue
+        Remaining = [timespan]::Zero
+        Suspended = $false
+        Drawn = $false
+    }
+
+    try {
+    $helpContent = Get-PspktTuiHelpContent
 
     # Ensure the parsing color scheme is loaded into the C# formatter so both the Text box
     # lines and the Details tree render with the active profile's colors. The standard
@@ -1917,13 +2415,11 @@ function Invoke-PspktAnalysisLoop {
     $parserModule = $script:PspktParserModule
     $null = & $parserModule { Get-PspktColorScheme }
 
-    # Text Box uses the Default single-line parse (level 0) with the compact component
-    # prefix (name omitted — shown in the Details box in a later phase).
-    $prevDetail = Get-PspktDetailLevel
     Set-PspktDetailLevel -Level 0
+    $detailLevelChanged = $true
     [PacketLineFormatter]::SetTextBoxMode($true)
+    $textBoxModeChanged = $true
 
-    # Console dimensions with fallbacks for non-interactive hosts.
     $consoleWidth = 100
     $consoleHeight = 30
     try { if ([Console]::WindowWidth  -gt 0) { $consoleWidth  = [Console]::WindowWidth } }  catch { }
@@ -1931,15 +2427,18 @@ function Invoke-PspktAnalysisLoop {
 
     # Row 1 is a status line; the box area fills the remaining rows.
     $boxWidth   = $consoleWidth
-    $areaTop    = 2
     $areaHeight = [Math]::Max(6, $consoleHeight - 1)
+    $helpOverlay = [BoxyBox.ScrollableOverlayBox]::new(
+        [Math]::Max(1, [Math]::Min(80, $consoleWidth - 4)),
+        [Math]::Max(1, $consoleHeight - 6),
+        $helpContent.Title,
+        [System.Collections.Generic.List[string]]@($helpContent.Lines)
+    )
 
-    # JSON-driven menus (Full = hotkey+text, Simple = hotkey-only, auto by width).
     $liveMenuDef    = Get-PspktTuiMenu -Box 'TextLive'
     $focusMenuDef   = Get-PspktTuiMenu -Box 'TextFocus'
     $detailsMenuDef = Get-PspktTuiMenu -Box 'Details'
 
-    # Live layout: a single Text Box fills the whole area.
     $textBox = [BoxyBox.TextBox]::new($boxWidth, $areaHeight, 200000)
     $liveBox = [BoxyBox.Box]::new($boxWidth, $areaHeight)
     $liveBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($liveMenuDef, $boxWidth)
@@ -1987,7 +2486,6 @@ function Invoke-PspktAnalysisLoop {
     $saveResult = $null
     $dirty = $true
 
-    # --- Focus state ---
     $focused = $false
     $paused = $false         # Pause ('p') freezes collection: drained packets are discarded
     $activeBox = 'text'      # 'text' or 'details' (Tab switches)
@@ -2071,7 +2569,6 @@ function Invoke-PspktAnalysisLoop {
         if ($topSeq -lt $textBox.BaseSeq) { $topSeq = $textBox.BaseSeq }
         $selectedSeq = $textBox.ClampSeq($topSeq + [int]($textFocusBox.ContentRows / 2))
         & $loadDetails $selectedSeq
-        # Quick expand-up animation of the Details box.
         $steps = 4
         for ($s = 1; $s -le $steps; $s++) {
             $h = [int]($detailsHeight * $s / $steps)
@@ -2088,11 +2585,6 @@ function Invoke-PspktAnalysisLoop {
         $dirty = $true
     }
 
-    # --- Transient notification overlay state (e.g. "Copied to clipboard") ---
-    $notifyText = $null
-    $notifyUntil = [DateTime]::MinValue
-    $notifyDrawn = $false
-
     # --- Runtime warning panel state ---
     # A warning emitted while the TUI owns the screen can't go to the console without
     # corrupting the frame. Install a nested Write-Warning proxy: PowerShell's dynamic
@@ -2103,14 +2595,26 @@ function Invoke-PspktAnalysisLoop {
     # Defined via ${function:...} rather than 'function Write-Warning {' so it does not
     # shadow the module's real warnings outside this call and does not trip the Precheck
     # comment-based-help scan.
-    $warnState = [pscustomobject]@{ Text = $null; Until = [DateTime]::MinValue }
-    $warnDrawn = $false
     ${function:Write-Warning} = {
         param([Parameter(Position = 0, ValueFromPipeline = $true)][string] $Message)
         process {
             if (-not [string]::IsNullOrWhiteSpace($Message)) {
-                $warnState.Text  = $Message.Trim()
-                $warnState.Until = [DateTime]::UtcNow.AddSeconds(3)
+                $warnState.Text = $Message.Trim()
+                if ($helpState.Visible) {
+                    $updatedDeadline = Update-PspktTuiDeferredDeadline `
+                        -Action RefreshSuspended `
+                        -Now ([DateTime]::UtcNow) `
+                        -Until $warnState.Until `
+                        -Remaining $warnState.Remaining `
+                        -Duration ([timespan]::FromSeconds(3))
+                    $warnState.Until = $updatedDeadline.Until
+                    $warnState.Remaining = $updatedDeadline.Remaining
+                    $warnState.Suspended = $true
+                } else {
+                    $warnState.Until = [DateTime]::UtcNow.AddSeconds(3)
+                    $warnState.Remaining = [timespan]::Zero
+                    $warnState.Suspended = $false
+                }
             }
         }
     }
@@ -2122,7 +2626,75 @@ function Invoke-PspktAnalysisLoop {
         if ($seedWarnings.Count -gt 0) {
             $warnState.Text  = ($seedWarnings -join '   |   ')
             $warnState.Until = [DateTime]::UtcNow.AddSeconds(3)
+            $warnState.Remaining = [timespan]::Zero
+            $warnState.Suspended = $false
         }
+    }
+
+    $suspendTransientState = {
+        param([pscustomobject]$State)
+        $State.Drawn = $false
+        if (
+            -not $State.Suspended -and
+            $null -ne $State.Text -and
+            [DateTime]::UtcNow -lt $State.Until
+        ) {
+            $updatedDeadline = Update-PspktTuiDeferredDeadline `
+                -Action Suspend `
+                -Now ([DateTime]::UtcNow) `
+                -Until $State.Until `
+                -Remaining $State.Remaining `
+                -Duration ([timespan]::Zero)
+            $State.Until = $updatedDeadline.Until
+            $State.Remaining = $updatedDeadline.Remaining
+            $State.Suspended = $true
+        }
+    }
+
+    $resumeTransientState = {
+        param([pscustomobject]$State)
+        if ($State.Suspended) {
+            $updatedDeadline = Update-PspktTuiDeferredDeadline `
+                -Action Resume `
+                -Now ([DateTime]::UtcNow) `
+                -Until $State.Until `
+                -Remaining $State.Remaining `
+                -Duration ([timespan]::Zero)
+            $State.Until = $updatedDeadline.Until
+            $State.Remaining = $updatedDeadline.Remaining
+            $State.Suspended = $false
+        }
+    }
+
+    $dismissHelp = {
+        param(
+            [switch]
+            $ForVisibleClose,
+
+            [switch]
+            $DeferResume
+        )
+
+        if ($DeferResume) {
+            $helpState.ResumeTransientsPending = $true
+        } else {
+            & $resumeTransientState $warnState
+            & $resumeTransientState $notifyState
+            $helpState.ResumeTransientsPending = $false
+        }
+        if ($helpState.LastCount -gt 0) {
+            $helpState.ResidueTop = $helpState.LastTop
+            $helpState.ResidueLeft = $helpState.LastLeft
+            $helpState.ResidueWidth = $helpState.LastWidth
+            $helpState.ResidueCount = $helpState.LastCount
+        }
+        $helpState.Visible = $false
+        $helpState.Drawn = $false
+        $helpState.LastTop = 0
+        $helpState.LastLeft = 0
+        $helpState.LastWidth = 0
+        $helpState.LastCount = 0
+        $helpState.TransitionPending = $ForVisibleClose.IsPresent
     }
 
     # Writes the retained capture to a pcapng file via a blocking overlay prompt. Returns a
@@ -2143,7 +2715,6 @@ function Invoke-PspktAnalysisLoop {
         # Draw the prompt in its own synchronized transaction; it ends BEFORE the cursor
         # positioning + ReadLine below (a sync block must never straddle a blocking read).
         [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $ovRegion.BuildFrame($ovLines) + [BoxyBox.ScreenRegion]::EndSyncOutput())
-        # Position the cursor on the input row inside the box and read a line.
         $inputRow = $ovTop + 3
         [Console]::Write("$ESC[$inputRow;$($ovLeft + 2)H" + [BoxyBox.ScreenRegion]::ShowCursor())
         # Temporarily restore processed-input mode so the OS console handles line editing
@@ -2236,19 +2807,21 @@ function Invoke-PspktAnalysisLoop {
     $frameWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $frameIntervalMs = 33
 
-    $prevTreatCtrlC = $false
-    try { $prevTreatCtrlC = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $true } catch { }
+    try {
+        $prevTreatCtrlC = [Console]::TreatControlCAsInput
+        [Console]::TreatControlCAsInput = $true
+        $controlCModeChanged = $true
+    } catch { }
 
     [PktMonApi]::SetCaptureActive($true)
     [PktMonApi]::SetConsumerActive($true)
     [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen() + [BoxyBox.ScreenRegion]::HideCursor())
+    $consoleOwned = $true
 
-    try {
         # Outer loop lets the "Save packets to file?" prompt CANCEL the exit (Esc) and resume
         # capturing, rather than always stopping.
         while ($true) {
         while ($Session.Active -and -not $stopRequested) {
-            # --- Detect a console (Windows Terminal) resize and rebuild the layout in place ---
             # Boxes and regions are sized from the console dimensions read once at startup; when
             # the window is resized we recompute the layout so borders span the new width/height.
             $curW = $consoleWidth; $curH = $consoleHeight
@@ -2260,12 +2833,10 @@ function Invoke-PspktAnalysisLoop {
                 $boxWidth   = $consoleWidth
                 $areaHeight = [Math]::Max(6, $consoleHeight - 1)
 
-                # Live layout: single box filling the area. Re-fit the menu (Full/Simple by width).
                 $liveBox.Resize($boxWidth, $areaHeight)
                 $liveBox.MenuOptions = [BoxyBox.MenuRenderer]::BuildAuto($liveMenuDef, $boxWidth)
                 $liveRegion = [BoxyBox.ScreenRegion]::new($areaTop, 1, $boxWidth, $areaHeight)
 
-                # Focus layout: ~40% Text / ~60% Details with the shared divider (see startup).
                 # Keep textFocusHeight + detailsHeight == areaHeight so the diff buffer covers all rows.
                 $usable = $areaHeight - 3
                 $textContent = [int][Math]::Round($usable * 0.40)
@@ -2286,12 +2857,21 @@ function Invoke-PspktAnalysisLoop {
                 # A fresh FrameBuffer at the new size forces a full repaint on the next frame.
                 [Console]::Write([BoxyBox.ScreenRegion]::ClearScreen())
                 $frameBuffer = [BoxyBox.FrameBuffer]::new($areaTop, 1, $boxWidth, $areaHeight)
+                $helpState.Drawn = $false
+                $helpState.LastTop = 0
+                $helpState.LastLeft = 0
+                $helpState.LastWidth = 0
+                $helpState.LastCount = 0
+                $helpState.ResidueTop = 0
+                $helpState.ResidueLeft = 0
+                $helpState.ResidueWidth = 0
+                $helpState.ResidueCount = 0
+                $helpState.TransitionPending = $helpState.Visible
                 $dirty = $true
             }
 
             $textContentRows = if ($focused) { $textFocusBox.ContentRows } else { $liveBox.ContentRows }
 
-            # --- Non-blocking key handling ---
             $keyReady = $false
             try { $keyReady = [Console]::KeyAvailable } catch { $keyReady = $false }
             if ($keyReady) {
@@ -2299,17 +2879,83 @@ function Invoke-PspktAnalysisLoop {
                 $ch = [char]::ToLower($key.KeyChar)
                 $ctrl  = ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0
                 $shift = ($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
+                $alt = ($key.Modifiers -band [ConsoleModifiers]::Alt) -ne 0
                 $controlCAction = Get-PspktTuiControlCAction `
                     -Key $key.Key `
                     -Control $ctrl `
                     -Shift $shift
 
                 if ($controlCAction -eq 'Stop') {
+                    if ($helpState.Visible) { & $dismissHelp }
                     $stopRequested = $true
                     $stopWasTrigger = $false
                     continue
                 }
 
+                $helpAction = Get-PspktTuiHelpInputAction `
+                    -HelpVisible $helpState.Visible `
+                    -Key $key.Key `
+                    -KeyChar $key.KeyChar `
+                    -Control $ctrl `
+                    -Shift $shift `
+                    -Alt $alt
+
+                if ($helpAction -eq 'Stop') {
+                    & $dismissHelp
+                    $stopRequested = $true
+                    $stopWasTrigger = $false
+                    continue
+                }
+
+                if ($helpAction -ne 'None') {
+                    switch ($helpAction) {
+                        'Open' {
+                            & $suspendTransientState $warnState
+                            & $suspendTransientState $notifyState
+                            $helpOverlay.MoveHome()
+                            $helpState.Visible = $true
+                            $helpState.TransitionPending = $true
+                            $helpState.ResumeTransientsPending = $false
+                            $dirty = $true
+                        }
+                        'Close' {
+                            & $dismissHelp -ForVisibleClose -DeferResume
+                            $dirty = $true
+                        }
+                        'MoveUp' {
+                            $helpOverlay.MoveUp()
+                            $helpState.TransitionPending = $true
+                            $dirty = $true
+                        }
+                        'MoveDown' {
+                            $helpOverlay.MoveDown()
+                            $helpState.TransitionPending = $true
+                            $dirty = $true
+                        }
+                        'PageUp' {
+                            $helpOverlay.PageUp()
+                            $helpState.TransitionPending = $true
+                            $dirty = $true
+                        }
+                        'PageDown' {
+                            $helpOverlay.PageDown()
+                            $helpState.TransitionPending = $true
+                            $dirty = $true
+                        }
+                        'MoveHome' {
+                            $helpOverlay.MoveHome()
+                            $helpState.TransitionPending = $true
+                            $dirty = $true
+                        }
+                        'MoveEnd' {
+                            $helpOverlay.MoveEnd()
+                            $helpState.TransitionPending = $true
+                            $dirty = $true
+                        }
+                    }
+                }
+
+                if ($helpAction -eq 'None') {
                 if ($controlCAction -eq 'Copy') {
                     if ($focused) {
                         $copyLines = [System.Collections.Generic.List[string]]::new()
@@ -2318,20 +2964,23 @@ function Invoke-PspktAnalysisLoop {
                         foreach ($d in $detailsBox.GetAllText()) { $null = $copyLines.Add($d) }
                         try {
                             ($copyLines -join "`r`n") | Set-Clipboard -ErrorAction Stop
-                            $notifyText = "Copied packet ($($copyLines.Count) lines) to clipboard"
+                            $notifyState.Text = "Copied packet ($($copyLines.Count) lines) to clipboard"
                         } catch {
-                            $notifyText = "Clipboard copy failed"
+                            $notifyState.Text = "Clipboard copy failed"
                         }
-                        $notifyUntil = [DateTime]::UtcNow.AddSeconds(2)
+                        $notifyState.Until = [DateTime]::UtcNow.AddSeconds(2)
+                        $notifyState.Remaining = [timespan]::Zero
+                        $notifyState.Suspended = $false
                         $dirty = $true
                     }
                     continue
                 }
 
-                # Save hotkey ('w'): blocking file-save overlay prompt.
                 if ($ch -eq 'w') {
-                    $notifyText = & $saveToFile
-                    $notifyUntil = [DateTime]::UtcNow.AddSeconds(3)
+                    $notifyState.Text = & $saveToFile
+                    $notifyState.Until = [DateTime]::UtcNow.AddSeconds(3)
+                    $notifyState.Remaining = [timespan]::Zero
+                    $notifyState.Suspended = $false
                     # The prompt overlay covered part of the box area; force a full base repaint
                     # to reclaim it (no full-screen clear flash).
                     $frameBuffer.Invalidate()
@@ -2356,10 +3005,9 @@ function Invoke-PspktAnalysisLoop {
                         . $enterFocus
                     }
                 } else {
-                    # --- Focus mode ---
                     if ($ch -eq 'r') {
                         $focused = $false
-                        $paused = $false        # Resume also clears a pause and restarts collection.
+                        $paused = $false
                         # Force a full base repaint so the single live box cleanly replaces the
                         # focus text+details layout (no full-screen clear flash / residue).
                         $frameBuffer.Invalidate()
@@ -2378,6 +3026,7 @@ function Invoke-PspktAnalysisLoop {
                                 $dirty = $true
                             }
                         }
+
                         elseif ($ctrl -and $key.Key -eq [ConsoleKey]::UpArrow) {
                             $selectedSeq = $textBox.ClampSeq($selectedSeq - 1); & $loadDetails $selectedSeq; $dirty = $true
                         }
@@ -2385,8 +3034,6 @@ function Invoke-PspktAnalysisLoop {
                             $selectedSeq = $textBox.ClampSeq($selectedSeq + 1); & $loadDetails $selectedSeq; $dirty = $true
                         }
                         elseif ($ctrl -and $key.Key -eq [ConsoleKey]::PageUp) {
-                            # Page the Text Box up a page (moves selection + reloads details)
-                            # while keeping focus in the Details Box.
                             $selectedSeq = $textBox.ClampSeq($selectedSeq - $textContentRows); $topSeq -= $textContentRows; & $loadDetails $selectedSeq; $dirty = $true
                         }
                         elseif ($ctrl -and $key.Key -eq [ConsoleKey]::PageDown) {
@@ -2425,7 +3072,6 @@ function Invoke-PspktAnalysisLoop {
                         }
                     }
 
-                    # Keep the text-box selection inside its visible window + retained range.
                     if ($focused) {
                         $viewport = Get-PspktTuiTextViewport `
                             -SelectedSeq $selectedSeq `
@@ -2438,8 +3084,8 @@ function Invoke-PspktAnalysisLoop {
                     }
                 }
             }
+            }
 
-            # --- Drain + format (continues even while focused); retain bytes for JIT detail ---
             $pktCount = $Session.DrainAllRawPackets()
             if ($pktCount -gt 0) {
                 if ($paused) {
@@ -2466,22 +3112,46 @@ function Invoke-PspktAnalysisLoop {
                     }
                 }
             } else {
-                $null = [PktMonApi]::WaitForPackets($PollingIntervalMs)
+                $queuedInput = $false
+                try { $queuedInput = [Console]::KeyAvailable } catch { $queuedInput = $false }
+                if (-not $helpState.TransitionPending -and -not $queuedInput) {
+                    $null = [PktMonApi]::WaitForPackets($PollingIntervalMs)
+                }
+            }
+
+            if ($helpState.ResumeTransientsPending) {
+                & $resumeTransientState $warnState
+                & $resumeTransientState $notifyState
+                $helpState.ResumeTransientsPending = $false
             }
 
             # A runtime warning that just arrived (or just expired) needs a repaint even when
             # the stream is idle: force a frame when the panel's should-be-visible state differs
             # from what is currently drawn.
-            $warnShouldShow = ($null -ne $warnState.Text) -and ([DateTime]::UtcNow -lt $warnState.Until)
-            if ($warnShouldShow -ne $warnDrawn) { $dirty = $true }
+            $warnShouldShow = (
+                -not $helpState.Visible -and
+                -not $warnState.Suspended -and
+                $null -ne $warnState.Text -and
+                [DateTime]::UtcNow -lt $warnState.Until
+            )
+            if ($warnShouldShow -ne $warnState.Drawn) { $dirty = $true }
 
             # Same for the transient notification overlay: force one repaint when it should appear
             # or disappear, so an expired notification is reclaimed even during idle/paused capture.
-            $notifyShouldShow = ($null -ne $notifyText) -and ([DateTime]::UtcNow -lt $notifyUntil)
-            if ($notifyShouldShow -ne $notifyDrawn) { $dirty = $true }
+            $notifyShouldShow = (
+                -not $helpState.Visible -and
+                -not $notifyState.Suspended -and
+                $null -ne $notifyState.Text -and
+                [DateTime]::UtcNow -lt $notifyState.Until
+            )
+            if ($notifyShouldShow -ne $notifyState.Drawn) { $dirty = $true }
 
-            # --- Throttled render ---
-            if ($dirty -and $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs) {
+            if (
+                $dirty -and (
+                    $helpState.TransitionPending -or
+                    $frameWatch.ElapsedMilliseconds -ge $frameIntervalMs
+                )
+            ) {
                 if ($focused) {
                     $viewport = Get-PspktTuiTextViewport `
                         -SelectedSeq $selectedSeq `
@@ -2499,7 +3169,7 @@ function Invoke-PspktAnalysisLoop {
 
                     $activeLabel = if ($activeBox -eq 'text') { 'TEXT' } else { 'DETAILS' }
                     $modeLabel = if ($paused) { "PAUSED/$activeLabel" } else { "FOCUS/$activeLabel" }
-                    $status = "  Analysis [$modeLabel]  pkt $($selectedSeq + 1)/$($textBox.TotalSeq)  |  (R)esume (S)top [Tab] switch"
+                    $status = "  Analysis [$modeLabel]  pkt $($selectedSeq + 1)/$($textBox.TotalSeq)  |  (H)elp (R)esume (S)top [Tab]"
                     # Text box (top): highlight the selected line; dim it when the text box is
                     # not the active box. Compute the highlight sequence first so the single
                     # .Render() call returns string[] directly (a PS if-expression would box
@@ -2516,12 +3186,20 @@ function Invoke-PspktAnalysisLoop {
                     # buffer (textFocusHeight + detailsHeight == areaHeight).
                     $baseLines = [string[]]($textFrameLines + $detailsFrameLines)
                 } else {
-                    $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (F)ocus (P)ause (S)top"
+                    $status = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (H)elp (F)ocus (S)top"
                     $liveWindow = $textBox.GetTailWindow($liveBox.ContentRows)
                     $baseLines = $liveBox.Render($liveWindow)
                 }
-                # Diff the base box area: only rows that changed since the last frame are emitted
-                # (static borders/menus and, in Focus, frozen rows are skipped).
+                $reclaimHelpResidue = (
+                    -not $helpState.Visible -and
+                    $helpState.ResidueCount -gt 0
+                )
+                if ($reclaimHelpResidue) {
+                    $frameBuffer.InvalidateRows(
+                        $helpState.ResidueTop,
+                        $helpState.ResidueCount
+                    )
+                }
                 $frame = $frameBuffer.Diff($baseLines)
                 if ($status.Length -gt $boxWidth) { $status = $status.Substring(0, $boxWidth) }
                 # Pad the status row to the box width and overwrite it in place (no CSI 2K erase),
@@ -2534,13 +3212,12 @@ function Invoke-PspktAnalysisLoop {
                 # tearing / border flicker). Overlays are appended on top of the base frame.
                 $composed = $statusLine + $frame
 
-                # Transient notification overlay (copy/save results) on top of the frame.
                 if ($notifyShouldShow) {
                     $nbody = [System.Collections.Generic.List[string]]::new()
                     $null = $nbody.Add('')
-                    $null = $nbody.Add(' ' + $notifyText)
+                    $null = $nbody.Add(' ' + $notifyState.Text)
                     $null = $nbody.Add('')
-                    $nW = [Math]::Min([Math]::Max(24, $notifyText.Length + 6), $consoleWidth - 4)
+                    $nW = [Math]::Min([Math]::Max(24, $notifyState.Text.Length + 6), $consoleWidth - 4)
                     $nTop = 0; $nLeft = 0
                     $nLines = [BoxyBox.OverlayBox]::Build($consoleWidth, $consoleHeight, $nW, ' pspkt ', $nbody, [ref]$nTop, [ref]$nLeft)
                     # Use the overlay's ACTUAL line width (Build may clamp $nW) so BuildFrame pads
@@ -2552,11 +3229,11 @@ function Invoke-PspktAnalysisLoop {
                     # The overlay overdrew these base rows; mark them so the next base Diff
                     # re-emits (reclaims) them when the notification moves or expires.
                     $frameBuffer.InvalidateRows($nTop, $nLines.Count)
-                    $notifyDrawn = $true
-                } elseif ($notifyDrawn) {
+                    $notifyState.Drawn = $true
+                } elseif (-not $helpState.Visible -and $notifyState.Drawn) {
                     # Expired: the base Diff above reclaimed the rows invalidated last frame.
-                    $notifyDrawn = $false
-                    $notifyText = $null
+                    $notifyState.Drawn = $false
+                    $notifyState.Text = $null
                 }
 
                 # Runtime warning panel: a bottom box expanded just enough to fit the (yellow)
@@ -2565,7 +3242,7 @@ function Invoke-PspktAnalysisLoop {
                 # seam the focus Details box uses); the box below the divider has no top border
                 # and a ╘══╛ terminal cap as its bottom. Drawn on top of the base frame; when it
                 # expires the next normal frame repaints over the region (collapse).
-                $warnActive = ($null -ne $warnState.Text) -and ([DateTime]::UtcNow -lt $warnState.Until)
+                $warnActive = $warnShouldShow
                 if ($warnActive) {
                     $wrapped = Split-PspktWarningText -Text $warnState.Text -Width ($boxWidth - 4) -MaxLines ([Math]::Max(1, $areaHeight - 2))
                     $panelHeight = $wrapped.Count + 2   # divider + content rows + bottom cap
@@ -2586,16 +3263,59 @@ function Invoke-PspktAnalysisLoop {
                     $composed += $warnRegion.BuildFrame($panelFrame)
                     # Mark the panel's rows so the next base Diff reclaims them on collapse.
                     $frameBuffer.InvalidateRows($panelTop, $panelHeight)
-                    $warnDrawn = $true
-                } elseif ($warnDrawn) {
+                    $warnState.Drawn = $true
+                } elseif (-not $helpState.Visible -and $warnState.Drawn) {
                     # Expired: the base frame above already repainted over the panel region.
-                    $warnDrawn = $false
+                    $warnState.Drawn = $false
                     $warnState.Text = $null
                 }
 
-                # Single synchronized write of the whole composed frame (base + overlays).
+                if ($helpState.Visible) {
+                    $helpFrame = Get-PspktTuiHelpOverlayFrame `
+                        -Overlay $helpOverlay `
+                        -ConsoleWidth $consoleWidth `
+                        -ConsoleHeight $consoleHeight `
+                        -AreaTop $areaTop
+                    if ($helpFrame.Count -gt 0) {
+                        $helpRegion = [BoxyBox.ScreenRegion]::new(
+                            $helpFrame.Top,
+                            $helpFrame.Left,
+                            $helpFrame.Width,
+                            $helpFrame.Count
+                        )
+                        $composed += $helpRegion.BuildFrame($helpFrame.Lines)
+                        $helpState.Drawn = $true
+                        $helpState.LastTop = $helpFrame.Top
+                        $helpState.LastLeft = $helpFrame.Left
+                        $helpState.LastWidth = $helpFrame.Width
+                        $helpState.LastCount = $helpFrame.Count
+                        $helpState.ResidueTop = 0
+                        $helpState.ResidueLeft = 0
+                        $helpState.ResidueWidth = 0
+                        $helpState.ResidueCount = 0
+                    } elseif ($helpState.LastCount -gt 0) {
+                        $helpState.ResidueTop = $helpState.LastTop
+                        $helpState.ResidueLeft = $helpState.LastLeft
+                        $helpState.ResidueWidth = $helpState.LastWidth
+                        $helpState.ResidueCount = $helpState.LastCount
+                        $helpState.LastTop = 0
+                        $helpState.LastLeft = 0
+                        $helpState.LastWidth = 0
+                        $helpState.LastCount = 0
+                    }
+                }
+
                 [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $composed + [BoxyBox.ScreenRegion]::EndSyncOutput())
 
+                if ($reclaimHelpResidue) {
+                    $helpState.ResidueTop = 0
+                    $helpState.ResidueLeft = 0
+                    $helpState.ResidueWidth = 0
+                    $helpState.ResidueCount = 0
+                }
+                if ($helpState.TransitionPending) {
+                    $helpState.TransitionPending = $false
+                }
                 $frameWatch.Restart()
                 $dirty = $false
                 # The notification/warning appear+disappear is handled by the $notifyShouldShow /
@@ -2607,6 +3327,61 @@ function Invoke-PspktAnalysisLoop {
         }
 
         # --- Save-on-exit (Analysis retention buffer) ---
+        & $dismissHelp
+        if ($helpState.ResidueCount -gt 0) {
+            $frameBuffer.InvalidateRows(
+                $helpState.ResidueTop,
+                $helpState.ResidueCount
+            )
+            if ($focused) {
+                $viewport = Get-PspktTuiTextViewport `
+                    -SelectedSeq $selectedSeq `
+                    -TopSeq $topSeq `
+                    -BaseSeq $textBox.BaseSeq `
+                    -TotalSeq $textBox.TotalSeq `
+                    -VisibleRows $textFocusBox.ContentRows
+                $selectedSeq = $viewport.SelectedSeq
+                $topSeq = $viewport.TopSeq
+                if ($detailsState.LoadedSeq -ne $selectedSeq) {
+                    & $loadDetails $selectedSeq
+                }
+                $textWindow = $textBox.GetWindow($topSeq, $textFocusBox.ContentRows)
+                $selRow = [int]($selectedSeq - $topSeq)
+                if ($selRow -lt 0 -or $selRow -ge $textFocusBox.ContentRows) {
+                    $selRow = -1
+                }
+                $textHlOn = if ($activeBox -eq 'text') { $hlOn } else { $hlDim }
+                $detailsHlOn = if ($activeBox -eq 'details') { $hlOn } else { $hlDim }
+                $promptBase = [string[]](
+                    $textFocusBox.Render($textWindow, $selRow, $textHlOn, $hlOff) +
+                    $detailsBox.Render($detailsHlOn, $hlOff)
+                )
+                $activeLabel = if ($activeBox -eq 'text') { 'TEXT' } else { 'DETAILS' }
+                $modeLabel = if ($paused) { "PAUSED/$activeLabel" } else { "FOCUS/$activeLabel" }
+                $promptStatus = "  Analysis [$modeLabel]  pkt $($selectedSeq + 1)/$($textBox.TotalSeq)  |  (H)elp (R)esume (S)top [Tab]"
+            } else {
+                $promptBase = $liveBox.Render(
+                    $textBox.GetTailWindow($liveBox.ContentRows)
+                )
+                $promptStatus = "  pspkt Analysis  |  packets: $packetCount  drops: $droppedCount  |  (H)elp (F)ocus (S)top"
+            }
+            $promptFrame = $frameBuffer.Diff($promptBase)
+            if ($promptStatus.Length -gt $boxWidth) {
+                $promptStatus = $promptStatus.Substring(0, $boxWidth)
+            }
+            $promptStatusLine = "$ESC[1;1H" + $promptStatus.PadRight($boxWidth)
+            [Console]::Write(
+                [BoxyBox.ScreenRegion]::BeginSyncOutput() +
+                $promptStatusLine +
+                $promptFrame +
+                [BoxyBox.ScreenRegion]::EndSyncOutput()
+            )
+            $helpState.ResidueTop = 0
+            $helpState.ResidueLeft = 0
+            $helpState.ResidueWidth = 0
+            $helpState.ResidueCount = 0
+        }
+
         # The capture stopped (S key / stop trigger). Offer to persist the retained packets:
         # -AutoSave writes a uniquely-named file with no prompt; otherwise a Yes/No/Cancel prompt
         # is shown unless -NoSave suppressed it. Esc on the prompt CANCELS the exit and resumes
@@ -2637,13 +3412,12 @@ function Invoke-PspktAnalysisLoop {
         }
 
         if ($exitCancelled) {
-            # Repaint over the exit prompt and resume the capture loop.
             $frameBuffer.Invalidate()
             $dirty = $true
             continue
         }
         break
-        }  # end outer resume loop
+        }
 
         # Final clean repaint: draw the parsed capture over any exit/save prompt overlay so it
         # stays visible on close for reference. Preserve the Focus split (Details box) if the user
@@ -2669,16 +3443,92 @@ function Invoke-PspktAnalysisLoop {
             if ($finalStatus.Length -gt $boxWidth) { $finalStatus = $finalStatus.Substring(0, $boxWidth) }
             $finalStatusLine = "$ESC[1;1H" + $finalStatus.PadRight($boxWidth)
             [Console]::Write([BoxyBox.ScreenRegion]::BeginSyncOutput() + $finalStatusLine + $finalFrame + [BoxyBox.ScreenRegion]::EndSyncOutput())
+            $helpState.LastTop = 0
+            $helpState.LastLeft = 0
+            $helpState.LastWidth = 0
+            $helpState.LastCount = 0
+            $helpState.ResidueTop = 0
+            $helpState.ResidueLeft = 0
+            $helpState.ResidueWidth = 0
+            $helpState.ResidueCount = 0
         } catch { }
     }
     finally {
-        # Restore console + formatter state.
-        try { [Console]::TreatControlCAsInput = $prevTreatCtrlC } catch { }
-        [Console]::Write([BoxyBox.ScreenRegion]::ShowCursor())
-        $belowRow = $areaTop + $areaHeight
-        [Console]::Write("$ESC[$belowRow;1H`n")
-        [PacketLineFormatter]::SetTextBoxMode($false)
-        Set-PspktDetailLevel -Level $prevDetail
+        try {
+            $cleanupTop = 0
+            $cleanupLeft = 0
+            $cleanupWidth = 0
+            $cleanupCount = 0
+            if ($helpState.LastCount -gt 0) {
+                $cleanupTop = $helpState.LastTop
+                $cleanupLeft = $helpState.LastLeft
+                $cleanupWidth = $helpState.LastWidth
+                $cleanupCount = $helpState.LastCount
+            } elseif ($helpState.ResidueCount -gt 0) {
+                $cleanupTop = $helpState.ResidueTop
+                $cleanupLeft = $helpState.ResidueLeft
+                $cleanupWidth = $helpState.ResidueWidth
+                $cleanupCount = $helpState.ResidueCount
+            }
+
+            if ($cleanupCount -gt 0 -and $cleanupWidth -gt 0) {
+                $cleanupConsoleWidth = $boxWidth
+                $cleanupConsoleHeight = $areaTop + $areaHeight - 1
+                try {
+                    if ([Console]::WindowWidth -gt 0) {
+                        $cleanupConsoleWidth = [Console]::WindowWidth
+                    }
+                } catch { }
+                try {
+                    if ([Console]::WindowHeight -gt 0) {
+                        $cleanupConsoleHeight = [Console]::WindowHeight
+                    }
+                } catch { }
+
+                $cleanupTop = [Math]::Max(1, $cleanupTop)
+                $cleanupLeft = [Math]::Max(1, $cleanupLeft)
+                $cleanupBottom = [Math]::Min(
+                    $cleanupConsoleHeight,
+                    $cleanupTop + $cleanupCount - 1
+                )
+                $cleanupRight = [Math]::Min(
+                    $cleanupConsoleWidth,
+                    $cleanupLeft + $cleanupWidth - 1
+                )
+                if (
+                    $cleanupBottom -ge $cleanupTop -and
+                    $cleanupRight -ge $cleanupLeft
+                ) {
+                    $cleanupRegion = [BoxyBox.ScreenRegion]::new(
+                        $cleanupTop,
+                        $cleanupLeft,
+                        $cleanupRight - $cleanupLeft + 1,
+                        $cleanupBottom - $cleanupTop + 1
+                    )
+                    [Console]::Write(
+                        [BoxyBox.ScreenRegion]::BeginSyncOutput() +
+                        $cleanupRegion.BuildFrame($null) +
+                        [BoxyBox.ScreenRegion]::EndSyncOutput()
+                    )
+                }
+            }
+        } catch { }
+        if ($controlCModeChanged) {
+            try { [Console]::TreatControlCAsInput = $prevTreatCtrlC } catch { }
+        }
+        if ($consoleOwned) {
+            try { [Console]::Write([BoxyBox.ScreenRegion]::ShowCursor()) } catch { }
+            try {
+                $belowRow = $areaTop + $areaHeight
+                [Console]::Write("$ESC[$belowRow;1H`n")
+            } catch { }
+        }
+        if ($textBoxModeChanged) {
+            try { [PacketLineFormatter]::SetTextBoxMode($false) } catch { }
+        }
+        if ($detailLevelChanged) {
+            try { Set-PspktDetailLevel -Level $prevDetail } catch { }
+        }
     }
 
     return [pscustomobject]@{ PacketCount = $packetCount; DroppedCount = $droppedCount; SaveResult = $saveResult }
@@ -3446,7 +4296,6 @@ function Start-Pspkt {
         [switch]
         $DumpInterfaces,
 
-        # --- Application-layer display filters (Detailed/+) ---
         # See wiki/Application-Filters-DNS.md for full reference.
         # Any of these parameters auto-bump -ParsingLevel to Detailed and -PacketSize
         # to a value large enough to hold a complete DNS message, with a warning.
@@ -3492,7 +4341,6 @@ function Start-Pspkt {
         [switch]
         $DnsMatchTruncated,
 
-        # --- TLS / SNI application-layer filters (Detailed/+) ---
         # See wiki/Application-Filters-TLS.md for full reference.
 
         # Regex pattern(s) matched case-insensitively against the ClientHello SNI.
@@ -3528,7 +4376,6 @@ function Start-Pspkt {
         [switch]
         $TlsMatchTruncated,
 
-        # --- HTTP application-layer filters (Detailed/+) ---
         # See wiki/Application-Filters-HTTP.md for full reference.
 
         # HTTP method filter (request side). Accepts standard names ('GET','POST',
@@ -3572,7 +4419,6 @@ function Start-Pspkt {
         [switch]
         $HttpMatchTruncated,
 
-        # --- DHCP application-layer filters (Detailed/+) ---
         # See wiki/Application-Filters-DHCP.md for full reference.
 
         # DHCP message-type filter. Accepts DHCPv4 names ('Discover','Offer',
@@ -3609,7 +4455,6 @@ function Start-Pspkt {
         [switch]
         $DhcpMatchTruncated,
 
-        # --- SMB2 application-layer filters (Detailed/+) ---
         # See wiki/Application-Filters-SMB2.md for full reference.
 
         # SMB2 command filter. Accepts names ('Negotiate','SessionSetup','Logoff',
@@ -3665,7 +4510,6 @@ function Start-Pspkt {
         [switch]
         $SmbMatchTruncated,
 
-        # --- ICMP / ICMPv6 / NDP application-layer filters (Detailed/+) ---
         # See wiki/Application-Filters-ICMP.md for full reference.
 
         # IPv4 ICMP type filter. Accepts ICMP4_TYPE names (full 'ICMP4_ECHO_REQUEST'
@@ -3705,12 +4549,10 @@ function Start-Pspkt {
     )
 
     process {
-        # --- DumpInterfaces: print NIC table and return without starting capture ---
         if ($DumpInterfaces.IsPresent) {
             return Get-PspktComponent -NIC | Sort-Object Id | Select-Object Id, Name | Format-Table -AutoSize
         }
 
-        # --- Analysis-mode warning collection ---
         # In Analysis mode the BoxyBox TUI takes over the screen, so setup warnings emitted
         # here (PacketSize/ParsingLevel auto-bumps, vmNIC skips, etc.) would scroll ABOVE the
         # TUI and look "outside" it. Collect them via a nested Write-Warning proxy (dynamic
@@ -3727,7 +4569,6 @@ function Start-Pspkt {
             }
         }
 
-        # --- DNS application-layer predicate detection + auto-bumps ---
         # Detect *before* session creation so PacketSize bump propagates into the
         # session. ParsingLevel bump must also happen before Set-PspktDetailLevel.
         $dnsPredicateActive =
@@ -3738,7 +4579,6 @@ function Start-Pspkt {
             $PSBoundParameters.ContainsKey('DnsQR') -or
             $DnsMatchTruncated.IsPresent
 
-        # --- TLS application-layer predicate detection + auto-bumps ---
         $tlsPredicateActive =
             $PSBoundParameters.ContainsKey('TlsSni') -or
             $PSBoundParameters.ContainsKey('TlsVersion') -or
@@ -3746,7 +4586,6 @@ function Start-Pspkt {
             $PSBoundParameters.ContainsKey('TlsHandshakeType') -or
             $TlsMatchTruncated.IsPresent
 
-        # --- HTTP application-layer predicate detection + auto-bumps ---
         $httpPredicateActive =
             $PSBoundParameters.ContainsKey('HttpMethod') -or
             $PSBoundParameters.ContainsKey('HttpPath') -or
@@ -3755,14 +4594,12 @@ function Start-Pspkt {
             $PSBoundParameters.ContainsKey('HttpContentType') -or
             $HttpMatchTruncated.IsPresent
 
-        # --- DHCP application-layer predicate detection + auto-bumps ---
         $dhcpPredicateActive =
             $PSBoundParameters.ContainsKey('DhcpMessageType') -or
             $PSBoundParameters.ContainsKey('DhcpClientMac') -or
             $PSBoundParameters.ContainsKey('DhcpFamily') -or
             $DhcpMatchTruncated.IsPresent
 
-        # --- SMB2 application-layer predicate detection + auto-bumps ---
         $smbPredicateActive =
             $PSBoundParameters.ContainsKey('SmbCommand') -or
             $PSBoundParameters.ContainsKey('SmbDirection') -or
@@ -3772,7 +4609,6 @@ function Start-Pspkt {
             $SmbMatchEncrypted.IsPresent -or
             $SmbMatchTruncated.IsPresent
 
-        # --- ICMP / ICMPv6 / NDP predicate detection ---
         # ICMP packets are small (typical < 100 bytes), so no -PacketSize bump
         # is needed even when -Icmpv6NdpTarget extracts the 16-byte target
         # address — it always fits in the default capture.
@@ -3904,7 +4740,6 @@ function Start-Pspkt {
             throw "Another pspkt capture is already active in this PowerShell process."
         }
 
-        # Create a session if one was not provided.
         if ($PSCmdlet.ParameterSetName -eq 'Default') {
             $Session = New-PspktSession -Name $Name
             $Session.CaptureType = $CaptureType
@@ -3975,7 +4810,6 @@ function Start-Pspkt {
             $Session.SetVmScope($vmLabel, $vmMacList)
         }
 
-        # Apply quick filters — create and add filters for each active switch.
         $quickFilters = [System.Collections.ArrayList]::new()
 
         if ($ARP.IsPresent) {
@@ -4153,12 +4987,10 @@ function Start-Pspkt {
             }
         }
 
-        # Add all quick filters to the session.
         if ($quickFilters.Count -gt 0) {
             @($quickFilters) | Add-PspktFilter -Session $Session
         }
 
-        # Determine real-time mode.
         # Real-time is enabled when: no -WriteFile (default), or -WriteFile + quick filter, or -WriteFile + -RealTime.
         $hasWriteFile = $PSBoundParameters.ContainsKey('WriteFile') -and -not [string]::IsNullOrEmpty($WriteFile)
         $hasWriteEtl = $PSBoundParameters.ContainsKey('WriteEtl') -and -not [string]::IsNullOrEmpty($WriteEtl)
@@ -4285,7 +5117,6 @@ function Start-Pspkt {
             }
         }
 
-        # Add components based on -Component / -VM / -VMName parameters.
         # Only applies when the session has no components already added.
         if ($Session.Components.Count -eq 0) {
             $componentsToAdd = $null
@@ -4324,17 +5155,14 @@ function Start-Pspkt {
                 }
 
             } elseif ($Component.Count -eq 1 -and $Component[0] -eq 'NICs') {
-                # NICs keyword — capture from NIC components only.
                 $componentsToAdd = $Session.Pspkt.EnumPktmonDataSources($true, 1)
             } elseif ($Component.Count -eq 1 -and $Component[0] -eq 'All') {
-                # All keyword (default) — capture from all components.
                 $allSources = $Session.Pspkt.EnumPktmonDataSources($true, 0)
                 $nicSources = $Session.Pspkt.EnumPktmonDataSources($true, 1)
                 $componentsToAdd = [System.Collections.ArrayList]::new()
                 if ($null -ne $nicSources) { $null = $componentsToAdd.AddRange($nicSources) }
                 if ($null -ne $allSources) { $null = $componentsToAdd.AddRange($allSources) }
             } else {
-                # Treat values as component IDs — enumerate all and filter by ID.
                 $allSources = $Session.Pspkt.EnumPktmonDataSources($true, 0)
                 $nicSources = $Session.Pspkt.EnumPktmonDataSources($true, 1)
                 $all = [System.Collections.ArrayList]::new()
@@ -4376,12 +5204,10 @@ function Start-Pspkt {
         $parserModule = $script:PspktParserModule
         & $parserModule { Reset-PspktLineCounter }
 
-        # Set detail level based on ParsingLevel enum.
         Set-PspktDetailLevel -Level ([int]$ParsingLevel)
         Set-PspktDetailSpacing -Enabled ($ParsingLevel -ge [PspktParsingLevel]::Detailed -and $Spaced.IsPresent)
         Set-PspktShowTimestamp -Enabled $Timestamp.IsPresent
 
-        # --- Application-layer display predicates ---
         # Always clear first so a predicate left over from a prior capture in the
         # same PS session can't silently filter this one.
         [PacketLineFormatter]::ClearAppPredicates()
@@ -4636,7 +5462,6 @@ function Start-Pspkt {
             Write-Verbose "ICMP predicate active: V4Types=$($icmpPredicate.V4Types -join ','); V6Types=$($icmpPredicate.V6Types -join ','); NdpTarget='$($icmpPredicate.NdpTargetRegex)'"
         }
 
-        # Populate component name lookup from pktmon.
         try {
             $components = Get-PspktComponent
             Register-PspktComponentMap -Components $components
@@ -4644,18 +5469,14 @@ function Start-Pspkt {
             Write-Verbose "Could not enumerate components: $_"
         }
 
-        # --- Pcapng file writer setup ---
         if ($PSBoundParameters.ContainsKey('WriteFile') -and -not [string]::IsNullOrEmpty($WriteFile)) {
-            # Resolve the file path to absolute.
             $pcapngPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WriteFile)
             if (-not $pcapngPath.EndsWith('.pcapng', [StringComparison]::OrdinalIgnoreCase)) {
                 $pcapngPath = $pcapngPath + '.pcapng'
             }
 
-            # Start pcapng writer (async mode for non-blocking writes from callback).
             $pcapngWriter = [PcapngWriter]::new()
 
-            # Register components for enriched packet comments.
             if ($null -ne $components) {
                 foreach ($comp in $components) {
                     if ($null -ne $comp.Id) {
@@ -4677,7 +5498,6 @@ function Start-Pspkt {
             [long]$maxBytes = if ($NumFiles -gt 1) { [long]$FileSize * 1MB } else { 0 }
             $pcapngWriter.Start($pcapngPath, $useAsync, $ringCap, $FlushDisk.IsPresent, $maxBytes, [int]$NumFiles)
 
-            # Register with the callback so packets are captured to file.
             $Session.CaptureFileWriter = $pcapngWriter
             [PktMonApi]::FileWriter = $pcapngWriter
 
@@ -4759,7 +5579,6 @@ function Start-Pspkt {
 
         try {
           if ($useRealTime -and ($ParsingLevel -eq [PspktParsingLevel]::Analysis)) {
-            # --- Analysis mode: BoxyBox TUI (scrolling Text Box) ---
             & $parserModule { $script:ComponentRefreshLocked = $true }
 
             # Resolve drop-trigger values (mirrors the standard real-time branch).
@@ -4805,7 +5624,6 @@ function Start-Pspkt {
             }
           }
           elseif ($useRealTime) {
-            # Determine if pause/stop features are active.
             $pauseEnabled = $Pause.IsPresent -or $PauseOnDrop.IsPresent -or
                 $PSBoundParameters.ContainsKey('PauseOnLocation') -or
                 $PSBoundParameters.ContainsKey('PauseOnReason') -or
@@ -4840,12 +5658,10 @@ function Start-Pspkt {
             $paused = $false
             $stopRequested = $false
 
-            # Use the high-throughput C# bulk-format path for all detail levels.
             # Drop triggers are handled in C# FormatBatch.
             $useBulkFormat = $true
             $bulkLineCounter = 0
 
-            # Configure C# drop triggers for the bulk-format path.
             [PacketLineFormatter]::SetDropTriggers(
                 $StopOnDrop.IsPresent,
                 $PauseOnDrop.IsPresent,
@@ -4875,7 +5691,6 @@ function Start-Pspkt {
             [PktMonApi]::SetConsumerActive($true)
 
             while ($Session.Active -and -not $stopRequested) {
-                # --- Key press handling (non-blocking) ---
                 if ($pauseEnabled -and [Console]::KeyAvailable) {
                     $key = [Console]::ReadKey($true)
                     $ch = [char]::ToLower($key.KeyChar)
@@ -4910,7 +5725,6 @@ function Start-Pspkt {
                     }
                 }
 
-                # --- Paused state: discard packets without counting ---
                 if ($paused) {
                     $discarded = $Session.DrainAllRawPackets()
                     if ($discarded -gt 0) {
@@ -4923,9 +5737,6 @@ function Start-Pspkt {
                     continue
                 }
 
-                # --- Active capture: process packets ---
-                # === HIGH-THROUGHPUT C# BULK-FORMAT PATH ===
-                # Drains raw PSPacketData and formats entirely in C#.
                 # Drop triggers are checked in C# and reported via TriggerAction.
                 $pktCount = $Session.DrainAllRawPackets()
                 if ($pktCount -gt 0) {
@@ -4937,7 +5748,6 @@ function Start-Pspkt {
                             $droppedCount += $result.DroppedCount
                             # Output was written straight to the console by WriteBatch (no LOH string).
 
-                            # Handle drop trigger actions from C#.
                             if ($result.TriggerAction -eq 2) {
                                 if ($stopDelayMs -gt 0 -and -not $stopDelayActive) {
                                     # Stop trigger fired with -StopDelay set — keep capturing.
@@ -4997,26 +5807,22 @@ function Start-Pspkt {
                 }
             }
           } elseif ($hasWriteEtl) {
-            # --- ETL file mode: use pktmon CLI ---
             $etlPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WriteEtl)
             if (-not $etlPath.EndsWith('.etl', [StringComparison]::OrdinalIgnoreCase)) {
                 $etlPath = $etlPath + '.etl'
             }
 
-            # Build pktmon start arguments.
             $pktmonArgs = @('start', '--capture')
             $pktmonArgs += '--file-name', $etlPath
             $pktmonArgs += '--file-size', $FileSize.ToString()
             $pktmonArgs += '--pkt-size', $Session.PacketSize.ToString()
             $pktmonArgs += '--log-mode', 'circular'
 
-            # Add component filter if specific components were selected.
             if ($PSBoundParameters.ContainsKey('Component') -and $Component.Count -ge 1 -and $Component[0] -ne 'All') {
                 $pktmonArgs += '--comp'
                 $pktmonArgs += $Component
             }
 
-            # Stop any existing pktmon session before starting.
             $null = pktmon stop 2>$null
 
             # We don't need the pspkt session for ETL mode — tear it down.
@@ -5031,7 +5837,6 @@ function Start-Pspkt {
             Write-Host $pktmonOutput -ForegroundColor DarkGray
             return
           } else {
-            # --- File-only mode (pcapng): return session to console ---
             $preserveCapture = $true
             Write-Host "Capturing to file: $pcapngPath" -ForegroundColor Cyan
             Write-Host "Use Stop-Pspkt to stop capture and save the file." -ForegroundColor Cyan
@@ -5041,7 +5846,6 @@ function Start-Pspkt {
         finally {
             & $parserModule {                         $script:ComponentRefreshLocked = $false }
 
-            # Restore the console's original output encoding if we changed it.
             if ($null -ne $originalOutputEncoding) {
                 try {
                     [Console]::OutputEncoding = $originalOutputEncoding
@@ -5346,7 +6150,6 @@ function Stop-Pspkt {
                 }
             }
 
-            # Close the session handle.
             if ($ownsCapture) {
                 [PktMonApi]::EndCapture($captureOwnerHandle)
                 $Session.CaptureCleanupPending = $false
@@ -5365,7 +6168,6 @@ function Stop-Pspkt {
                 }
             }
 
-            # Uninitialize the pktmon API.
             $sessionOwner = $Session.Pspkt
             if ($null -ne $sessionOwner) {
                 $uninitialized = $false
@@ -5400,7 +6202,6 @@ function Stop-Pspkt {
             return
         }
 
-        # Simple stop — deactivate only.
         if ($Session.Active -or $ownsCapture) {
             if ($Session.Handle -eq [IntPtr]::Zero) {
                 throw "Session '$($Session.Name)' has a null handle."
@@ -5604,10 +6405,6 @@ function Format-PspktFilterTree {
 
     return $lines.ToArray()
 }
-
-# --------------------------------------------------------------------------
-# Get-PspktQuickFilter — discovery cmdlet for quick filters and app predicates
-# --------------------------------------------------------------------------
 
 <#
 .SYNOPSIS
@@ -5891,7 +6688,6 @@ function Get-PspktQuickFilterTree {
         }
     }
 
-    # Filter by -Protocol if specified.
     $filteredTree = [ordered]@{}
     foreach ($group in $tree.Keys) {
         $entries = $tree[$group]
@@ -6100,7 +6896,6 @@ function Get-PspktParameterTree {
             Params = @()
         })
     }
-    # Drop empty groups and convert to arrays for the renderer.
     $nonQfTree = [ordered]@{}
     foreach ($grp in @($nonQf.Keys)) {
         if ($nonQf[$grp].Count -gt 0) { $nonQfTree[$grp] = @($nonQf[$grp]) }
