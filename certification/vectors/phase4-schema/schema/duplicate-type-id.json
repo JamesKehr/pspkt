@@ -1,0 +1,1 @@
+{"schemaId":"PspktDuplicateTypeIdFixture","schemaVersion":1,"types":[{"fields":[{"fieldId":1,"name":"value","type":"U8"}],"name":"FirstRecord","production":"Named","typeId":1},{"fields":[{"fieldId":1,"name":"value","type":"U8"}],"name":"SecondRecord","production":"Named","typeId":1}]}

@@ -1,0 +1,1 @@
+{"schemaId":"PspktInventedAliasFixture","schemaVersion":1,"types":[{"fields":[{"fieldId":1,"name":"value","type":"UInt32"}],"name":"Record","production":"Named","typeId":1}]}

@@ -1,0 +1,11 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/certification/lib/Pspkt.Certification.CanonicalJson.ps1 text eol=lf -filter -ident -working-tree-encoding
+/certification/lib/Pspkt.Certification.SchemaBootstrap.cs text eol=lf -filter -ident -working-tree-encoding
+/certification/lib/Pspkt.Certification.BoundedProcess.cs text eol=lf -filter -ident -working-tree-encoding
+/certification/lib/Pspkt.Certification.SchemaFixtureContract.ps1 text eol=lf -filter -ident -working-tree-encoding
+/certification/validators/Test-PspktPhase4Schema.ps1 text eol=lf -filter -ident -working-tree-encoding
+/certification/validators/Invoke-PspktPhase4SchemaValidators.ps1 text eol=lf -filter -ident -working-tree-encoding
+/certification/vectors/New-PspktPhase4SchemaVectors.ps1 text eol=lf -filter -ident -working-tree-encoding
+/certification/schema/README.md text eol=lf -filter -ident -working-tree-encoding
+/certification/schema/protocol-schema-meta.v1.json -text -eol -filter -ident -working-tree-encoding
+/certification/vectors/phase4-schema/** -text -eol -filter -ident -working-tree-encoding

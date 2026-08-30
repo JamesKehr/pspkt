@@ -1,0 +1,1 @@
+{"schemaId":"PspktEnumFixture","schemaVersion":1,"types":[{"members":[{"name":"Immediate","value":0},{"name":"Deferred","value":1},{"name":"Discarded","value":2}],"name":"DeliveryKind","production":"EnumU16","typeId":1},{"fields":[{"fieldId":1,"name":"kind","type":"DeliveryKind"}],"name":"DeliveryRecord","production":"Named","typeId":2}]}

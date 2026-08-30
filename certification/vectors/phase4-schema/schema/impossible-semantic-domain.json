@@ -1,0 +1,1 @@
+{"schemaId":"PspktImpossibleSemanticDomainFixture","schemaVersion":1,"types":[{"encoding":"Utf8","grammar":"None","maxBytes":100,"maxUtf16CodeUnits":1,"minBytes":4,"name":"ImpossibleText","production":"SemanticString","typeId":1}]}

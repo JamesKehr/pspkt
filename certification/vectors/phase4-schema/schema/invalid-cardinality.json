@@ -1,0 +1,1 @@
+{"schemaId":"PspktInvalidCardinalityFixture","schemaVersion":1,"types":[{"fields":[{"fieldId":1,"name":"value","type":"U8"}],"name":"Leaf","production":"Named","typeId":1},{"elementType":"Leaf","maxCount":2,"minCount":5,"name":"LeafList","production":"List","typeId":2}]}
