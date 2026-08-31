@@ -1,0 +1,1 @@
+{"schemaId":"PspktUtf8ShortSemanticFixture","schemaVersion":1,"types":[{"encoding":"Utf8Short","grammar":"None","maxBytes":255,"maxUtf16CodeUnits":255,"minBytes":1,"name":"ShortText","production":"SemanticString","typeId":1}]}

@@ -1,0 +1,1 @@
+{"schemaId":"PspktNonAsciiSymbolFixture","schemaVersion":1,"types":[{"fields":[{"fieldId":1,"name":"value","type":"U8"}],"name":"TypéRecord","production":"Named","typeId":1}]}
