@@ -1,0 +1,9 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/lib/Pspkt.Certification.Math.ps1 text eol=lf -filter -ident -working-tree-encoding
+/lib/Pspkt.Certification.HostClassifier.ps1 text eol=lf -filter -ident -working-tree-encoding
+/lib/Pspkt.Certification.HostClassifierVectorNative.cs text eol=lf -filter -ident -working-tree-encoding
+/validators/Test-PspktHostClassifierVectorParity.ps1 text eol=lf -filter -ident -working-tree-encoding
+/vectors/New-PspktHostClassifierFixtures.ps1 text eol=lf -filter -ident -working-tree-encoding
+/vectors/host-classifier/** -text -eol -filter -ident -working-tree-encoding
+/vectors/certification-result/sample-artifact.v1.json -text -eol -filter -ident -working-tree-encoding
+/vectors/certification-result/sample-attestation.v1.json -text -eol -filter -ident -working-tree-encoding
