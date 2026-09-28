@@ -1,0 +1,1 @@
+{"entries":[{"name":"FoundationReserveKeeper","op":"type","production":"Named"},{"name":"FoundationReserveKeeperValue","op":"field","parent":"FoundationReserveKeeper","type":"U8"},{"id":4864,"name":"FoundationReserved","op":"reserve-illegal-type"}],"schemaId":"PspktFoundationCatalogV1","schemaVersion":1,"space":"foundation"}

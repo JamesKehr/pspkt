@@ -1,0 +1,1 @@
+{"entries":[{"branches":[{"fields":[{"name":"FoundationUnionAValue","type":"U8"}],"name":"FoundationUnionA"},{"fields":[{"name":"FoundationUnionBValue","type":"U16"}],"name":"FoundationUnionB"}],"discriminator":"FoundationUnionKind","name":"FoundationUnion","op":"union"}],"schemaId":"PspktFoundationCatalogV1","schemaVersion":1,"space":"foundation"}
