@@ -1,0 +1,1 @@
+{"entries":[{"name":"FoundationDuplicateFieldParent","op":"type","production":"Named"},{"name":"FoundationDuplicateField","op":"field","parent":"FoundationDuplicateFieldParent","type":"U8"},{"name":"FoundationDuplicateField","op":"field","parent":"FoundationDuplicateFieldParent","type":"U16"}],"schemaId":"PspktFoundationCatalogV1","schemaVersion":1,"space":"foundation"}

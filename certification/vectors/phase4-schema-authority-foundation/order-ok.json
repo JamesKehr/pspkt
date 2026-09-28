@@ -1,0 +1,1 @@
+{"entries":[{"name":"FoundationFirst","op":"type","production":"Named"},{"name":"FoundationFirstValue","op":"field","parent":"FoundationFirst","type":"U8"},{"name":"FoundationSecond","op":"type","production":"Named"},{"name":"FoundationSecondValue","op":"field","parent":"FoundationSecond","type":"U8"}],"schemaId":"PspktFoundationCatalogV1","schemaVersion":1,"space":"foundation"}

@@ -7,3 +7,14 @@
 /vectors/host-classifier/** -text -eol -filter -ident -working-tree-encoding
 /vectors/certification-result/sample-artifact.v1.json -text -eol -filter -ident -working-tree-encoding
 /vectors/certification-result/sample-attestation.v1.json -text -eol -filter -ident -working-tree-encoding
+/lib/Pspkt.Certification.FoundationCatalogEngine.cs text eol=lf -filter -ident -working-tree-encoding
+/lib/Pspkt.Certification.FoundationPolicy.cs text eol=lf -filter -ident -working-tree-encoding
+/lib/Pspkt.Certification.FoundationVerify.cs text eol=lf -filter -ident -working-tree-encoding
+/lib/Pspkt.Certification.FoundationContract.ps1 text eol=lf -filter -ident -working-tree-encoding
+/validators/Invoke-PspktPhase4SchemaAuthorityFoundationValidators.ps1 text eol=lf -filter -ident -working-tree-encoding
+/validators/Test-PspktPhase4SchemaAuthorityFoundation.ps1 text eol=lf -filter -ident -working-tree-encoding
+/vectors/New-PspktPhase4SchemaAuthorityFoundationVectors.ps1 text eol=lf -filter -ident -working-tree-encoding
+/schema/catalog/foundation.catalog.v1.json -text -eol -filter -ident -working-tree-encoding
+/schema/foundation-schema.v1.json -text -eol -filter -ident -working-tree-encoding
+/schema/foundation-id-map.v1.json -text -eol -filter -ident -working-tree-encoding
+/vectors/phase4-schema-authority-foundation/** -text -eol -filter -ident -working-tree-encoding

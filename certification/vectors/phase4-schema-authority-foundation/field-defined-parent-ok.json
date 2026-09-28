@@ -1,0 +1,1 @@
+{"entries":[{"name":"FoundationDefinedParent","op":"type","production":"Named"},{"name":"FoundationDefinedField","op":"field","parent":"FoundationDefinedParent","type":"U8"}],"schemaId":"PspktFoundationCatalogV1","schemaVersion":1,"space":"foundation"}
