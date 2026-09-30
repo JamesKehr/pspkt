@@ -17,7 +17,7 @@ into the module loader, CI, workflows, evidence, or policy.
 | `certification/validators/Test-PspktPhase4Schema.ps1` | The gate-first child harness: helper load, watchdog, contract validation, sealed result. |
 | `certification/validators/Invoke-PspktPhase4SchemaValidators.ps1` | The outer validator, contained Worker, and generator bootstrap. |
 | `certification/vectors/New-PspktPhase4SchemaVectors.ps1` | The dedicated fixture generator. |
-| `certification/vectors/phase4-schema/` | The 61-file fixture corpus (60 fixture inputs + the manifest). |
+| `certification/vectors/phase4-schema/` | The 68-file fixture corpus (67 fixture inputs + the manifest). |
 
 ## Limits
 
@@ -32,15 +32,16 @@ Contract file caps: meta `1048576`, manifest `65536`, fixture `1048577` (inclusi
 
 - Primitives, productions, semantic-string encodings, and grammars are closed sets fixed by the meta.
 - `FieldDeclarationList` and `TypeDeclarationList` `maxCount` are structurally pinned to `4096`; `EnumMemberDeclarationList` `maxCount` is pinned to `8192` (`StrictJsonReader.MaxArrayItems`). A mismatch is `invalid-cardinality`.
+- Field declarations may omit `profile`/`status` for `Any`/`Required`, or use `InteractiveSeat` / `NonInteractiveElevated` with `Required` / `Forbidden`. Conditional declarations resolve each profile independently; invalid conditions return `invalid-field-condition`.
 - `U+FFFD` is forbidden after a valid raw UTF-8 sequence or after `\uFFFD` escape decoding, reported as `replacement-character-forbidden`. Malformed UTF-8 and unpaired surrogates keep their own reasons.
 - Meta authority: after every structural check succeeds, the SHA-256 of the raw meta bytes must equal the compiled digest (`BootstrapMetaGrammar.CommittedMetaSha256`), otherwise `meta-authority-mismatch`. Structural reasons always take precedence over the authority check. Both the `bootstrap-meta` stage and the `schema-against-meta` stage share this check.
 
-## Corpus (61 / 14 / 35)
+## Corpus (68 / 16 / 36)
 
-- `61` cases across three stages: `json`, `bootstrap-meta`, `schema-against-meta`.
-- Exactly `14` accepted and `47` rejected.
-- Exactly `35` closed reason codes; the manifest's unique `expectedReason` set equals them.
-- `61` directory files = `60` fixture inputs + the fixture manifest. Exactly one case (the committed meta) points outside the directory.
+- `68` cases across three stages: `json`, `bootstrap-meta`, `schema-against-meta`.
+- Exactly `16` accepted and `52` rejected.
+- Exactly `36` closed reason codes; the manifest's unique `expectedReason` set equals them.
+- `68` directory files = `67` fixture inputs + the fixture manifest. Exactly one case (the committed meta) points outside the directory.
 - The manifest records `byteLength` (int64) and lowercase `sha256` for every case, including the meta.
 
 ## Commands
@@ -60,12 +61,12 @@ pwsh       -File certification/validators/Invoke-PspktPhase4SchemaValidators.ps1
 powershell -File certification/validators/Invoke-PspktPhase4SchemaValidators.ps1
 ```
 
-The outer validator binds the selected Git index bytes, materializes a private 71-path
+The outer validator binds the selected Git index bytes, materializes a private 78-path
 snapshot, compiles `BoundedProcess.cs` with the pinned .NET Framework compiler, and loads
 the helper from verified bytes. It launches a Job-contained Worker that runs the process,
 event, drain, manifest, and schema-child checks. The child compiles the parser, evaluates
-all 61 cases, and writes a nonce-bound sealed result. The outer also runs the generator in
-contained mode and independently verifies its 61-file digest and hard-link replacement
+all 68 cases, and writes a nonce-bound sealed result. The outer also runs the generator in
+contained mode and independently verifies its 68-file digest and hard-link replacement
 evidence.
 
 Helper-owned PowerShell processes inherit the caller console. They do not use

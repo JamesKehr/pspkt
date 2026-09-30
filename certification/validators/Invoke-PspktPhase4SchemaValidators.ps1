@@ -456,7 +456,14 @@ $script:ExpectedSlicePaths = @(
     'certification/vectors/phase4-schema/schema/valid-enum-use.json',
     'certification/vectors/phase4-schema/schema/valid-named-list-set-use.json',
     'certification/vectors/phase4-schema/schema/valid-primitive-use.json',
-    'certification/vectors/phase4-schema/schema/valid-semantic-string-use.json'
+    'certification/vectors/phase4-schema/schema/valid-semantic-string-use.json',
+    'certification/vectors/phase4-schema/schema/profile-fields-ok.json',
+    'certification/vectors/phase4-schema/schema/profile-invalid.json',
+    'certification/vectors/phase4-schema/schema/field-status-invalid.json',
+    'certification/vectors/phase4-schema/schema/forbidden-without-profile.json',
+    'certification/vectors/phase4-schema/schema/profile-duplicate-field-id.json',
+    'certification/vectors/phase4-schema/schema/profile-field-order.json',
+    'certification/vectors/phase4-schema/schema/profile-forbidden-override-ok.json'
 )
 
 $script:PinnedGitAttributesRelPath = '.gitattributes'
@@ -564,7 +571,7 @@ $script:ExpectedOuterCheckIdsSlice = @(
     'generator-gate-first',
     'generator-selftest',
     'generator-hardlink',
-    'generator-output-61',
+    'generator-output-68',
     'generator-index-stable',
     'index-tree-final',
     'outer-cleanup'
@@ -11261,7 +11268,7 @@ function Invoke-PspktPhase4Outer {
         [void](Add-PspktCheck -Ledger $ledger -Id 'generator-gate-first' -Condition ([bool]$generatorResults.GateFirst))
         [void](Add-PspktCheck -Ledger $ledger -Id 'generator-selftest' -Condition ([bool]$generatorResults.SelfTest))
         [void](Add-PspktCheck -Ledger $ledger -Id 'generator-hardlink' -Condition ([bool]$generatorResults.Hardlink))
-        [void](Add-PspktCheck -Ledger $ledger -Id 'generator-output-61' -Condition ([bool]$generatorResults.Output61))
+        [void](Add-PspktCheck -Ledger $ledger -Id 'generator-output-68' -Condition ([bool]$generatorResults.Output68))
         [void](Add-PspktCheck -Ledger $ledger -Id 'generator-index-stable' -Condition ([bool]$generatorResults.IndexStable))
 
         if ($Mode -ceq 'Release') {
@@ -12826,9 +12833,10 @@ function Get-PspktGeneratorOutputDigest {
     param([Parameter(Mandatory = $true)]$Context)
     $canonicalRoot = Assert-PspktStrictAuthorityRoot -Root $Context.GeneratorTargetRoot -Label 'generator target root'
     $expectedOutputPaths = [string[]]$script:ExpectedSlicePaths[10..($script:ExpectedSlicePaths.Count - 1)]
-    if ($expectedOutputPaths.Count -ne 61) {
-        throw 'generator target root authority does not expect exactly 61 output files.'
+    if ($expectedOutputPaths.Count -ne 68) {
+        throw 'generator target root authority does not expect exactly 68 output files.'
     }
+    [System.Array]::Sort($expectedOutputPaths, [System.StringComparer]::Ordinal)
     $expectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($expectedPath in $expectedOutputPaths) {
         if (-not $expectedSet.Add($expectedPath)) {
@@ -12837,7 +12845,7 @@ function Get-PspktGeneratorOutputDigest {
     }
     $discoveredFiles = Get-PspktStrictTreeRelativeFiles -CanonicalRoot $canonicalRoot -Label 'generator target root'
     if ($discoveredFiles.Count -ne $expectedOutputPaths.Count) {
-        throw 'generator target root does not contain the exact 61-file output cardinality.'
+        throw 'generator target root does not contain the exact 68-file output cardinality.'
     }
     $discoveredSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($discoveredFile in $discoveredFiles) {
@@ -13140,7 +13148,7 @@ function Invoke-PspktRunGeneratorScenarios {
         GateFirst = $false
         SelfTest = $false
         Hardlink = $false
-        Output61 = $false
+        Output68 = $false
         IndexStable = $false
     }
     foreach ($scenario in $script:GeneratorScenarioInventory) {
@@ -13225,7 +13233,7 @@ function Invoke-PspktRunGeneratorScenarios {
                         $outcome.SelfTest = $resultHostMatches
                         $outcome.Hardlink = ($resultHostMatches -and
                             (Test-PspktGeneratorHardlinkPostState -Context $launch.Context -ResultRow $generatorResult.HardlinkRow))
-                        $outcome.Output61 = ($resultHostMatches -and $outputDigest -ceq $generatorResult.Digest)
+                        $outcome.Output68 = ($resultHostMatches -and $outputDigest -ceq $generatorResult.Digest)
                         if (-not [string]::IsNullOrEmpty($InitialIndexTreeId) -and
                             $null -ne $GitAuthority -and
                             -not [string]::IsNullOrEmpty($GitConfigRoot)) {
@@ -13233,7 +13241,7 @@ function Invoke-PspktRunGeneratorScenarios {
                             $outcome.IndexStable = ($currentIndexTreeId -ceq $InitialIndexTreeId)
                         }
                         $scenarioPassed = ($outcome.SelfTest -and $outcome.Hardlink -and
-                            $outcome.Output61 -and $outcome.IndexStable)
+                            $outcome.Output68 -and $outcome.IndexStable)
                     }
                 }
             }
@@ -13281,7 +13289,7 @@ function Invoke-PspktRunGeneratorScenarios {
                 else {
                     $outcome.SelfTest = $false
                     $outcome.Hardlink = $false
-                    $outcome.Output61 = $false
+                    $outcome.Output68 = $false
                     $outcome.IndexStable = $false
                 }
             }
@@ -13628,7 +13636,7 @@ function Read-PspktSealedSchemaResult {
         throw 'schema result: path is a reparse point.'
     }
     $expectedCaseCount = $ExpectedCases.Count
-    if ($expectedCaseCount -ne 61) { throw 'schema result: authority case count is not exactly 61.' }
+    if ($expectedCaseCount -ne 68) { throw 'schema result: authority case count is not exactly 68.' }
     $invariant = [System.Globalization.CultureInfo]::InvariantCulture
     $bytes = Read-PspktBoundedFileBytes -FullPath $ResultPath -ByteCap 262144
     if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {

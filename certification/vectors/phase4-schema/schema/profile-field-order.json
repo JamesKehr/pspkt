@@ -1,0 +1,1 @@
+{"schemaId":"PspktProfileFieldOrderFixture","schemaVersion":1,"types":[{"fields":[{"fieldId":1,"name":"Common","type":"U8"},{"fieldId":3,"name":"LaterValue","profile":"InteractiveSeat","type":"U16"},{"fieldId":2,"name":"EarlierValue","profile":"InteractiveSeat","type":"U32"}],"name":"ProfileRecord","production":"Named","typeId":1}]}

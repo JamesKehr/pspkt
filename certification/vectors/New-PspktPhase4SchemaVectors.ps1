@@ -659,11 +659,15 @@ function New-Phase4Field {
         [Parameter(Mandatory = $true)][int]$FieldId,
         [Parameter(Mandatory = $true)][string]$Type,
         $MaxCodeUnits,
-        $MaxBytes
+        $MaxBytes,
+        $Profile,
+        $Status
     )
     $field = [ordered]@{ name = $Name; fieldId = $FieldId; type = $Type }
     if ($PSBoundParameters.ContainsKey('MaxCodeUnits')) { $field['maxCodeUnits'] = $MaxCodeUnits }
     if ($PSBoundParameters.ContainsKey('MaxBytes')) { $field['maxBytes'] = $MaxBytes }
+    if ($PSBoundParameters.ContainsKey('Profile')) { $field['profile'] = $Profile }
+    if ($PSBoundParameters.ContainsKey('Status')) { $field['status'] = $Status }
     return $field
 }
 
@@ -1036,6 +1040,95 @@ Add-Phase4DocumentCase -Name 'SchemaInventedAlias' -RelativePath 'schema/invente
         [ordered]@{
             production = 'Named'; name = 'Record'; typeId = 1
             fields     = @((New-Phase4Field -Name 'value' -FieldId 1 -Type 'UInt32'))
+        }
+    )
+)
+
+Add-Phase4DocumentCase -Name 'SchemaProfileFieldsOk' -RelativePath 'schema/profile-fields-ok.json' -Stage 'schema-against-meta' -ExpectedReason 'ok' -Value (
+    New-Phase4SchemaDocument -SchemaId 'PspktProfileFieldsOkFixture' -Types @(
+        [ordered]@{
+            production = 'Named'; name = 'ProfileRecord'; typeId = 1
+            fields = @(
+                (New-Phase4Field -Name 'Common' -FieldId 1 -Type 'U8'),
+                (New-Phase4Field -Name 'InteractiveValue' -FieldId 2 -Type 'U16' -Profile 'InteractiveSeat'),
+                (New-Phase4Field -Name 'ServiceValue' -FieldId 3 -Type 'U32' -Profile 'NonInteractiveElevated')
+            )
+        }
+    )
+)
+
+Add-Phase4DocumentCase -Name 'SchemaProfileInvalid' -RelativePath 'schema/profile-invalid.json' -Stage 'schema-against-meta' -ExpectedReason 'invalid-field-condition' -Value (
+    New-Phase4SchemaDocument -SchemaId 'PspktProfileInvalidFixture' -Types @(
+        [ordered]@{
+            production = 'Named'; name = 'ProfileRecord'; typeId = 1
+            fields = @(
+                (New-Phase4Field -Name 'Common' -FieldId 1 -Type 'U8'),
+                (New-Phase4Field -Name 'InvalidProfile' -FieldId 2 -Type 'U16' -Profile 'Desktop')
+            )
+        }
+    )
+)
+
+Add-Phase4DocumentCase -Name 'SchemaFieldStatusInvalid' -RelativePath 'schema/field-status-invalid.json' -Stage 'schema-against-meta' -ExpectedReason 'invalid-field-condition' -Value (
+    New-Phase4SchemaDocument -SchemaId 'PspktFieldStatusInvalidFixture' -Types @(
+        [ordered]@{
+            production = 'Named'; name = 'ProfileRecord'; typeId = 1
+            fields = @(
+                (New-Phase4Field -Name 'Common' -FieldId 1 -Type 'U8'),
+                (New-Phase4Field -Name 'InvalidStatus' -FieldId 2 -Type 'U16' -Profile 'InteractiveSeat' -Status 'Optional')
+            )
+        }
+    )
+)
+
+Add-Phase4DocumentCase -Name 'SchemaForbiddenWithoutProfile' -RelativePath 'schema/forbidden-without-profile.json' -Stage 'schema-against-meta' -ExpectedReason 'invalid-field-condition' -Value (
+    New-Phase4SchemaDocument -SchemaId 'PspktForbiddenWithoutProfileFixture' -Types @(
+        [ordered]@{
+            production = 'Named'; name = 'ProfileRecord'; typeId = 1
+            fields = @(
+                (New-Phase4Field -Name 'Common' -FieldId 1 -Type 'U8'),
+                (New-Phase4Field -Name 'ForbiddenValue' -FieldId 2 -Type 'U16' -Status 'Forbidden')
+            )
+        }
+    )
+)
+
+Add-Phase4DocumentCase -Name 'SchemaProfileDuplicateFieldId' -RelativePath 'schema/profile-duplicate-field-id.json' -Stage 'schema-against-meta' -ExpectedReason 'duplicate-field-id' -Value (
+    New-Phase4SchemaDocument -SchemaId 'PspktProfileDuplicateFieldIdFixture' -Types @(
+        [ordered]@{
+            production = 'Named'; name = 'ProfileRecord'; typeId = 1
+            fields = @(
+                (New-Phase4Field -Name 'Common' -FieldId 1 -Type 'U8'),
+                (New-Phase4Field -Name 'FirstValue' -FieldId 2 -Type 'U16' -Profile 'InteractiveSeat'),
+                (New-Phase4Field -Name 'SecondValue' -FieldId 2 -Type 'U32' -Profile 'InteractiveSeat')
+            )
+        }
+    )
+)
+
+Add-Phase4DocumentCase -Name 'SchemaProfileFieldOrder' -RelativePath 'schema/profile-field-order.json' -Stage 'schema-against-meta' -ExpectedReason 'field-order' -Value (
+    New-Phase4SchemaDocument -SchemaId 'PspktProfileFieldOrderFixture' -Types @(
+        [ordered]@{
+            production = 'Named'; name = 'ProfileRecord'; typeId = 1
+            fields = @(
+                (New-Phase4Field -Name 'Common' -FieldId 1 -Type 'U8'),
+                (New-Phase4Field -Name 'LaterValue' -FieldId 3 -Type 'U16' -Profile 'InteractiveSeat'),
+                (New-Phase4Field -Name 'EarlierValue' -FieldId 2 -Type 'U32' -Profile 'InteractiveSeat')
+            )
+        }
+    )
+)
+
+Add-Phase4DocumentCase -Name 'SchemaProfileForbiddenOverrideOk' -RelativePath 'schema/profile-forbidden-override-ok.json' -Stage 'schema-against-meta' -ExpectedReason 'ok' -Value (
+    New-Phase4SchemaDocument -SchemaId 'PspktProfileForbiddenOverrideOkFixture' -Types @(
+        [ordered]@{
+            production = 'Named'; name = 'ProfileRecord'; typeId = 1
+            fields = @(
+                (New-Phase4Field -Name 'Common' -FieldId 1 -Type 'U8'),
+                (New-Phase4Field -Name 'SharedValue' -FieldId 2 -Type 'U16'),
+                (New-Phase4Field -Name 'SharedValue' -FieldId 2 -Type 'U16' -Profile 'InteractiveSeat' -Status 'Forbidden'),
+                (New-Phase4Field -Name 'InteractiveFallback' -FieldId 3 -Type 'U32' -Profile 'InteractiveSeat')
+            )
         }
     )
 )
@@ -1589,11 +1682,11 @@ function Invoke-Phase4GeneratorSelfTestSuite {
         [Parameter(Mandatory = $true)][int]$FileCount,
         [Parameter(Mandatory = $true)][scriptblock[]]$RegressionActions
     )
-    if ($CaseCount -ne 61) {
-        throw ('generator self-test: expected 61 temporary cases but found {0}.' -f $CaseCount)
+    if ($CaseCount -ne 68) {
+        throw ('generator self-test: expected 68 temporary cases but found {0}.' -f $CaseCount)
     }
-    if ($FileCount -ne 61) {
-        throw ('generator self-test: expected 61 temporary directory files but found {0}.' -f $FileCount)
+    if ($FileCount -ne 68) {
+        throw ('generator self-test: expected 68 temporary directory files but found {0}.' -f $FileCount)
     }
     if ($RegressionActions.Count -eq 0) {
         throw 'generator self-test: no regression actions were supplied.'
@@ -1774,8 +1867,8 @@ try {
     $publishedFiles = @(Assert-PspktPhase4DirectoryFileCount -RepositoryRoot $publishRoot -CertRoot $publishCertRoot)
 
     if ($isContainedMode) {
-        if ($publishedFiles.Count -ne 61) {
-            throw ('generator: expected 61 published directory files but found {0}.' -f $publishedFiles.Count)
+        if ($publishedFiles.Count -ne 68) {
+            throw ('generator: expected 68 published directory files but found {0}.' -f $publishedFiles.Count)
         }
         if ($null -eq $script:ContainedHardlinkRecord) {
             throw 'generator: contained hard-link self-test did not produce a sealed record.'
@@ -1803,7 +1896,7 @@ if ($isContainedMode) {
     Write-Phase4SealedGeneratorResult -ResultPath $generatorResultPath -Nonce $generatorNonce -Digest $publishedDigest -Hardlink $script:ContainedHardlinkRecord `
         -SelfTestPassed $selfTestPassed `
         -HardlinkPassed ([bool]$script:ContainedHardlinkRecord.Passed) `
-        -OutputCountPassed ($publishedFiles.Count -eq 61) `
+        -OutputCountPassed ($publishedFiles.Count -eq 68) `
         -OutputDigestPassed $digestPassed
     Write-Host ('generator: sealed contained result written for nonce {0} ({1} files, digest {2}).' -f $generatorNonce, $publishedFiles.Count, $generatorDigest)
 }

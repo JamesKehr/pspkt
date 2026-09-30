@@ -58,7 +58,7 @@ $PspktExitFatal = 4
 $PspktExitSealedAuthorityRequired = 8
 $PspktHelperByteCap = 4194304
 $PspktResultByteCap = 262144
-$PspktExpectedCaseCount = 61
+$PspktExpectedCaseCount = 68
 $PspktExpectedHelperVersion = 'pspkt-phase4-bounded-process-2'
 
 Set-StrictMode -Version Latest
@@ -630,7 +630,7 @@ function Invoke-PspktSchemaChildBody {
 
     if ($caseResults.Count -ne $PspktExpectedCaseCount -or
         -not $allActualResultsMatch) {
-        throw 'actual schema outcomes do not exactly match all 61 manifest expectations.'
+        throw 'actual schema outcomes do not exactly match all 68 manifest expectations.'
     }
 
     Write-PspktSealedSchemaResult `

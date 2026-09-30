@@ -39,7 +39,8 @@ function Get-PspktPhase4Contract {
         'invalid-cardinality',
         'bound-overflow',
         'non-ascii-symbol',
-        'meta-authority-mismatch'
+        'meta-authority-mismatch',
+        'invalid-field-condition'
     )
 
     $reservedStems = [System.Collections.Generic.List[string]]::new()
@@ -52,10 +53,10 @@ function Get-PspktPhase4Contract {
     }
 
     return @{
-        ExpectedCaseCount          = 61
-        ExpectedDirectoryFileCount = 61
-        ExpectedAcceptedCaseCount  = 14
-        ExpectedReasonCount        = 35
+        ExpectedCaseCount          = 68
+        ExpectedDirectoryFileCount = 68
+        ExpectedAcceptedCaseCount  = 16
+        ExpectedReasonCount        = 36
         ManifestByteCap            = 65536
         MetaByteCap                = 1048576
         FixtureByteCap             = 1048577
