@@ -625,6 +625,1750 @@ namespace Pspkt.Certification.FoundationEngine
         }
     }
 
+    public sealed class ProtocolCatalogContractV2
+    {
+        private static readonly TimeSpan NameRegexTimeout = TimeSpan.FromMilliseconds(100);
+        private readonly string _baseCatalogSchemaId;
+        private readonly string _baseCatalogSpace;
+        private readonly string[] _channels;
+        private readonly string _emitSchemaId;
+        private readonly int _generatedFieldIdMax;
+        private readonly string[] _literalExtensionParentNames;
+        private readonly string _mapSchemaId;
+        private readonly Dictionary<string, string> _messageEnumNameByChannel;
+        private readonly string _namePredicate;
+        private readonly Regex _nameRegex;
+        private readonly string _overlayCatalogSchemaId;
+        private readonly string _overlayCatalogSpace;
+        private readonly Dictionary<string, GeneratedIdRange[]> _overlayKindRangesByChannel;
+        private readonly GeneratedIdRange _overlayTypeRange;
+        private readonly Dictionary<string, string[]> _permittedDirectionsByChannel;
+
+        public ProtocolCatalogContractV2(
+            string namePredicate,
+            string baseCatalogSchemaId,
+            string baseCatalogSpace,
+            string overlayCatalogSchemaId,
+            string overlayCatalogSpace,
+            string emitSchemaId,
+            string mapSchemaId,
+            string[] channels,
+            IDictionary<string, string> messageEnumNameByChannel,
+            IDictionary<string, string[]> permittedDirectionsByChannel,
+            IDictionary<string, GeneratedIdRange[]> overlayKindRangesByChannel,
+            GeneratedIdRange overlayTypeRange,
+            int generatedFieldIdMax,
+            string[] literalExtensionParentNames)
+        {
+            if (namePredicate == null) throw new ArgumentNullException("namePredicate");
+            if (baseCatalogSchemaId == null) throw new ArgumentNullException("baseCatalogSchemaId");
+            if (baseCatalogSpace == null) throw new ArgumentNullException("baseCatalogSpace");
+            if (overlayCatalogSchemaId == null) throw new ArgumentNullException("overlayCatalogSchemaId");
+            if (overlayCatalogSpace == null) throw new ArgumentNullException("overlayCatalogSpace");
+            if (emitSchemaId == null) throw new ArgumentNullException("emitSchemaId");
+            if (mapSchemaId == null) throw new ArgumentNullException("mapSchemaId");
+            if (channels == null) throw new ArgumentNullException("channels");
+            if (messageEnumNameByChannel == null) throw new ArgumentNullException("messageEnumNameByChannel");
+            if (permittedDirectionsByChannel == null) throw new ArgumentNullException("permittedDirectionsByChannel");
+            if (overlayKindRangesByChannel == null) throw new ArgumentNullException("overlayKindRangesByChannel");
+            if (overlayTypeRange == null) throw new ArgumentNullException("overlayTypeRange");
+            if (literalExtensionParentNames == null) throw new ArgumentNullException("literalExtensionParentNames");
+            Regex nameRegex;
+            try
+            {
+                nameRegex = new Regex(namePredicate, RegexOptions.CultureInvariant, NameRegexTimeout);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new ArgumentException("The name predicate is not a valid regular expression.", "namePredicate", exception);
+            }
+            ValidateSchemaId(baseCatalogSchemaId, "baseCatalogSchemaId");
+            ValidateSchemaId(overlayCatalogSchemaId, "overlayCatalogSchemaId");
+            ValidateSchemaId(emitSchemaId, "emitSchemaId");
+            ValidateSchemaId(mapSchemaId, "mapSchemaId");
+            if (!ProtocolCatalogSyntax.IsProtocolIdentifier(baseCatalogSpace))
+            {
+                throw new ArgumentException("A protocol identifier is required.", "baseCatalogSpace");
+            }
+            if (!ProtocolCatalogSyntax.IsProtocolIdentifier(overlayCatalogSpace))
+            {
+                throw new ArgumentException("A protocol identifier is required.", "overlayCatalogSpace");
+            }
+            if (generatedFieldIdMax < 1 || generatedFieldIdMax > 65535)
+            {
+                throw new ArgumentOutOfRangeException("generatedFieldIdMax");
+            }
+            if (overlayTypeRange.Start < 1 || overlayTypeRange.End > 65535)
+            {
+                throw new ArgumentOutOfRangeException("overlayTypeRange");
+            }
+            if (channels.Length == 0)
+            {
+                throw new ArgumentException("At least one channel is required.", "channels");
+            }
+            HashSet<string> channelNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string channel in channels)
+            {
+                if (!ProtocolCatalogSyntax.IsProtocolIdentifier(channel) || !channelNames.Add(channel))
+                {
+                    throw new ArgumentException("Channels must be distinct protocol identifiers.", "channels");
+                }
+            }
+            ValidateChannelKeys(channelNames, messageEnumNameByChannel.Keys, "messageEnumNameByChannel");
+            ValidateChannelKeys(channelNames, permittedDirectionsByChannel.Keys, "permittedDirectionsByChannel");
+            ValidateChannelKeys(channelNames, overlayKindRangesByChannel.Keys, "overlayKindRangesByChannel");
+            foreach (KeyValuePair<string, string> pair in messageEnumNameByChannel)
+            {
+                ValidateTypeName(pair.Value, nameRegex, "messageEnumNameByChannel");
+            }
+            foreach (KeyValuePair<string, string[]> pair in permittedDirectionsByChannel)
+            {
+                if (pair.Value == null || pair.Value.Length == 0)
+                {
+                    throw new ArgumentException("Every channel requires permitted directions.", "permittedDirectionsByChannel");
+                }
+                HashSet<string> directions = new HashSet<string>(StringComparer.Ordinal);
+                foreach (string direction in pair.Value)
+                {
+                    if (!ProtocolCatalogSyntax.IsProtocolIdentifier(direction) || !directions.Add(direction))
+                    {
+                        throw new ArgumentException("Directions must be distinct protocol identifiers.", "permittedDirectionsByChannel");
+                    }
+                }
+            }
+            foreach (KeyValuePair<string, GeneratedIdRange[]> pair in overlayKindRangesByChannel)
+            {
+                if (pair.Value == null)
+                {
+                    throw new ArgumentException("Channel ranges cannot be null.", "overlayKindRangesByChannel");
+                }
+                int previousEnd = -1;
+                foreach (GeneratedIdRange range in pair.Value)
+                {
+                    if (range == null || range.Start <= previousEnd)
+                    {
+                        throw new ArgumentException("Channel ranges must be ordered and nonoverlapping.", "overlayKindRangesByChannel");
+                    }
+                    previousEnd = range.End;
+                }
+            }
+            HashSet<string> parentNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string parentName in literalExtensionParentNames)
+            {
+                ValidateTypeName(parentName, nameRegex, "literalExtensionParentNames");
+                if (!parentNames.Add(parentName))
+                {
+                    throw new ArgumentException("Extension parent names must be distinct.", "literalExtensionParentNames");
+                }
+            }
+            _namePredicate = namePredicate;
+            _nameRegex = nameRegex;
+            _baseCatalogSchemaId = baseCatalogSchemaId;
+            _baseCatalogSpace = baseCatalogSpace;
+            _overlayCatalogSchemaId = overlayCatalogSchemaId;
+            _overlayCatalogSpace = overlayCatalogSpace;
+            _emitSchemaId = emitSchemaId;
+            _mapSchemaId = mapSchemaId;
+            _channels = (string[])channels.Clone();
+            _messageEnumNameByChannel = new Dictionary<string, string>(messageEnumNameByChannel, StringComparer.Ordinal);
+            _permittedDirectionsByChannel = CopyDirections(permittedDirectionsByChannel);
+            _overlayKindRangesByChannel = CopyRanges(overlayKindRangesByChannel);
+            _overlayTypeRange = new GeneratedIdRange(overlayTypeRange.Start, overlayTypeRange.End);
+            _generatedFieldIdMax = generatedFieldIdMax;
+            _literalExtensionParentNames = (string[])literalExtensionParentNames.Clone();
+        }
+
+        public string BaseCatalogSchemaId { get { return _baseCatalogSchemaId; } }
+        public string BaseCatalogSpace { get { return _baseCatalogSpace; } }
+        public string[] Channels { get { return (string[])_channels.Clone(); } }
+        public string EmitSchemaId { get { return _emitSchemaId; } }
+        public int GeneratedFieldIdMax { get { return _generatedFieldIdMax; } }
+        public string[] LiteralExtensionParentNames { get { return (string[])_literalExtensionParentNames.Clone(); } }
+        public string MapSchemaId { get { return _mapSchemaId; } }
+        public IDictionary<string, string> MessageEnumNameByChannel { get { return new Dictionary<string, string>(_messageEnumNameByChannel, StringComparer.Ordinal); } }
+        public string NamePredicate { get { return _namePredicate; } }
+        public string OverlayCatalogSchemaId { get { return _overlayCatalogSchemaId; } }
+        public string OverlayCatalogSpace { get { return _overlayCatalogSpace; } }
+        public IDictionary<string, GeneratedIdRange[]> OverlayKindRangesByChannel { get { return CopyRanges(_overlayKindRangesByChannel); } }
+        public GeneratedIdRange OverlayTypeRange { get { return new GeneratedIdRange(_overlayTypeRange.Start, _overlayTypeRange.End); } }
+        public IDictionary<string, string[]> PermittedDirectionsByChannel { get { return CopyDirections(_permittedDirectionsByChannel); } }
+
+        internal bool MatchesName(string name)
+        {
+            try
+            {
+                return _nameRegex.IsMatch(name);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return false;
+            }
+        }
+
+        private static Dictionary<string, string[]> CopyDirections(IDictionary<string, string[]> source)
+        {
+            Dictionary<string, string[]> copy = new Dictionary<string, string[]>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, string[]> pair in source)
+            {
+                copy.Add(pair.Key, (string[])pair.Value.Clone());
+            }
+            return copy;
+        }
+
+        private static Dictionary<string, GeneratedIdRange[]> CopyRanges(IDictionary<string, GeneratedIdRange[]> source)
+        {
+            Dictionary<string, GeneratedIdRange[]> copy = new Dictionary<string, GeneratedIdRange[]>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, GeneratedIdRange[]> pair in source)
+            {
+                GeneratedIdRange[] ranges = new GeneratedIdRange[pair.Value.Length];
+                for (int index = 0; index < ranges.Length; index++)
+                {
+                    ranges[index] = new GeneratedIdRange(pair.Value[index].Start, pair.Value[index].End);
+                }
+                copy.Add(pair.Key, ranges);
+            }
+            return copy;
+        }
+
+        private static void ValidateChannelKeys(HashSet<string> channels, ICollection<string> keys, string parameterName)
+        {
+            if (keys.Count != channels.Count || !channels.SetEquals(keys))
+            {
+                throw new ArgumentException("Dictionary keys must exactly match the channels.", parameterName);
+            }
+        }
+
+        private static void ValidateSchemaId(string value, string parameterName)
+        {
+            if (!ProtocolCatalogSyntax.IsSchemaIdentifier(value))
+            {
+                throw new ArgumentException("A schema identifier is required.", parameterName);
+            }
+        }
+
+        private static void ValidateTypeName(string value, Regex nameRegex, string parameterName)
+        {
+            if (!ProtocolCatalogSyntax.IsSchemaIdentifier(value))
+            {
+                throw new ArgumentException("A nonprimitive schema identifier matching the name predicate is required.", parameterName);
+            }
+            bool matches;
+            try
+            {
+                matches = nameRegex.IsMatch(value);
+            }
+            catch (RegexMatchTimeoutException exception)
+            {
+                throw new ArgumentException("The name predicate exceeded its match timeout.", parameterName, exception);
+            }
+            if (!matches || ProtocolCatalogSyntax.IsPrimitive(value))
+            {
+                throw new ArgumentException("A nonprimitive schema identifier matching the name predicate is required.", parameterName);
+            }
+        }
+    }
+
+    public sealed class ProtocolCatalogResultV2
+    {
+        private readonly bool _accepted;
+        private readonly byte[] _idMapBytes;
+        private readonly string _reason;
+        private readonly byte[] _schemaBytes;
+
+        internal ProtocolCatalogResultV2(bool accepted, string reason, byte[] schemaBytes, byte[] idMapBytes)
+        {
+            _accepted = accepted;
+            _reason = reason;
+            _schemaBytes = schemaBytes == null ? null : (byte[])schemaBytes.Clone();
+            _idMapBytes = idMapBytes == null ? null : (byte[])idMapBytes.Clone();
+        }
+
+        public bool Accepted { get { return _accepted; } }
+        public byte[] IdMapBytes { get { return _idMapBytes == null ? null : (byte[])_idMapBytes.Clone(); } }
+        public string Reason { get { return _reason; } }
+        public byte[] SchemaBytes { get { return _schemaBytes == null ? null : (byte[])_schemaBytes.Clone(); } }
+    }
+
+    internal static class ProtocolCatalogSyntax
+    {
+        private static readonly HashSet<string> Primitives = new HashSet<string>(new string[]
+        {
+            "U8", "U16", "U32", "U64", "I16", "I32", "I64", "FILETIME", "QPC", "GUID", "Opaque16", "FixedAscii8",
+            "SHA-256", "Opaque32", "AsciiIdentifier", "BinarySid", "Utf8Short", "Rsa3072PublicBlob", "Rsa3072Signature",
+            "LUID", "BoundedBytes", "OpaqueUtf16"
+        }, StringComparer.Ordinal);
+
+        internal static bool IsForbiddenPrimitive(string value)
+        {
+            return value == "I16" || value == "I32" || value == "I64" || value == "OpaqueUtf16";
+        }
+
+        internal static bool IsPrimitive(string value)
+        {
+            return value != null && Primitives.Contains(value);
+        }
+
+        internal static bool IsProtocolIdentifier(string value)
+        {
+            if (value == null || value.Length < 1 || value.Length > 128) return false;
+            foreach (char character in value)
+            {
+                if (!IsLetter(character) && (character < '0' || character > '9')
+                    && character != '.' && character != '_' && character != ':' && character != '-') return false;
+            }
+            return true;
+        }
+
+        internal static bool IsSchemaIdentifier(string value)
+        {
+            if (value == null || value.Length < 1 || value.Length > 64 || !IsLetter(value[0])) return false;
+            for (int index = 1; index < value.Length; index++)
+            {
+                char character = value[index];
+                if (!IsLetter(character) && (character < '0' || character > '9') && character != '-') return false;
+            }
+            return true;
+        }
+
+        private static bool IsLetter(char character)
+        {
+            return (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z');
+        }
+    }
+
+    public static class ProtocolCatalogEngineV2
+    {
+        private const int MaximumFields = 4096;
+        private const int MaximumSchemaTypes = 4096;
+        private const int MaximumMapRows = 8192;
+        private const int MaximumJsonBytes = 1048576;
+        private const string InteractiveProfile = "InteractiveSeat";
+        private const string NonInteractiveProfile = "NonInteractiveElevated";
+        private static readonly string[] Profiles = new string[] { InteractiveProfile, NonInteractiveProfile };
+
+        public static string[] ReasonCodes()
+        {
+            return new string[]
+            {
+                "ok", "invalid-utf8", "bom-forbidden", "nul-forbidden", "comment-forbidden", "duplicate-key",
+                "trailing-comma", "trailing-data", "float-forbidden", "exponent-forbidden", "negative-integer",
+                "leading-zero-integer", "integer-overflow", "invalid-escape", "unpaired-surrogate",
+                "replacement-character-forbidden", "file-limit", "depth-limit", "property-limit", "array-limit",
+                "string-limit", "allocation-budget", "unknown-property", "missing-property", "duplicate-identifier",
+                "unknown-primitive", "undefined-reference", "type-cycle", "duplicate-type-id", "duplicate-field-id",
+                "field-order", "invalid-cardinality", "bound-overflow", "non-ascii-symbol", "meta-authority-mismatch",
+                "invalid-field-condition", "extra-key", "op-unknown", "op-replace-forbidden", "op-source-forbidden",
+                "catalog-identity", "catalog-name", "base-literal-id", "primitive-forbidden", "invalid-production",
+                "invalid-profile", "invalid-tail-class", "invalid-state-association", "invalid-direction",
+                "invalid-channel", "field-undefined-parent", "extend-invalid-parent", "extension-parent-forbidden",
+                "undefined-payload-root", "delete-unknown", "delete-double", "delete-then-use", "reserve-missing-literal",
+                "reserve-id-out-of-range", "reserve-illegal-encoded", "overlay-id-out-of-range", "enum-duplicate-name",
+                "enum-duplicate-value", "enum-value-overflow", "union-empty", "union-duplicate-branch",
+                "extend-missing-literal", "extend-dup-name", "extend-dup-id", "message-metadata-conflict",
+                "duplicate-kind", "duplicate-field-set", "field-overflow", "reserved-kind-range", "reserved-type-range",
+                "generated-id-overflow", "id-map-drift", "map-tamper"
+            };
+        }
+
+        public static ProtocolCatalogResultV2 Evaluate(byte[] baseCatalogBytes, byte[] overlayCatalogBytes, ProtocolCatalogContractV2 contract)
+        {
+            if (baseCatalogBytes == null) throw new ArgumentNullException("baseCatalogBytes");
+            if (overlayCatalogBytes == null) throw new ArgumentNullException("overlayCatalogBytes");
+            if (contract == null) throw new ArgumentNullException("contract");
+            try
+            {
+                EvaluationState state = ReadCatalogs((byte[])baseCatalogBytes.Clone(), (byte[])overlayCatalogBytes.Clone(), contract);
+                Expand(state);
+                ValidateReferences(state);
+                return AssignAndEmit(state);
+            }
+            catch (CatalogValidationException exception)
+            {
+                return new ProtocolCatalogResultV2(false, exception.Reason, null, null);
+            }
+            catch (OverflowException)
+            {
+                return new ProtocolCatalogResultV2(false, "integer-overflow", null, null);
+            }
+        }
+
+        public static FoundationReplayResult Replay(byte[] baseCatalogBytes, byte[] overlayCatalogBytes, byte[] schemaBytes, byte[] mapBytes, ProtocolCatalogContractV2 contract)
+        {
+            if (baseCatalogBytes == null) throw new ArgumentNullException("baseCatalogBytes");
+            if (overlayCatalogBytes == null) throw new ArgumentNullException("overlayCatalogBytes");
+            if (schemaBytes == null) throw new ArgumentNullException("schemaBytes");
+            if (mapBytes == null) throw new ArgumentNullException("mapBytes");
+            if (contract == null) throw new ArgumentNullException("contract");
+            schemaBytes = (byte[])schemaBytes.Clone();
+            mapBytes = (byte[])mapBytes.Clone();
+            ProtocolCatalogResultV2 regenerated = Evaluate(baseCatalogBytes, overlayCatalogBytes, contract);
+            if (!regenerated.Accepted) return new FoundationReplayResult(false, regenerated.Reason);
+            if (!ValidateMap(mapBytes, contract)) return new FoundationReplayResult(false, "map-tamper");
+            if (!EqualBytes(regenerated.SchemaBytes, schemaBytes)) return new FoundationReplayResult(false, "id-map-drift");
+            if (!EqualBytes(regenerated.IdMapBytes, mapBytes)) return new FoundationReplayResult(false, "map-tamper");
+            return new FoundationReplayResult(true, "ok");
+        }
+
+        private static EvaluationState ReadCatalogs(byte[] baseBytes, byte[] overlayBytes, ProtocolCatalogContractV2 contract)
+        {
+            RequireJson(baseBytes);
+            RequireJson(overlayBytes);
+            JObject baseRoot = new JsonParser(baseBytes).Parse() as JObject;
+            JObject overlayRoot = new JsonParser(overlayBytes).Parse() as JObject;
+            JArray baseEntries = ReadRoot(baseRoot, contract.BaseCatalogSchemaId, contract.BaseCatalogSpace);
+            JArray overlayEntries = ReadRoot(overlayRoot, contract.OverlayCatalogSchemaId, contract.OverlayCatalogSpace);
+            EvaluationState state = new EvaluationState(contract);
+            ReadOperations(baseEntries, "base", state);
+            ReadOperations(overlayEntries, "overlay", state);
+            return state;
+        }
+
+        private static JArray ReadRoot(JObject root, string schemaId, string space)
+        {
+            Require(root != null, "unknown-property");
+            CheckProperties(root, new string[] { "entries", "schemaId", "schemaVersion", "space" }, new string[0]);
+            Require(ReadString(root, "schemaId") == schemaId && ReadString(root, "space") == space, "catalog-identity");
+            Require(ReadInteger(root, "schemaVersion", "missing-property") == 1, "missing-property");
+            return ReadArray(root, "entries");
+        }
+
+        private static void ReadOperations(JArray entries, string catalog, EvaluationState state)
+        {
+            for (int index = 0; index < entries.Values.Count; index++)
+            {
+                JObject entry = entries.Values[index] as JObject;
+                Require(entry != null, "unknown-property");
+                string kind = ReadString(entry, "op");
+                Require(kind != "replace", "op-replace-forbidden");
+                Require(IsOperation(kind), "op-unknown");
+                bool overlay = catalog == "overlay";
+                bool shared = kind == "field-set" || kind == "delete" || kind == "reserve-illegal-type";
+                bool overlayOnly = kind == "extend" || kind == "overlay-type" || kind == "overlay-message";
+                Require(shared || overlay == overlayOnly, "op-source-forbidden");
+                if (kind == "field-set")
+                {
+                    Require(overlay == entry.Values.ContainsKey("id"), "op-source-forbidden");
+                }
+                Operation operation = new Operation { Entry = entry, Kind = kind, Catalog = catalog, Ordinal = index + 1 };
+                ValidateShape(operation);
+                ValidateIdentifiers(operation, state.Contract);
+                ValidateDomains(operation, state);
+                ValidateTypeNames(operation);
+                if (kind == "enum" || kind == "type" || kind == "field" || kind == "message")
+                {
+                    Require(!entry.Values.ContainsKey("id"), "base-literal-id");
+                }
+                ValidateProduction(operation);
+                state.Operations.Add(operation);
+            }
+        }
+
+        private static bool IsOperation(string kind)
+        {
+            return kind == "primitive" || kind == "enum" || kind == "type" || kind == "field" || kind == "field-set"
+                || kind == "message" || kind == "union" || kind == "delete" || kind == "extend"
+                || kind == "reserve-illegal-type" || kind == "overlay-type" || kind == "overlay-message";
+        }
+
+        private static void ValidateShape(Operation operation)
+        {
+            JObject entry = operation.Entry;
+            List<string> required = new List<string>(new string[] { "op" });
+            List<string> optional = new List<string>();
+            if (operation.Kind != "extend") required.Add("name");
+            if (operation.Kind == "enum")
+            {
+                required.Add("members");
+                optional.Add("id");
+            }
+            else if (operation.Kind == "type" || operation.Kind == "overlay-type")
+            {
+                required.Add("production");
+                if (operation.Kind == "type") optional.Add("id"); else required.Add("id");
+                string production = ReadString(entry, "production");
+                if (production == "SemanticString")
+                {
+                    required.AddRange(new string[] { "encoding", "grammar", "minBytes", "maxBytes", "maxUtf16CodeUnits" });
+                }
+                else if (production == "List" || production == "Set")
+                {
+                    required.AddRange(new string[] { "elementType", "minCount", "maxCount" });
+                }
+                else if (production == "EnumU16" && operation.Kind == "overlay-type")
+                {
+                    required.Add("members");
+                }
+            }
+            else if (operation.Kind == "field")
+            {
+                required.AddRange(new string[] { "parent", "type" });
+                optional.Add("id");
+                AddBoundProperties(entry, required);
+            }
+            else if (operation.Kind == "field-set")
+            {
+                required.AddRange(new string[] { "parent", "variants" });
+                optional.Add("id");
+            }
+            else if (operation.Kind == "message" || operation.Kind == "overlay-message")
+            {
+                required.AddRange(new string[] { "channel", "direction", "payloadRoot", "profile", "mandatoryTailClass", "stateAssoc" });
+                if (operation.Kind == "message") optional.Add("id"); else required.Add("id");
+            }
+            else if (operation.Kind == "union")
+            {
+                required.AddRange(new string[] { "discriminator", "branches" });
+            }
+            else if (operation.Kind == "extend")
+            {
+                required.AddRange(new string[] { "parent", "fields" });
+            }
+            else if (operation.Kind == "reserve-illegal-type")
+            {
+                optional.Add("id");
+            }
+            CheckProperties(entry, required.ToArray(), optional.ToArray());
+            foreach (string key in required)
+            {
+                if (key == "members" || key == "variants" || key == "fields" || key == "branches") ReadArray(entry, key);
+                else if (IsNumericProperty(key)) ReadNumericProperty(entry, key, NumericReason(operation.Kind, key));
+                else ReadString(entry, key);
+            }
+            if (entry.Values.ContainsKey("id")) ReadInteger(entry, "id", NumericReason(operation.Kind, "id"));
+            if (operation.Kind == "enum" || (operation.Kind == "overlay-type" && ReadString(entry, "production") == "EnumU16"))
+            {
+                JArray members = ReadArray(entry, "members");
+                Require(members.Values.Count > 0, "missing-property");
+                foreach (JNode memberNode in members.Values)
+                {
+                    JObject member = RequireObject(memberNode);
+                    CheckProperties(member, operation.Kind == "enum" ? new string[] { "name" } : new string[] { "name", "value" },
+                        operation.Kind == "enum" ? new string[] { "value" } : new string[0]);
+                    ReadString(member, "name");
+                    if (member.Values.ContainsKey("value")) ReadInteger(member, "value", "enum-value-overflow");
+                }
+            }
+            if (operation.Kind == "field")
+            {
+                operation.Fields.Add(ReadField(entry));
+            }
+            if (operation.Kind == "field-set" || operation.Kind == "extend")
+            {
+                JArray fields = ReadArray(entry, operation.Kind == "field-set" ? "variants" : "fields");
+                Require(fields.Values.Count > 0, "missing-property");
+                Require(fields.Values.Count <= MaximumFields, "invalid-cardinality");
+                foreach (JNode fieldNode in fields.Values)
+                {
+                    JObject field = RequireObject(fieldNode);
+                    ValidateFieldShape(field, operation.Kind);
+                    operation.Fields.Add(ReadField(field));
+                }
+            }
+            if (operation.Kind == "union")
+            {
+                JArray branches = ReadArray(entry, "branches");
+                Require(branches.Values.Count > 0, "union-empty");
+                foreach (JNode branchNode in branches.Values)
+                {
+                    JObject branch = RequireObject(branchNode);
+                    CheckProperties(branch, new string[] { "name", "fields" }, new string[0]);
+                    Branch branchDeclaration = new Branch { Name = ReadString(branch, "name") };
+                    JArray branchFields = ReadArray(branch, "fields");
+                    Require(branchFields.Values.Count > 0, "missing-property");
+                    Require(branchFields.Values.Count <= MaximumFields, "invalid-cardinality");
+                    foreach (JNode fieldNode in branchFields.Values)
+                    {
+                        JObject field = RequireObject(fieldNode);
+                        ValidateFieldShape(field, "union");
+                        branchDeclaration.Fields.Add(ReadField(field));
+                    }
+                    operation.Branches.Add(branchDeclaration);
+                }
+            }
+        }
+
+        private static void ValidateFieldShape(JObject field, string kind)
+        {
+            List<string> required = new List<string>(new string[] { "name", "type" });
+            AddBoundProperties(field, required);
+            string[] optional = kind == "field-set" ? new string[] { "profile", "status" }
+                : kind == "extend" ? new string[] { "id" } : new string[0];
+            CheckProperties(field, required.ToArray(), optional);
+            ReadString(field, "name");
+            foreach (string property in required)
+            {
+                if (IsNumericProperty(property)) ReadNumericProperty(field, property, "invalid-production");
+            }
+            if (field.Values.ContainsKey("id")) ReadInteger(field, "id", "field-overflow");
+        }
+
+        private static void AddBoundProperties(JObject field, List<string> required)
+        {
+            string type = ReadString(field, "type");
+            if (type == "BoundedBytes") required.Add("maxBytes");
+            if (type == "OpaqueUtf16") required.Add("maxCodeUnits");
+        }
+
+        private static Field ReadField(JObject entry)
+        {
+            Field field = new Field { Name = ReadString(entry, "name"), Type = ReadString(entry, "type"), Entry = entry };
+            if (entry.Values.ContainsKey("id")) field.Id = ReadInteger(entry, "id", "field-overflow");
+            if (entry.Values.ContainsKey("maxBytes")) field.Bound = ReadUnsignedInteger(entry, "maxBytes", "invalid-production");
+            if (entry.Values.ContainsKey("maxCodeUnits")) field.Bound = ReadUnsignedInteger(entry, "maxCodeUnits", "invalid-production");
+            return field;
+        }
+
+        private static void ValidateIdentifiers(Operation operation, ProtocolCatalogContractV2 contract)
+        {
+            List<string> identifiers = new List<string>();
+            JObject entry = operation.Entry;
+            if (operation.Kind != "primitive" && operation.Kind != "extend") identifiers.Add(ReadString(entry, "name"));
+            foreach (string property in new string[] { "parent", "payloadRoot", "elementType", "discriminator" })
+            {
+                if (entry.Values.ContainsKey(property))
+                {
+                    string value = ReadString(entry, property);
+                    if (property == "discriminator" || !ProtocolCatalogSyntax.IsPrimitive(value)) identifiers.Add(value);
+                }
+            }
+            if (entry.Values.ContainsKey("members"))
+            {
+                foreach (JNode member in ReadArray(entry, "members").Values) identifiers.Add(ReadString((JObject)member, "name"));
+            }
+            AddFieldIdentifiers(operation.Fields, identifiers);
+            foreach (Branch branch in operation.Branches)
+            {
+                identifiers.Add(branch.Name);
+                AddFieldIdentifiers(branch.Fields, identifiers);
+            }
+            foreach (string identifier in identifiers)
+            {
+                Require(ProtocolCatalogSyntax.IsSchemaIdentifier(identifier), "non-ascii-symbol");
+            }
+            foreach (string identifier in identifiers)
+            {
+                Require(contract.MatchesName(identifier), "catalog-name");
+            }
+        }
+
+        private static void AddFieldIdentifiers(List<Field> fields, List<string> identifiers)
+        {
+            foreach (Field field in fields)
+            {
+                identifiers.Add(field.Name);
+                if (!ProtocolCatalogSyntax.IsPrimitive(field.Type)) identifiers.Add(field.Type);
+            }
+        }
+
+        private static void ValidateDomains(Operation operation, EvaluationState state)
+        {
+            JObject entry = operation.Entry;
+            if (operation.Kind == "message" || operation.Kind == "overlay-message")
+            {
+                string channel = ReadString(entry, "channel");
+                Require(state.Directions.ContainsKey(channel), "invalid-channel");
+                Require(Array.IndexOf(state.Directions[channel], ReadString(entry, "direction")) >= 0, "invalid-direction");
+                string profile = ReadString(entry, "profile");
+                Require(profile == "Any" || profile == InteractiveProfile || profile == NonInteractiveProfile, "invalid-profile");
+                string tail = ReadString(entry, "mandatoryTailClass");
+                Require(tail == "Ordinary" || tail == "Mandatory", "invalid-tail-class");
+                Require(ProtocolCatalogSyntax.IsProtocolIdentifier(ReadString(entry, "stateAssoc")), "invalid-state-association");
+            }
+            foreach (Field field in operation.Fields)
+            {
+                if (field.Entry.Values.ContainsKey("profile"))
+                {
+                    field.Profile = OptionalString(field.Entry, "profile");
+                    Require(field.Profile == InteractiveProfile || field.Profile == NonInteractiveProfile, "invalid-field-condition");
+                }
+                if (field.Entry.Values.ContainsKey("status"))
+                {
+                    string status = OptionalString(field.Entry, "status");
+                    Require(status == "Required" || status == "Forbidden", "invalid-field-condition");
+                    field.Forbidden = status == "Forbidden";
+                }
+                Require(!field.Forbidden || field.Profile != "Any", "invalid-field-condition");
+            }
+            if (operation.Kind == "type" || operation.Kind == "overlay-type")
+            {
+                string production = ReadString(entry, "production");
+                Require(production == "Named" || production == "SemanticString" || production == "List" || production == "Set"
+                    || (production == "EnumU16" && operation.Kind == "overlay-type"), "invalid-production");
+                if (production == "SemanticString")
+                {
+                    string encoding = ReadString(entry, "encoding");
+                    string grammar = ReadString(entry, "grammar");
+                    Require(encoding == "Utf8" || encoding == "AsciiEnvironmentName", "unknown-primitive");
+                    Require(grammar == "None" || grammar == "PspktPathCanonicalizationV1" || grammar == "InverseCommandLineToArgvW", "unknown-primitive");
+                    Require(encoding != "AsciiEnvironmentName" || grammar == "None", "unknown-primitive");
+                }
+            }
+        }
+
+        private static void ValidateTypeNames(Operation operation)
+        {
+            if (operation.Kind == "type" || operation.Kind == "overlay-type" || operation.Kind == "enum")
+            {
+                Require(!ProtocolCatalogSyntax.IsPrimitive(ReadString(operation.Entry, "name")), "duplicate-identifier");
+            }
+            if (operation.Kind == "union")
+            {
+                Require(!ProtocolCatalogSyntax.IsPrimitive(ReadString(operation.Entry, "discriminator")), "duplicate-identifier");
+                foreach (Branch branch in operation.Branches)
+                {
+                    Require(!ProtocolCatalogSyntax.IsPrimitive(branch.Name), "duplicate-identifier");
+                }
+            }
+        }
+
+        private static void ValidateProduction(Operation operation)
+        {
+            JObject entry = operation.Entry;
+            if (operation.Kind != "type" && operation.Kind != "overlay-type") return;
+            string production = ReadString(entry, "production");
+            if (production == "SemanticString")
+            {
+                ulong minimum = ReadUnsignedInteger(entry, "minBytes", "invalid-production");
+                ulong maximum = ReadUnsignedInteger(entry, "maxBytes", "invalid-production");
+                ulong codeUnits = ReadUnsignedInteger(entry, "maxUtf16CodeUnits", "invalid-production");
+                Require(minimum <= uint.MaxValue && maximum <= uint.MaxValue && codeUnits <= uint.MaxValue, "integer-overflow");
+                Require(minimum >= 1 && minimum <= maximum, "invalid-cardinality");
+                Require(checked(4UL + maximum) <= uint.MaxValue, "bound-overflow");
+                if (ReadString(entry, "encoding") == "AsciiEnvironmentName")
+                {
+                    Require(minimum == 1 && maximum == 32767 && codeUnits == maximum, "invalid-cardinality");
+                }
+                else
+                {
+                    Require(codeUnits >= 1 && codeUnits <= maximum && minimum <= checked(3UL * codeUnits), "invalid-cardinality");
+                }
+            }
+            if (production == "List" || production == "Set")
+            {
+                int minimum = ReadInteger(entry, "minCount", "invalid-production");
+                int maximum = ReadInteger(entry, "maxCount", "invalid-production");
+                Require(maximum >= 1 && minimum <= maximum && maximum <= 65535, "invalid-cardinality");
+            }
+        }
+
+        private static void Expand(EvaluationState state)
+        {
+            foreach (Operation operation in state.Operations)
+            {
+                JObject entry = operation.Entry;
+                string name = OptionalString(entry, "name");
+                if (operation.Kind == "primitive")
+                {
+                    Require(ProtocolCatalogSyntax.IsPrimitive(name), "unknown-primitive");
+                    Require(!ProtocolCatalogSyntax.IsForbiddenPrimitive(name), "primitive-forbidden");
+                }
+                else if (operation.Kind == "type" || operation.Kind == "enum" || operation.Kind == "overlay-type")
+                {
+                    string production = operation.Kind == "enum" ? "EnumU16" : ReadString(entry, "production");
+                    int literalId = 0;
+                    if (operation.Kind == "overlay-type")
+                    {
+                        literalId = ReadInteger(entry, "id", "overlay-id-out-of-range");
+                        Require(state.OverlayTypeRange.Contains(literalId), "overlay-id-out-of-range");
+                        Require(!state.ReservedTypeIds.Contains(literalId), "reserve-illegal-encoded");
+                        Require(!state.LiteralTypeIds.Contains(literalId), "duplicate-type-id");
+                    }
+                    if (production == "EnumU16") ReadMembers(operation);
+                    TypeDeclaration declaration = RegisterType(state, operation, name, production, operation.Kind != "overlay-type");
+                    declaration.Id = literalId;
+                    if (operation.Kind == "overlay-type") state.LiteralTypeIds.Add(literalId);
+                    operation.Declaration = declaration;
+                }
+                else if (operation.Kind == "field" || operation.Kind == "field-set" || operation.Kind == "extend")
+                {
+                    ExpandFields(state, operation);
+                }
+                else if (operation.Kind == "message" || operation.Kind == "overlay-message")
+                {
+                    ExpandMessage(state, operation);
+                }
+                else if (operation.Kind == "union")
+                {
+                    ExpandUnion(state, operation);
+                }
+                else if (operation.Kind == "delete")
+                {
+                    DeleteType(state, name);
+                }
+                else if (operation.Kind == "reserve-illegal-type")
+                {
+                    Require(entry.Values.ContainsKey("id"), "reserve-missing-literal");
+                    int literalId = ReadInteger(entry, "id", "reserve-id-out-of-range");
+                    Require(state.OverlayTypeRange.Contains(literalId), "reserve-id-out-of-range");
+                    Require(!state.Types.ContainsKey(name) && !state.ReservedNames.Contains(name), "duplicate-identifier");
+                    Require(!state.LiteralTypeIds.Contains(literalId) && !state.ReservedTypeIds.Contains(literalId), "duplicate-type-id");
+                    state.ReservedNames.Add(name);
+                    state.ReservedTypeIds.Add(literalId);
+                }
+            }
+        }
+
+        private static TypeDeclaration RegisterType(EvaluationState state, Operation operation, string name, string production, bool generated)
+        {
+            Require(!state.Types.ContainsKey(name) && !state.ReservedNames.Contains(name), "duplicate-identifier");
+            TypeDeclaration declaration = new TypeDeclaration { Name = name, Production = production, Operation = operation, Generated = generated };
+            state.Types.Add(name, declaration);
+            state.TypeOrder.Add(declaration);
+            return declaration;
+        }
+
+        private static void ReadMembers(Operation operation)
+        {
+            JArray members = ReadArray(operation.Entry, "members");
+            Require(members.Values.Count > 0, "missing-property");
+            HashSet<string> names = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<int> values = new HashSet<int>();
+            int nextValue = 0;
+            foreach (JNode memberNode in members.Values)
+            {
+                JObject member = (JObject)memberNode;
+                string name = ReadString(member, "name");
+                int value = member.Values.ContainsKey("value") ? ReadInteger(member, "value", "enum-value-overflow") : nextValue;
+                Require(names.Add(name), "enum-duplicate-name");
+                Require(value <= 65535, "enum-value-overflow");
+                Require(values.Add(value), "enum-duplicate-value");
+                operation.Members.Add(new CatalogMember { Name = name, Value = value, Index = operation.Members.Count });
+                nextValue = checked(value + 1);
+            }
+        }
+
+        private static void ExpandFields(EvaluationState state, Operation operation)
+        {
+            string parentName = ReadString(operation.Entry, "parent");
+            TypeDeclaration parent;
+            bool found = state.Types.TryGetValue(parentName, out parent);
+            string parentReason = operation.Kind == "extend" ? "extend-invalid-parent" : "field-undefined-parent";
+            if ((operation.Kind == "field" || operation.Kind == "field-set") && found && parent.Deleted) Reject("delete-then-use");
+            Require(found && !parent.Deleted && parent.Production == "Named", parentReason);
+            operation.Declaration = parent;
+            bool literal = operation.Kind == "extend" || operation.Entry.Values.ContainsKey("id");
+            if (literal && parent.Generated)
+            {
+                Require(state.ExtensionParents.Contains(parentName), "extension-parent-forbidden");
+            }
+            Require(operation.Fields.Count > 0, "missing-property");
+            Require(checked(parent.Fields.Count + operation.Fields.Count) <= MaximumFields, "invalid-cardinality");
+            if (operation.Kind == "extend")
+            {
+                foreach (Field field in operation.Fields)
+                {
+                    Require(field.Entry.Values.ContainsKey("id"), "extend-missing-literal");
+                }
+                foreach (Field field in operation.Fields)
+                {
+                    ValidateLiteralFieldId(field.Id, parent, state.Contract.GeneratedFieldIdMax);
+                }
+            }
+            else
+            {
+                int proposedId;
+                if (literal)
+                {
+                    proposedId = ReadInteger(operation.Entry, "id", "field-overflow");
+                    ValidateLiteralFieldId(proposedId, parent, state.Contract.GeneratedFieldIdMax);
+                }
+                else
+                {
+                    proposedId = parent.FieldNext;
+                    Require(proposedId <= state.Contract.GeneratedFieldIdMax, "field-overflow");
+                }
+                foreach (Field field in operation.Fields) field.Id = proposedId;
+            }
+            ValidateRawBounds(operation.Fields);
+            if (operation.Kind == "field-set")
+            {
+                string groupName = ReadString(operation.Entry, "name");
+                Require(!parent.FieldSetNames.Contains(groupName), "duplicate-field-set");
+                if (literal) Require(!parent.FieldSetLiteralIds.Contains(operation.Fields[0].Id), "duplicate-field-set");
+                parent.FieldSetNames.Add(groupName);
+                if (literal) parent.FieldSetLiteralIds.Add(operation.Fields[0].Id);
+            }
+            ClaimShapes(parent, operation.Fields, operation);
+            if (operation.Kind == "field-set") ResolveFieldSet(operation.Fields);
+            ValidateEffectivePrimitives(operation.Fields);
+            if (operation.Kind == "field-set")
+            {
+                if (parent.Generated)
+                {
+                    Require(parent.MapNames.Add(ReadString(operation.Entry, "name")), "duplicate-identifier");
+                }
+            }
+            else
+            {
+                foreach (Field field in operation.Fields)
+                {
+                    Require(parent.MapNames.Add(field.Name), operation.Kind == "extend" ? "extend-dup-name" : "duplicate-identifier");
+                }
+            }
+            RegisterEffectiveFields(parent, operation.Fields, operation.Kind == "extend");
+            parent.Fields.AddRange(operation.Fields);
+            if (!literal) parent.FieldNext = checked(parent.FieldNext + 1);
+        }
+
+        private static void ValidateLiteralFieldId(int fieldId, TypeDeclaration parent, int generatedMaximum)
+        {
+            Require(fieldId >= 1 && fieldId <= 65535 && (!parent.Generated || fieldId > generatedMaximum), "field-overflow");
+        }
+
+        private static void ValidateRawBounds(List<Field> fields)
+        {
+            foreach (Field field in fields)
+            {
+                Require(field.Bound <= uint.MaxValue, "integer-overflow");
+                if (field.Type == "BoundedBytes") Require(checked(4UL + field.Bound) <= uint.MaxValue, "bound-overflow");
+                if (field.Type == "OpaqueUtf16") Require(checked(4UL + checked(2UL * field.Bound)) <= uint.MaxValue, "bound-overflow");
+            }
+        }
+
+        private static void ClaimShapes(TypeDeclaration parent, List<Field> fields, Operation owner)
+        {
+            foreach (Field field in fields)
+            {
+                if (field.Forbidden) continue;
+                string shape = ShapeIdentity(field);
+                Operation existingOwner;
+                if (parent.ShapeOwners.TryGetValue(shape, out existingOwner))
+                {
+                    if (object.ReferenceEquals(existingOwner, owner)) continue;
+                    bool conditionalConflict = OperationHasConditionalShape(owner, shape)
+                        || OperationHasConditionalShape(existingOwner, shape);
+                    Require(!conditionalConflict, "invalid-field-condition");
+                }
+                else
+                {
+                    parent.ShapeOwners.Add(shape, owner);
+                }
+            }
+        }
+
+        private static bool IsConditionalField(Field field)
+        {
+            return field.Forbidden || field.Profile != "Any";
+        }
+
+        private static bool OperationHasConditionalShape(Operation operation, string shape)
+        {
+            if (!operation.ConditionalShapesInitialized)
+            {
+                HashSet<string> conditionalShapes = null;
+                foreach (Field field in operation.Fields)
+                {
+                    if (!IsConditionalField(field)) continue;
+                    if (conditionalShapes == null) conditionalShapes = new HashSet<string>(StringComparer.Ordinal);
+                    conditionalShapes.Add(ShapeIdentity(field));
+                }
+                operation.ConditionalShapes = conditionalShapes;
+                operation.ConditionalShapesInitialized = true;
+            }
+            return operation.ConditionalShapes != null && operation.ConditionalShapes.Contains(shape);
+        }
+
+        private static string ShapeIdentity(Field field)
+        {
+            return field.Id.ToString(CultureInfo.InvariantCulture) + "\u001F" + field.Name + "\u001F" + field.Type
+                + "\u001F" + BoundKind(field).ToString(CultureInfo.InvariantCulture) + "\u001F" + field.Bound.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static int BoundKind(Field field)
+        {
+            return field.Type == "BoundedBytes" ? 1 : field.Type == "OpaqueUtf16" ? 2 : 0;
+        }
+
+        private static void ResolveFieldSet(List<Field> fields)
+        {
+            Dictionary<string, List<Field>> requiredByShape = new Dictionary<string, List<Field>>(StringComparer.Ordinal);
+            HashSet<string> declarations = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Field field in fields)
+            {
+                string shape = ShapeIdentity(field);
+                Require(declarations.Add(shape + "\u001F" + field.Profile + "\u001F" + (field.Forbidden ? "Forbidden" : "Required")), "invalid-field-condition");
+                field.Effective[0] = !field.Forbidden && (field.Profile == "Any" || field.Profile == InteractiveProfile);
+                field.Effective[1] = !field.Forbidden && (field.Profile == "Any" || field.Profile == NonInteractiveProfile);
+                if (field.Forbidden) continue;
+                List<Field> requiredRows;
+                if (!requiredByShape.TryGetValue(shape, out requiredRows))
+                {
+                    requiredRows = new List<Field>();
+                    requiredByShape.Add(shape, requiredRows);
+                }
+                requiredRows.Add(field);
+            }
+            Require(requiredByShape.Count > 0, "invalid-field-condition");
+            foreach (Field forbidden in fields)
+            {
+                if (!forbidden.Forbidden) continue;
+                List<Field> matches;
+                Require(requiredByShape.TryGetValue(ShapeIdentity(forbidden), out matches), "invalid-field-condition");
+                Field applicable = null;
+                foreach (Field required in matches)
+                {
+                    if (required.Profile != "Any" && required.Profile != forbidden.Profile) continue;
+                    Require(applicable == null, "invalid-field-condition");
+                    applicable = required;
+                }
+                if (applicable != null) applicable.Effective[forbidden.Profile == InteractiveProfile ? 0 : 1] = false;
+            }
+        }
+
+        private static void ValidateEffectivePrimitives(List<Field> fields)
+        {
+            foreach (Field field in fields)
+            {
+                Require((!field.Effective[0] && !field.Effective[1]) || !ProtocolCatalogSyntax.IsForbiddenPrimitive(field.Type), "primitive-forbidden");
+            }
+        }
+
+        private static void RegisterEffectiveFields(TypeDeclaration parent, List<Field> fields, bool extension)
+        {
+            for (int profileIndex = 0; profileIndex < Profiles.Length; profileIndex++)
+            {
+                HashSet<string> names = new HashSet<string>(StringComparer.Ordinal);
+                foreach (Field field in fields)
+                {
+                    if (!field.Effective[profileIndex]) continue;
+                    Require(!parent.EffectiveNames[profileIndex].Contains(field.Name) && names.Add(field.Name),
+                        extension ? "extend-dup-name" : "duplicate-identifier");
+                }
+                HashSet<int> ids = new HashSet<int>();
+                foreach (Field field in fields)
+                {
+                    if (!field.Effective[profileIndex]) continue;
+                    Require(!parent.EffectiveIds[profileIndex].Contains(field.Id) && ids.Add(field.Id),
+                        extension ? "extend-dup-id" : "duplicate-field-id");
+                }
+                parent.EffectiveNames[profileIndex].UnionWith(names);
+                parent.EffectiveIds[profileIndex].UnionWith(ids);
+            }
+        }
+
+        private static void ExpandMessage(EvaluationState state, Operation operation)
+        {
+            JObject entry = operation.Entry;
+            string channel = ReadString(entry, "channel");
+            string name = ReadString(entry, "name");
+            string identity = channel + "\u001F" + name;
+            string rowIdentity = ReadString(entry, "direction") + "\u001F" + ReadString(entry, "profile");
+            int literalId = operation.Kind == "overlay-message" ? ReadInteger(entry, "id", "overlay-id-out-of-range") : 0;
+            if (operation.Kind == "overlay-message") Require(InRanges(state.KindRanges[channel], literalId), "overlay-id-out-of-range");
+            MessageKind message;
+            if (state.Messages.TryGetValue(identity, out message))
+            {
+                Require(!message.Rows.Contains(rowIdentity), "duplicate-kind");
+                Require(message.PayloadRoot == ReadString(entry, "payloadRoot") && message.TailClass == ReadString(entry, "mandatoryTailClass")
+                    && message.StateAssociation == ReadString(entry, "stateAssoc")
+                    && (operation.Kind != "overlay-message" || literalId == message.Id), "message-metadata-conflict");
+                message.Rows.Add(rowIdentity);
+            }
+            else
+            {
+                int kindId = operation.Kind == "overlay-message" ? literalId : state.KindNext[channel];
+                Require(!state.KindNamesById[channel].ContainsKey(kindId), "enum-duplicate-value");
+                message = new MessageKind
+                {
+                    Id = kindId,
+                    Name = name,
+                    Channel = channel,
+                    PayloadRoot = ReadString(entry, "payloadRoot"),
+                    TailClass = ReadString(entry, "mandatoryTailClass"),
+                    StateAssociation = ReadString(entry, "stateAssoc"),
+                    FirstOperation = operation
+                };
+                message.Rows.Add(rowIdentity);
+                state.Messages.Add(identity, message);
+                state.KindNamesById[channel].Add(kindId, name);
+                if (operation.Kind == "message") state.KindNext[channel] = checked(kindId + 1);
+            }
+            operation.Message = message;
+        }
+
+        private static void ExpandUnion(EvaluationState state, Operation operation)
+        {
+            Require(operation.Branches.Count > 0, "union-empty");
+            foreach (Branch branch in operation.Branches)
+            {
+                Require(branch.Fields.Count > 0, "missing-property");
+                Require(branch.Fields.Count <= MaximumFields, "invalid-cardinality");
+            }
+            foreach (Branch branch in operation.Branches)
+            {
+                Require(branch.Fields.Count <= state.Contract.GeneratedFieldIdMax, "field-overflow");
+            }
+            foreach (Branch branch in operation.Branches)
+            {
+                ValidateRawBounds(branch.Fields);
+            }
+            string discriminatorName = ReadString(operation.Entry, "discriminator");
+            operation.Declaration = RegisterType(state, operation, discriminatorName, "EnumU16", true);
+            operation.Declaration.Union = operation;
+            operation.Declaration.IsDiscriminator = true;
+            HashSet<string> branchNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Branch branch in operation.Branches)
+            {
+                Require(branchNames.Add(branch.Name), "union-duplicate-branch");
+                TypeDeclaration declaration = RegisterType(state, operation, branch.Name, "Named", true);
+                declaration.Union = operation;
+                branch.Declaration = declaration;
+                for (int index = 0; index < branch.Fields.Count; index++) branch.Fields[index].Id = index + 1;
+                ClaimShapes(declaration, branch.Fields, operation);
+                ValidateEffectivePrimitives(branch.Fields);
+                RegisterEffectiveFields(declaration, branch.Fields, false);
+                foreach (Field field in branch.Fields) Require(declaration.MapNames.Add(field.Name), "duplicate-identifier");
+                declaration.Fields.AddRange(branch.Fields);
+                declaration.FieldNext = checked(branch.Fields.Count + 1);
+            }
+        }
+
+        private static void DeleteType(EvaluationState state, string name)
+        {
+            TypeDeclaration target;
+            Require(state.Types.TryGetValue(name, out target), "delete-unknown");
+            Require(!target.Deleted, "delete-double");
+            target.Deleted = true;
+            if (target.Union == null) return;
+            if (target.IsDiscriminator)
+            {
+                foreach (Branch branch in target.Union.Branches) branch.Declaration.Deleted = true;
+            }
+            else
+            {
+                bool hasLiveBranch = false;
+                foreach (Branch branch in target.Union.Branches)
+                {
+                    if (!branch.Declaration.Deleted) hasLiveBranch = true;
+                }
+                if (!hasLiveBranch) target.Union.Declaration.Deleted = true;
+            }
+        }
+
+        private static void ValidateReferences(EvaluationState state)
+        {
+            foreach (TypeDeclaration declaration in state.TypeOrder)
+            {
+                if (declaration.Deleted || declaration.Production != "Named") continue;
+                Require(declaration.EffectiveNames[0].Count > 0 && declaration.EffectiveNames[1].Count > 0, "missing-property");
+            }
+            foreach (Operation operation in state.Operations)
+            {
+                foreach (Field field in operation.Fields) ValidateReference(state, field.Type, false, false);
+                foreach (Branch branch in operation.Branches)
+                {
+                    foreach (Field field in branch.Fields) ValidateReference(state, field.Type, false, false);
+                }
+                if (operation.Kind == "message" || operation.Kind == "overlay-message")
+                {
+                    ValidateReference(state, ReadString(operation.Entry, "payloadRoot"), true, true);
+                }
+                if (operation.Kind == "type" || operation.Kind == "overlay-type")
+                {
+                    string production = ReadString(operation.Entry, "production");
+                    if (production == "List" || production == "Set")
+                    {
+                        ValidateReference(state, ReadString(operation.Entry, "elementType"), false, true);
+                    }
+                }
+            }
+            HashSet<string> enumNames = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> channels = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Operation operation in state.Operations)
+            {
+                if (operation.Message == null || !channels.Add(operation.Message.Channel)) continue;
+                string enumName = state.MessageEnumNames[operation.Message.Channel];
+                Require(!state.Types.ContainsKey(enumName) && !state.ReservedNames.Contains(enumName) && enumNames.Add(enumName), "duplicate-identifier");
+            }
+            ValidateAcyclic(state);
+        }
+
+        private static void ValidateReference(EvaluationState state, string reference, bool payloadRoot, bool rejectForbiddenPrimitive)
+        {
+            Require(!state.ReservedNames.Contains(reference), "reserve-illegal-encoded");
+            TypeDeclaration declaration;
+            if (state.Types.TryGetValue(reference, out declaration))
+            {
+                Require(!declaration.Deleted, "delete-then-use");
+                return;
+            }
+            if (rejectForbiddenPrimitive)
+            {
+                Require(!ProtocolCatalogSyntax.IsForbiddenPrimitive(reference), "primitive-forbidden");
+            }
+            Require(ProtocolCatalogSyntax.IsPrimitive(reference), payloadRoot ? "undefined-payload-root" : "undefined-reference");
+        }
+
+        private static void ValidateAcyclic(EvaluationState state)
+        {
+            Dictionary<string, List<string>> references = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (TypeDeclaration declaration in state.TypeOrder)
+            {
+                if (declaration.Deleted) continue;
+                List<string> targets = new List<string>();
+                foreach (Field field in declaration.Fields) targets.Add(field.Type);
+                if (declaration.Production == "List" || declaration.Production == "Set")
+                {
+                    targets.Add(ReadString(declaration.Operation.Entry, "elementType"));
+                }
+                references.Add(declaration.Name, targets);
+            }
+            Dictionary<string, int> states = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (TypeDeclaration declaration in state.TypeOrder)
+            {
+                if (declaration.Deleted || states.ContainsKey(declaration.Name)) continue;
+                Stack<string> names = new Stack<string>();
+                Stack<int> indexes = new Stack<int>();
+                names.Push(declaration.Name);
+                indexes.Push(0);
+                states.Add(declaration.Name, 1);
+                while (names.Count > 0)
+                {
+                    string current = names.Peek();
+                    int index = indexes.Pop();
+                    if (index == references[current].Count)
+                    {
+                        names.Pop();
+                        states[current] = 2;
+                        continue;
+                    }
+                    indexes.Push(index + 1);
+                    string target = references[current][index];
+                    if (!references.ContainsKey(target)) continue;
+                    int targetState;
+                    if (states.TryGetValue(target, out targetState))
+                    {
+                        Require(targetState != 1, "type-cycle");
+                        continue;
+                    }
+                    states.Add(target, 1);
+                    names.Push(target);
+                    indexes.Push(0);
+                }
+            }
+        }
+
+        private static ProtocolCatalogResultV2 AssignAndEmit(EvaluationState state)
+        {
+            List<object> outputTypes = new List<object>();
+            List<object> map = new List<object>();
+            Dictionary<string, Dictionary<string, object>> messageEnums = new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
+            int typeNext = 1;
+            foreach (Operation operation in state.Operations)
+            {
+                if (operation.Kind == "type" || operation.Kind == "enum" || operation.Kind == "overlay-type")
+                {
+                    TypeDeclaration declaration = operation.Declaration;
+                    if (declaration.Deleted) continue;
+                    if (declaration.Generated)
+                    {
+                        declaration.Id = AssignTypeId(state, ref typeNext);
+                        AddMapRow(state, map, operation, "type", declaration.Name, declaration.Id);
+                    }
+                    Dictionary<string, object> output = CreateType(declaration);
+                    outputTypes.Add(output);
+                    if (declaration.Production == "EnumU16" && declaration.Generated)
+                    {
+                        foreach (CatalogMember member in operation.Members)
+                        {
+                            Dictionary<string, object> row = AddMapRow(state, map, operation, "enum-member", declaration.Name + "." + member.Name, member.Value);
+                            row.Add("memberIndex", member.Index);
+                        }
+                    }
+                }
+                else if (operation.Kind == "field" || operation.Kind == "field-set" || operation.Kind == "extend")
+                {
+                    if (operation.Declaration.Deleted) continue;
+                    if (operation.Kind == "field-set")
+                    {
+                        if (operation.Declaration.Generated)
+                        {
+                            AddMapRow(state, map, operation, "field", operation.Declaration.Name + "." + ReadString(operation.Entry, "name"), operation.Fields[0].Id);
+                        }
+                    }
+                    else
+                    {
+                        foreach (Field field in operation.Fields)
+                        {
+                            AddMapRow(state, map, operation, "field", operation.Declaration.Name + "." + field.Name, field.Id);
+                        }
+                    }
+                }
+                else if (operation.Kind == "message" || operation.Kind == "overlay-message")
+                {
+                    MessageKind message = operation.Message;
+                    Dictionary<string, object> enumDeclaration;
+                    if (!messageEnums.TryGetValue(message.Channel, out enumDeclaration))
+                    {
+                        int typeId = AssignTypeId(state, ref typeNext);
+                        string enumName = state.MessageEnumNames[message.Channel];
+                        enumDeclaration = NewObject();
+                        enumDeclaration.Add("production", "EnumU16");
+                        enumDeclaration.Add("name", enumName);
+                        enumDeclaration.Add("typeId", typeId);
+                        enumDeclaration.Add("members", new List<object>());
+                        messageEnums.Add(message.Channel, enumDeclaration);
+                        outputTypes.Add(enumDeclaration);
+                        AddMapRow(state, map, operation, "type", enumName, typeId);
+                    }
+                    if (object.ReferenceEquals(operation, message.FirstOperation))
+                    {
+                        if (operation.Kind == "message")
+                        {
+                            Require(message.Id <= 65535, "generated-id-overflow");
+                            Require(!InRanges(state.KindRanges[message.Channel], message.Id), "reserved-kind-range");
+                        }
+                        Dictionary<string, object> member = NewObject();
+                        member.Add("name", message.Name);
+                        member.Add("value", message.Id);
+                        ((List<object>)enumDeclaration["members"]).Add(member);
+                    }
+                    Dictionary<string, object> row = AddMapRow(state, map, operation, "kind", message.Name, message.Id);
+                    row.Add("channel", message.Channel);
+                    row.Add("direction", ReadString(operation.Entry, "direction"));
+                    row.Add("profile", ReadString(operation.Entry, "profile"));
+                    row.Add("mandatoryTailClass", message.TailClass);
+                    row.Add("stateAssoc", message.StateAssociation);
+                }
+                else if (operation.Kind == "union")
+                {
+                    if (operation.Declaration.Deleted) continue;
+                    operation.Declaration.Id = AssignTypeId(state, ref typeNext);
+                    Dictionary<string, object> discriminator = NewObject();
+                    discriminator.Add("production", "EnumU16");
+                    discriminator.Add("name", operation.Declaration.Name);
+                    discriminator.Add("typeId", operation.Declaration.Id);
+                    List<object> members = new List<object>();
+                    discriminator.Add("members", members);
+                    outputTypes.Add(discriminator);
+                    AddMapRow(state, map, operation, "type", operation.Declaration.Name, operation.Declaration.Id);
+                    int branchIndex = 0;
+                    foreach (Branch branch in operation.Branches)
+                    {
+                        if (branch.Declaration.Deleted) continue;
+                        Dictionary<string, object> member = NewObject();
+                        member.Add("name", branch.Name);
+                        member.Add("value", branchIndex);
+                        members.Add(member);
+                        Dictionary<string, object> memberRow = AddMapRow(state, map, operation, "enum-member",
+                            operation.Declaration.Name + "." + branch.Name, branchIndex);
+                        memberRow.Add("memberIndex", branchIndex);
+                        branch.Declaration.Id = AssignTypeId(state, ref typeNext);
+                        outputTypes.Add(CreateType(branch.Declaration));
+                        foreach (Field field in branch.Fields)
+                        {
+                            AddMapRow(state, map, operation, "field", branch.Name + "." + field.Name, field.Id);
+                        }
+                        Dictionary<string, object> branchRow = AddMapRow(state, map, operation, "union-branch", branch.Name, branch.Declaration.Id);
+                        branchRow.Add("branchIndex", branchIndex);
+                        branchIndex = checked(branchIndex + 1);
+                    }
+                }
+            }
+            Require(outputTypes.Count > 0, "missing-property");
+            Require(outputTypes.Count <= MaximumSchemaTypes && map.Count <= MaximumMapRows, "invalid-cardinality");
+            Dictionary<string, object> schema = NewObject();
+            schema.Add("schemaVersion", 1);
+            schema.Add("schemaId", state.Contract.EmitSchemaId);
+            schema.Add("types", outputTypes);
+            byte[] schemaBytes = CanonicalJson.Bytes(schema);
+            byte[] mapBytes = CanonicalJson.Bytes(map);
+            Require(schemaBytes.Length <= MaximumJsonBytes && mapBytes.Length <= MaximumJsonBytes, "file-limit");
+            RequireJson(schemaBytes);
+            RequireJson(mapBytes);
+            return new ProtocolCatalogResultV2(true, "ok", schemaBytes, mapBytes);
+        }
+
+        private static int AssignTypeId(EvaluationState state, ref int typeNext)
+        {
+            Require(typeNext >= 1 && typeNext <= 65535, "generated-id-overflow");
+            Require(!state.OverlayTypeRange.Contains(typeNext), "reserved-type-range");
+            int assigned = typeNext;
+            typeNext = checked(typeNext + 1);
+            return assigned;
+        }
+
+        private static Dictionary<string, object> CreateType(TypeDeclaration declaration)
+        {
+            Dictionary<string, object> output = NewObject();
+            output.Add("name", declaration.Name);
+            output.Add("production", declaration.Production);
+            output.Add("typeId", declaration.Id);
+            if (declaration.Production == "Named")
+            {
+                List<Field> ordered = new List<Field>(declaration.Fields);
+                ordered.Sort(CompareFields);
+                List<object> fields = new List<object>();
+                foreach (Field field in ordered)
+                {
+                    Dictionary<string, object> row = NewObject();
+                    row.Add("name", field.Name);
+                    row.Add("fieldId", field.Id);
+                    row.Add("type", field.Type);
+                    if (field.Type == "BoundedBytes") row.Add("maxBytes", field.Bound);
+                    if (field.Type == "OpaqueUtf16") row.Add("maxCodeUnits", field.Bound);
+                    if (field.Profile != "Any") row.Add("profile", field.Profile);
+                    if (field.Forbidden) row.Add("status", "Forbidden");
+                    fields.Add(row);
+                }
+                output.Add("fields", fields);
+            }
+            else if (declaration.Production == "EnumU16")
+            {
+                List<object> members = new List<object>();
+                foreach (CatalogMember member in declaration.Operation.Members)
+                {
+                    Dictionary<string, object> row = NewObject();
+                    row.Add("name", member.Name);
+                    row.Add("value", member.Value);
+                    members.Add(row);
+                }
+                output.Add("members", members);
+            }
+            else if (declaration.Production == "SemanticString")
+            {
+                JObject entry = declaration.Operation.Entry;
+                output.Add("encoding", ReadString(entry, "encoding"));
+                output.Add("grammar", ReadString(entry, "grammar"));
+                output.Add("minBytes", ReadUnsignedInteger(entry, "minBytes", "invalid-production"));
+                output.Add("maxBytes", ReadUnsignedInteger(entry, "maxBytes", "invalid-production"));
+                output.Add("maxUtf16CodeUnits", ReadUnsignedInteger(entry, "maxUtf16CodeUnits", "invalid-production"));
+            }
+            else
+            {
+                JObject entry = declaration.Operation.Entry;
+                output.Add("elementType", ReadString(entry, "elementType"));
+                output.Add("minCount", ReadInteger(entry, "minCount", "invalid-production"));
+                output.Add("maxCount", ReadInteger(entry, "maxCount", "invalid-production"));
+            }
+            return output;
+        }
+
+        private static int CompareFields(Field left, Field right)
+        {
+            int comparison = left.Id.CompareTo(right.Id);
+            if (comparison != 0) return comparison;
+            comparison = ProfileOrder(left.Profile).CompareTo(ProfileOrder(right.Profile));
+            if (comparison != 0) return comparison;
+            comparison = left.Forbidden.CompareTo(right.Forbidden);
+            if (comparison != 0) return comparison;
+            comparison = string.CompareOrdinal(left.Name, right.Name);
+            if (comparison != 0) return comparison;
+            comparison = string.CompareOrdinal(left.Type, right.Type);
+            if (comparison != 0) return comparison;
+            comparison = BoundKind(left).CompareTo(BoundKind(right));
+            return comparison != 0 ? comparison : left.Bound.CompareTo(right.Bound);
+        }
+
+        private static int ProfileOrder(string profile)
+        {
+            return profile == "Any" ? 0 : profile == InteractiveProfile ? 1 : 2;
+        }
+
+        private static Dictionary<string, object> AddMapRow(EvaluationState state, List<object> map, Operation operation, string category, string name, int generatedId)
+        {
+            Dictionary<string, object> row = NewObject();
+            row.Add("schemaId", state.Contract.MapSchemaId);
+            row.Add("category", category);
+            row.Add("catalog", operation.Catalog);
+            row.Add("catalogOrdinal", operation.Ordinal);
+            row.Add("name", name);
+            row.Add("generatedId", generatedId);
+            map.Add(row);
+            return row;
+        }
+
+        private static Dictionary<string, object> NewObject()
+        {
+            return new Dictionary<string, object>(StringComparer.Ordinal);
+        }
+
+        private static bool ValidateMap(byte[] mapBytes, ProtocolCatalogContractV2 contract)
+        {
+            SchemaCheckResult jsonResult = SchemaBootstrap.Evaluate("json", mapBytes, null);
+            if (!jsonResult.Accepted) return false;
+            JArray rows = new JsonParser(mapBytes).Parse() as JArray;
+            if (rows == null || rows.Values.Count > MaximumMapRows) return false;
+            IDictionary<string, string[]> directions = contract.PermittedDirectionsByChannel;
+            try
+            {
+                foreach (JNode rowNode in rows.Values)
+                {
+                    JObject row = RequireObject(rowNode);
+                    string category = ReadString(row, "category");
+                    List<string> required = new List<string>(new string[] { "schemaId", "category", "catalog", "catalogOrdinal", "name", "generatedId" });
+                    if (category == "kind") required.AddRange(new string[] { "channel", "direction", "profile", "mandatoryTailClass", "stateAssoc" });
+                    else if (category == "enum-member") required.Add("memberIndex");
+                    else if (category == "union-branch") required.Add("branchIndex");
+                    else Require(category == "type" || category == "field", "map-tamper");
+                    CheckProperties(row, required.ToArray(), new string[0]);
+                    Require(ReadString(row, "schemaId") == contract.MapSchemaId, "map-tamper");
+                    string catalog = ReadString(row, "catalog");
+                    Require(catalog == "base" || catalog == "overlay", "map-tamper");
+                    int ordinal = ReadInteger(row, "catalogOrdinal", "map-tamper");
+                    Require(ordinal >= 1 && ordinal <= 8192, "map-tamper");
+                    int generatedId = ReadInteger(row, "generatedId", "map-tamper");
+                    Require(generatedId <= 65535 && (generatedId >= 1 || category == "kind" || category == "enum-member"), "map-tamper");
+                    string[] nameParts = ReadString(row, "name").Split('.');
+                    Require(nameParts.Length == (category == "field" || category == "enum-member" ? 2 : 1), "map-tamper");
+                    foreach (string name in nameParts)
+                    {
+                        Require(ProtocolCatalogSyntax.IsSchemaIdentifier(name) && contract.MatchesName(name), "map-tamper");
+                    }
+                    if (category == "enum-member" || category == "union-branch")
+                    {
+                        Require(catalog == "base", "map-tamper");
+                        int index = ReadInteger(row, category == "enum-member" ? "memberIndex" : "branchIndex", "map-tamper");
+                        Require(index < 8192, "map-tamper");
+                    }
+                    if (category == "kind")
+                    {
+                        string channel = ReadString(row, "channel");
+                        Require(directions.ContainsKey(channel), "map-tamper");
+                        Require(Array.IndexOf(directions[channel], ReadString(row, "direction")) >= 0, "map-tamper");
+                        string profile = ReadString(row, "profile");
+                        Require(profile == "Any" || profile == InteractiveProfile || profile == NonInteractiveProfile, "map-tamper");
+                        string tailClass = ReadString(row, "mandatoryTailClass");
+                        Require(tailClass == "Ordinary" || tailClass == "Mandatory", "map-tamper");
+                        Require(ProtocolCatalogSyntax.IsProtocolIdentifier(ReadString(row, "stateAssoc")), "map-tamper");
+                    }
+                }
+                return true;
+            }
+            catch (CatalogValidationException)
+            {
+                return false;
+            }
+        }
+
+        private static bool EqualBytes(byte[] left, byte[] right)
+        {
+            if (left.Length != right.Length) return false;
+            int difference = 0;
+            for (int index = 0; index < left.Length; index++) difference |= left[index] ^ right[index];
+            return difference == 0;
+        }
+
+        private static bool InRanges(GeneratedIdRange[] ranges, int value)
+        {
+            foreach (GeneratedIdRange range in ranges)
+            {
+                if (range.Contains(value)) return true;
+            }
+            return false;
+        }
+
+        private static void Reject(string reason)
+        {
+            throw new CatalogValidationException(reason);
+        }
+
+        private static bool IsNumericProperty(string property)
+        {
+            return property == "id" || property == "maxBytes" || property == "maxCodeUnits" || property == "maxUtf16CodeUnits"
+                || property == "minBytes" || property == "minCount" || property == "maxCount";
+        }
+
+        private static string NumericReason(string kind, string property)
+        {
+            if (property != "id") return "invalid-production";
+            if (kind == "reserve-illegal-type") return "reserve-id-out-of-range";
+            if (kind == "overlay-type" || kind == "overlay-message") return "overlay-id-out-of-range";
+            if (kind == "field-set" || kind == "field") return "field-overflow";
+            return "invalid-production";
+        }
+
+        private static void CheckProperties(JObject value, string[] required, string[] optional)
+        {
+            foreach (string key in value.Values.Keys)
+            {
+                Require(Array.IndexOf(required, key) >= 0 || Array.IndexOf(optional, key) >= 0, "extra-key");
+            }
+            foreach (string key in required) Require(value.Values.ContainsKey(key), "missing-property");
+        }
+
+        private static JObject RequireObject(JNode node)
+        {
+            JObject value = node as JObject;
+            Require(value != null, "missing-property");
+            return value;
+        }
+
+        private static JArray ReadArray(JObject value, string key)
+        {
+            JNode node;
+            Require(value.Values.TryGetValue(key, out node) && node is JArray, "missing-property");
+            return (JArray)node;
+        }
+
+        private static string ReadString(JObject value, string key)
+        {
+            string result = OptionalString(value, key);
+            Require(result != null, "missing-property");
+            return result;
+        }
+
+        private static string OptionalString(JObject value, string key)
+        {
+            JNode node;
+            if (!value.Values.TryGetValue(key, out node)) return null;
+            JString text = node as JString;
+            return text == null ? null : text.Value;
+        }
+
+        private static int ReadInteger(JObject value, string key, string reason)
+        {
+            JNode node;
+            Require(value.Values.TryGetValue(key, out node) && node is JInteger, reason);
+            int result;
+            Require(int.TryParse(((JInteger)node).Value, NumberStyles.None, CultureInfo.InvariantCulture, out result), reason);
+            return result;
+        }
+
+        private static void ReadNumericProperty(JObject value, string key, string reason)
+        {
+            if (key == "minBytes" || key == "maxBytes" || key == "maxUtf16CodeUnits" || key == "maxCodeUnits")
+            {
+                ReadUnsignedInteger(value, key, reason);
+                return;
+            }
+            ReadInteger(value, key, reason);
+        }
+
+        private static ulong ReadUnsignedInteger(JObject value, string key, string reason)
+        {
+            JNode node;
+            Require(value.Values.TryGetValue(key, out node) && node is JInteger, reason);
+            ulong result;
+            Require(ulong.TryParse(((JInteger)node).Value, NumberStyles.None, CultureInfo.InvariantCulture, out result), reason);
+            return result;
+        }
+
+        private static void Require(bool condition, string reason)
+        {
+            if (!condition) throw new CatalogValidationException(reason);
+        }
+
+        private static void RequireJson(byte[] bytes)
+        {
+            SchemaCheckResult result = SchemaBootstrap.Evaluate("json", bytes, null);
+            Require(result.Accepted, result.Reason);
+        }
+
+        private sealed class EvaluationState
+        {
+            internal readonly ProtocolCatalogContractV2 Contract;
+            internal readonly IDictionary<string, string[]> Directions;
+            internal readonly HashSet<string> ExtensionParents;
+            internal readonly Dictionary<string, Dictionary<int, string>> KindNamesById = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
+            internal readonly Dictionary<string, int> KindNext = new Dictionary<string, int>(StringComparer.Ordinal);
+            internal readonly IDictionary<string, GeneratedIdRange[]> KindRanges;
+            internal readonly HashSet<int> LiteralTypeIds = new HashSet<int>();
+            internal readonly IDictionary<string, string> MessageEnumNames;
+            internal readonly Dictionary<string, MessageKind> Messages = new Dictionary<string, MessageKind>(StringComparer.Ordinal);
+            internal readonly List<Operation> Operations = new List<Operation>();
+            internal readonly GeneratedIdRange OverlayTypeRange;
+            internal readonly HashSet<string> ReservedNames = new HashSet<string>(StringComparer.Ordinal);
+            internal readonly HashSet<int> ReservedTypeIds = new HashSet<int>();
+            internal readonly List<TypeDeclaration> TypeOrder = new List<TypeDeclaration>();
+            internal readonly Dictionary<string, TypeDeclaration> Types = new Dictionary<string, TypeDeclaration>(StringComparer.Ordinal);
+
+            internal EvaluationState(ProtocolCatalogContractV2 contract)
+            {
+                Contract = contract;
+                Directions = contract.PermittedDirectionsByChannel;
+                ExtensionParents = new HashSet<string>(contract.LiteralExtensionParentNames, StringComparer.Ordinal);
+                KindRanges = contract.OverlayKindRangesByChannel;
+                MessageEnumNames = contract.MessageEnumNameByChannel;
+                OverlayTypeRange = contract.OverlayTypeRange;
+                foreach (string channel in contract.Channels)
+                {
+                    KindNext.Add(channel, 1);
+                    KindNamesById.Add(channel, new Dictionary<int, string>());
+                }
+            }
+        }
+
+        private sealed class Operation
+        {
+            internal readonly List<Branch> Branches = new List<Branch>();
+            internal string Catalog;
+            internal HashSet<string> ConditionalShapes;
+            internal bool ConditionalShapesInitialized;
+            internal TypeDeclaration Declaration;
+            internal JObject Entry;
+            internal readonly List<Field> Fields = new List<Field>();
+            internal string Kind;
+            internal readonly List<CatalogMember> Members = new List<CatalogMember>();
+            internal MessageKind Message;
+            internal int Ordinal;
+        }
+
+        private sealed class TypeDeclaration
+        {
+            internal bool Deleted;
+            internal readonly HashSet<int>[] EffectiveIds = new HashSet<int>[] { new HashSet<int>(), new HashSet<int>() };
+            internal readonly HashSet<string>[] EffectiveNames = new HashSet<string>[]
+            {
+                new HashSet<string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal)
+            };
+            internal int FieldNext = 1;
+            internal readonly List<Field> Fields = new List<Field>();
+            internal readonly HashSet<int> FieldSetLiteralIds = new HashSet<int>();
+            internal readonly HashSet<string> FieldSetNames = new HashSet<string>(StringComparer.Ordinal);
+            internal bool Generated;
+            internal int Id;
+            internal bool IsDiscriminator;
+            internal readonly HashSet<string> MapNames = new HashSet<string>(StringComparer.Ordinal);
+            internal string Name;
+            internal Operation Operation;
+            internal string Production;
+            internal readonly Dictionary<string, Operation> ShapeOwners = new Dictionary<string, Operation>(StringComparer.Ordinal);
+            internal Operation Union;
+        }
+
+        private sealed class Field
+        {
+            internal ulong Bound;
+            internal readonly bool[] Effective = new bool[] { true, true };
+            internal JObject Entry;
+            internal bool Forbidden;
+            internal int Id;
+            internal string Name;
+            internal string Profile = "Any";
+            internal string Type;
+        }
+
+        private sealed class Branch
+        {
+            internal TypeDeclaration Declaration;
+            internal readonly List<Field> Fields = new List<Field>();
+            internal string Name;
+        }
+
+        private sealed class MessageKind
+        {
+            internal string Channel;
+            internal Operation FirstOperation;
+            internal int Id;
+            internal string Name;
+            internal string PayloadRoot;
+            internal readonly HashSet<string> Rows = new HashSet<string>(StringComparer.Ordinal);
+            internal string StateAssociation;
+            internal string TailClass;
+        }
+
+        private sealed class CatalogValidationException : Exception
+        {
+            internal readonly string Reason;
+
+            internal CatalogValidationException(string reason) : base(reason)
+            {
+                Reason = reason;
+            }
+        }
+    }
+
     public static class FoundationCatalogEngineV1
     {
         private static readonly string[] AllEntryProperties = new string[]

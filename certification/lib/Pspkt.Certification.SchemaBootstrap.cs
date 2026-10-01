@@ -57,6 +57,7 @@ namespace Pspkt.Certification
         internal const string NonAsciiSymbol = "non-ascii-symbol";
         internal const string ReplacementCharacterForbidden = "replacement-character-forbidden";
         internal const string MetaAuthorityMismatch = "meta-authority-mismatch";
+        internal const string InvalidFieldCondition = "invalid-field-condition";
 
         internal static string[] All()
         {
@@ -69,7 +70,8 @@ namespace Pspkt.Certification
                 DepthLimit, PropertyLimit, ArrayLimit, StringLimit, AllocationBudget,
                 UnknownProperty, MissingProperty, DuplicateIdentifier, UnknownPrimitive,
                 UndefinedReference, TypeCycle, DuplicateTypeId, DuplicateFieldId, FieldOrder,
-                InvalidCardinality, BoundOverflow, NonAsciiSymbol, MetaAuthorityMismatch
+                InvalidCardinality, BoundOverflow, NonAsciiSymbol, MetaAuthorityMismatch,
+                InvalidFieldCondition
             };
         }
     }
@@ -874,6 +876,28 @@ namespace Pspkt.Certification
             return true;
         }
 
+        internal static bool CheckPropertySet(JsonObject node, string[] required, string[] optional, ref string reason)
+        {
+            for (int index = 0; index < node.Keys.Count; index++)
+            {
+                if (!SchemaSymbols.Contains(required, node.Keys[index])
+                    && !SchemaSymbols.Contains(optional, node.Keys[index]))
+                {
+                    reason = SchemaReason.UnknownProperty;
+                    return false;
+                }
+            }
+            for (int index = 0; index < required.Length; index++)
+            {
+                if (!node.Members.ContainsKey(required[index]))
+                {
+                    reason = SchemaReason.MissingProperty;
+                    return false;
+                }
+            }
+            return true;
+        }
+
         internal static bool ExpectBoolean(JsonObject node, string name, bool expected, ref string reason)
         {
             bool actual;
@@ -1339,7 +1363,7 @@ namespace Pspkt.Certification
         }
 
         internal const string CommittedMetaSha256 =
-            "9b13be426d37e3da01870ff32ec5c4e5db63e9699566a1978007e1f8c07fcd2c";
+            "ca08bcb5164acb4522729dc98b2a1bd5ee348a79a14cef95dd852ae1958dcc85";
 
         private static string ComputeSha256Hex(byte[] bytes)
         {
@@ -1371,7 +1395,24 @@ namespace Pspkt.Certification
         private static readonly string[] FieldProperties = new string[] { "name", "fieldId", "type" };
         private static readonly string[] OpaqueUtf16FieldProperties = new string[] { "name", "fieldId", "type", "maxCodeUnits" };
         private static readonly string[] BoundedBytesFieldProperties = new string[] { "name", "fieldId", "type", "maxBytes" };
+        private static readonly string[] ConditionalFieldProperties = new string[] { "profile", "status" };
         private static readonly string[] EnumMemberProperties = new string[] { "name", "value" };
+        private const string AnyProfile = "Any";
+        private const string ForbiddenStatus = "Forbidden";
+        private const string InteractiveProfile = "InteractiveSeat";
+        private const string NonInteractiveProfile = "NonInteractiveElevated";
+        private const string RequiredStatus = "Required";
+
+        private sealed class ConditionalFieldRow
+        {
+            internal string BoundKind;
+            internal ulong BoundValue;
+            internal ulong FieldId;
+            internal string Name;
+            internal string Profile;
+            internal string Status;
+            internal string TypeReference;
+        }
 
         internal static bool Validate(JsonArray types, DeclarationAuthority authority, out List<string> declaredNames, ref string reason)
         {
@@ -1537,6 +1578,21 @@ namespace Pspkt.Certification
                 reason = SchemaReason.InvalidCardinality;
                 return false;
             }
+            bool hasFieldCondition = false;
+            for (int index = 0; index < fields.Items.Count; index++)
+            {
+                JsonObject field = fields.Items[index] as JsonObject;
+                if (field != null
+                    && (field.Members.ContainsKey("profile") || field.Members.ContainsKey("status")))
+                {
+                    hasFieldCondition = true;
+                    break;
+                }
+            }
+            if (hasFieldCondition)
+            {
+                return ValidateConditionalNamedFields(fields, authority, record, ref reason);
+            }
             List<string> fieldNames = new List<string>();
             List<ulong> fieldIds = new List<ulong>();
             ulong previousFieldId = 0;
@@ -1646,6 +1702,294 @@ namespace Pspkt.Certification
                 record.References.Add(typeReference);
             }
             return true;
+        }
+
+        private static bool ValidateConditionalNamedFields(JsonArray fields, DeclarationAuthority authority, DeclarationRecord record, ref string reason)
+        {
+            List<ConditionalFieldRow> rows = new List<ConditionalFieldRow>();
+            for (int index = 0; index < fields.Items.Count; index++)
+            {
+                JsonObject field = fields.Items[index] as JsonObject;
+                if (field == null)
+                {
+                    reason = SchemaReason.UnknownProperty;
+                    return false;
+                }
+                ConditionalFieldRow row;
+                if (!TryReadConditionalField(field, authority, out row, ref reason))
+                {
+                    return false;
+                }
+                rows.Add(row);
+                record.References.Add(row.TypeReference);
+            }
+            HashSet<string> declarations = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < rows.Count; index++)
+            {
+                if (!declarations.Add(CreateDeclarationIdentity(rows[index])))
+                {
+                    reason = SchemaReason.InvalidFieldCondition;
+                    return false;
+                }
+            }
+            List<ConditionalFieldRow> interactive;
+            if (!ResolveEffectiveProfile(rows, InteractiveProfile, out interactive, ref reason))
+            {
+                return false;
+            }
+            List<ConditionalFieldRow> nonInteractive;
+            if (!ResolveEffectiveProfile(rows, NonInteractiveProfile, out nonInteractive, ref reason))
+            {
+                return false;
+            }
+            if (!ValidateEffectiveProfileCollisions(interactive, ref reason)
+                || !ValidateEffectiveProfileCollisions(nonInteractive, ref reason))
+            {
+                return false;
+            }
+            if (interactive.Count == 0 || nonInteractive.Count == 0)
+            {
+                reason = SchemaReason.MissingProperty;
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryReadConditionalField(JsonObject field, DeclarationAuthority authority, out ConditionalFieldRow row, ref string reason)
+        {
+            row = null;
+            string typeReference;
+            if (!DocumentReader.TryGetString(field, "type", out typeReference, ref reason))
+            {
+                return false;
+            }
+            string[] allowed = FieldProperties;
+            if (string.Equals(typeReference, "OpaqueUtf16", StringComparison.Ordinal))
+            {
+                allowed = OpaqueUtf16FieldProperties;
+            }
+            else if (string.Equals(typeReference, "BoundedBytes", StringComparison.Ordinal))
+            {
+                allowed = BoundedBytesFieldProperties;
+            }
+            if (!DocumentReader.CheckPropertySet(field, allowed, ConditionalFieldProperties, ref reason))
+            {
+                return false;
+            }
+            string fieldName;
+            if (!DocumentReader.TryGetString(field, "name", out fieldName, ref reason))
+            {
+                return false;
+            }
+            if (!SchemaSymbols.IsAsciiIdentifier(fieldName))
+            {
+                reason = SchemaReason.NonAsciiSymbol;
+                return false;
+            }
+            ulong fieldId;
+            if (!DocumentReader.TryGetInteger(field, "fieldId", out fieldId, ref reason))
+            {
+                return false;
+            }
+            if (fieldId < authority.FieldIdMinimum || fieldId > authority.FieldIdMaximum)
+            {
+                reason = SchemaReason.IntegerOverflow;
+                return false;
+            }
+            string boundKind = "None";
+            ulong boundValue = 0;
+            if (string.Equals(typeReference, "OpaqueUtf16", StringComparison.Ordinal))
+            {
+                if (!DocumentReader.TryGetInteger(field, "maxCodeUnits", out boundValue, ref reason))
+                {
+                    return false;
+                }
+                if (boundValue > SchemaSymbols.UnsignedIntegerMaximum)
+                {
+                    reason = SchemaReason.IntegerOverflow;
+                    return false;
+                }
+                if (!FitsUnsignedInteger(4UL, 2UL, boundValue))
+                {
+                    reason = SchemaReason.BoundOverflow;
+                    return false;
+                }
+                boundKind = "MaxCodeUnits";
+            }
+            else if (string.Equals(typeReference, "BoundedBytes", StringComparison.Ordinal))
+            {
+                if (!DocumentReader.TryGetInteger(field, "maxBytes", out boundValue, ref reason))
+                {
+                    return false;
+                }
+                if (boundValue > SchemaSymbols.UnsignedIntegerMaximum)
+                {
+                    reason = SchemaReason.IntegerOverflow;
+                    return false;
+                }
+                if (!FitsUnsignedInteger(4UL, 1UL, boundValue))
+                {
+                    reason = SchemaReason.BoundOverflow;
+                    return false;
+                }
+                boundKind = "MaxBytes";
+            }
+            string profile = AnyProfile;
+            if (field.Members.ContainsKey("profile")
+                && !DocumentReader.TryGetString(field, "profile", out profile, ref reason))
+            {
+                return false;
+            }
+            if (!string.Equals(profile, AnyProfile, StringComparison.Ordinal)
+                && !string.Equals(profile, InteractiveProfile, StringComparison.Ordinal)
+                && !string.Equals(profile, NonInteractiveProfile, StringComparison.Ordinal))
+            {
+                reason = SchemaReason.InvalidFieldCondition;
+                return false;
+            }
+            if (field.Members.ContainsKey("profile") && string.Equals(profile, AnyProfile, StringComparison.Ordinal))
+            {
+                reason = SchemaReason.InvalidFieldCondition;
+                return false;
+            }
+            string status = RequiredStatus;
+            if (field.Members.ContainsKey("status")
+                && !DocumentReader.TryGetString(field, "status", out status, ref reason))
+            {
+                return false;
+            }
+            if (!string.Equals(status, RequiredStatus, StringComparison.Ordinal)
+                && !string.Equals(status, ForbiddenStatus, StringComparison.Ordinal))
+            {
+                reason = SchemaReason.InvalidFieldCondition;
+                return false;
+            }
+            if (string.Equals(status, ForbiddenStatus, StringComparison.Ordinal)
+                && string.Equals(profile, AnyProfile, StringComparison.Ordinal))
+            {
+                reason = SchemaReason.InvalidFieldCondition;
+                return false;
+            }
+            row = new ConditionalFieldRow();
+            row.BoundKind = boundKind;
+            row.BoundValue = boundValue;
+            row.FieldId = fieldId;
+            row.Name = fieldName;
+            row.Profile = profile;
+            row.Status = status;
+            row.TypeReference = typeReference;
+            return true;
+        }
+
+        private static bool ResolveEffectiveProfile(List<ConditionalFieldRow> rows, string profile, out List<ConditionalFieldRow> effective, ref string reason)
+        {
+            effective = new List<ConditionalFieldRow>();
+            for (int index = 0; index < rows.Count; index++)
+            {
+                ConditionalFieldRow row = rows[index];
+                if (string.Equals(row.Status, RequiredStatus, StringComparison.Ordinal)
+                    && (string.Equals(row.Profile, AnyProfile, StringComparison.Ordinal)
+                        || string.Equals(row.Profile, profile, StringComparison.Ordinal)))
+                {
+                    effective.Add(row);
+                }
+            }
+            for (int index = 0; index < rows.Count; index++)
+            {
+                ConditionalFieldRow forbidden = rows[index];
+                if (!string.Equals(forbidden.Status, ForbiddenStatus, StringComparison.Ordinal)
+                    || !string.Equals(forbidden.Profile, profile, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                int anyMatchCount = 0;
+                for (int candidateIndex = 0; candidateIndex < rows.Count; candidateIndex++)
+                {
+                    ConditionalFieldRow candidate = rows[candidateIndex];
+                    if (string.Equals(candidate.Status, RequiredStatus, StringComparison.Ordinal)
+                        && HasSameShape(candidate, forbidden))
+                    {
+                        anyMatchCount++;
+                    }
+                }
+                if (anyMatchCount == 0)
+                {
+                    reason = SchemaReason.InvalidFieldCondition;
+                    return false;
+                }
+                int applicableIndex = -1;
+                for (int candidateIndex = 0; candidateIndex < effective.Count; candidateIndex++)
+                {
+                    if (HasSameShape(effective[candidateIndex], forbidden))
+                    {
+                        if (applicableIndex >= 0)
+                        {
+                            reason = SchemaReason.InvalidFieldCondition;
+                            return false;
+                        }
+                        applicableIndex = candidateIndex;
+                    }
+                }
+                if (applicableIndex >= 0)
+                {
+                    effective.RemoveAt(applicableIndex);
+                }
+            }
+            return true;
+        }
+
+        private static bool ValidateEffectiveProfileCollisions(List<ConditionalFieldRow> effective, ref string reason)
+        {
+            HashSet<string> names = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < effective.Count; index++)
+            {
+                if (!names.Add(effective[index].Name))
+                {
+                    reason = SchemaReason.DuplicateIdentifier;
+                    return false;
+                }
+            }
+            HashSet<ulong> fieldIds = new HashSet<ulong>();
+            for (int index = 0; index < effective.Count; index++)
+            {
+                if (!fieldIds.Add(effective[index].FieldId))
+                {
+                    reason = SchemaReason.DuplicateFieldId;
+                    return false;
+                }
+            }
+            ulong previousFieldId = 0;
+            for (int index = 0; index < effective.Count; index++)
+            {
+                ConditionalFieldRow row = effective[index];
+                if (index > 0 && row.FieldId <= previousFieldId)
+                {
+                    reason = SchemaReason.FieldOrder;
+                    return false;
+                }
+                previousFieldId = row.FieldId;
+            }
+            return true;
+        }
+
+        private static bool HasSameShape(ConditionalFieldRow left, ConditionalFieldRow right)
+        {
+            return left.FieldId == right.FieldId
+                && left.BoundValue == right.BoundValue
+                && string.Equals(left.BoundKind, right.BoundKind, StringComparison.Ordinal)
+                && string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+                && string.Equals(left.TypeReference, right.TypeReference, StringComparison.Ordinal);
+        }
+
+        private static string CreateDeclarationIdentity(ConditionalFieldRow row)
+        {
+            return row.FieldId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "\u001F" + row.Name
+                + "\u001F" + row.TypeReference
+                + "\u001F" + row.BoundKind
+                + "\u001F" + row.BoundValue.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "\u001F" + row.Profile
+                + "\u001F" + row.Status;
         }
 
         private static bool ValidateEnumMembers(JsonObject declaration, ref string reason)
