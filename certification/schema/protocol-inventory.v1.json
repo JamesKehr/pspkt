@@ -1,0 +1,865 @@
+{
+  "schemaVersion": 1,
+  "schemaId": "PspktProtocolInventoryV1",
+  "sourceHashes": {
+    "dependency1bb-protocol-authority-plan-r10.json": "e1cc216b64d524d069f32462d501e457d015ee5b236372e830140d90063d9300",
+    "dependency1bb-r9-normative-tables.txt": "abb6b0a4939ce88791e5e90961fc8053eb896e56e34fc4f0668ac6476e85e3ba",
+    "dependency1bb-r8-lifecycle-variants.json": "8718dd1de27850663988c52bdd41a5ca5617c584b9a84f59e6d5a1cdfaa0d496",
+    "dependency1b-schema-authority-plan.md": "9d561e714839c52729a617346ebd5fe69bf147a262a39107208c8949f992c93c",
+    "phase4-r6-final-design.md": "6cfd8953c7cbcf9ee28634bd892c697df86dd43094233776b1aa9a31ddd7d241",
+    "phase4-credential-free-design-delta.md": "9b3bd129f1e7c0d89f7ecafbe42284b45bebe0676cac1c5bca1ea3529e9bf904"
+  },
+  "lifecycleSourceBase64": "ew0KICAic2NoZW1hVmVyc2lvbiI6IDEsDQogICJzY2hlbWFJZCI6ICJQc3BrdFByb3RvY29sTGlmZWN5Y2xlVmFyaWFudHNSOCIsDQogICJzb3VyY2VSNlNoYTI1NiI6ICI2Y2ZkODk1M2M3Y2JjZjllZTI4NjM0YmQ4OTJjNjk3ZGY4NmRkNDMwOTQyMzM3NzZiMWFhOWEzMWRkZDdkMjQxIiwNCiAgInNvdXJjZU92ZXJsYXlTaGEyNTYiOiAiOWIzYmQxMjlmMWU3YzBkODlmN2VjYWZiZTQyMjg0YjQ1YmViZTA2NzZjYWMxYzViY2ExZWEzNTI5ZTliZjkwNCIsDQogICJ2YXJpYW50T3JkZXIiOiBbDQogICAgIkludGVyYWN0aXZlV2luZG93c1Rlcm1pbmFsUFM1IiwNCiAgICAiSW50ZXJhY3RpdmVXaW5kb3dzVGVybWluYWxQUzciLA0KICAgICJJbnRlcmFjdGl2ZUNvbmhvc3RQUzUiLA0KICAgICJJbnRlcmFjdGl2ZUNvbmhvc3RQUzciLA0KICAgICJOb25JbnRlcmFjdGl2ZVBTNSIsDQogICAgIk5vbkludGVyYWN0aXZlUFM3Ig0KICBdLA0KICAidmFyaWFudHMiOiBbDQogICAgew0KICAgICAgIm5hbWUiOiAiSW50ZXJhY3RpdmVXaW5kb3dzVGVybWluYWxQUzUiLA0KICAgICAgInByb2ZpbGUiOiAiSW50ZXJhY3RpdmVTZWF0IiwNCiAgICAgICJzdGF0ZXMiOiBbDQogICAgICAgICJMZWFzZUFjcXVpcmVkIiwNCiAgICAgICAgIklzb2xhdGlvbkNvbW1pdHRlZCIsDQogICAgICAgICJUcmFuc3BvcnRMaXN0ZW5pbmciLA0KICAgICAgICAiVm1SZXN0b3JlZCIsDQogICAgICAgICJUcmFuc3BvcnRBdXRoZW50aWNhdGVkIiwNCiAgICAgICAgIkludGVyYWN0aXZlTGF1bmNoQXR0ZXN0ZWQiLA0KICAgICAgICAiU3RhZ2VCdWlsZEFybWVkIiwNCiAgICAgICAgIlNhbmRib3hQb2xpY3lJbnN0YWxsZWQiLA0KICAgICAgICAiQnVpbGRlckNyZWF0ZWRTdXNwZW5kZWQiLA0KICAgICAgICAiQnVpbGRlclByb2JlUnVubmluZyIsDQogICAgICAgICJCdWlsZGVyUHJvYmVCbG9ja2VkIiwNCiAgICAgICAgIkJ1aWxkZXJIYW5kbGVzR3JhbnRlZCIsDQogICAgICAgICJCdWlsZGVyU2FuZGJveFZhbGlkYXRlZCIsDQogICAgICAgICJJc29CdWlsZGVyUnVubmluZyIsDQogICAgICAgICJWZXJpZmllckNyZWF0ZWRTdXNwZW5kZWQiLA0KICAgICAgICAiVmVyaWZpZXJQcm9iZVJ1bm5pbmciLA0KICAgICAgICAiVmVyaWZpZXJQcm9iZUJsb2NrZWQiLA0KICAgICAgICAiVmVyaWZpZXJIYW5kbGVzR3JhbnRlZCIsDQogICAgICAgICJWZXJpZmllclNhbmRib3hWYWxpZGF0ZWQiLA0KICAgICAgICAiU3RhZ2VQcmVwYXJlZCIsDQogICAgICAgICJTdGFnZUNvbW1pdHRlZCIsDQogICAgICAgICJSZWxlYXNlQXJtZWQiLA0KICAgICAgICAiUmVsZWFzZVNlbnQiLA0KICAgICAgICAiUmVsZWFzZUFjY2VwdGVkIiwNCiAgICAgICAgIk1lZGlhQXR0YWNoZWQiLA0KICAgICAgICAiTWVkaWFWYWxpZGF0ZWQiLA0KICAgICAgICAiV29ya2VySGVsbG8iLA0KICAgICAgICAiQ2hhbGxlbmdlSXNzdWVkIiwNCiAgICAgICAgIlNlYXRSZWFkeSIsDQogICAgICAgICJDYW5kaWRhdGVUb2tlbkF0dGVzdGVkIiwNCiAgICAgICAgIkNoYWxsZW5nZUJvdW5kIiwNCiAgICAgICAgIlN0YW5kYXJkSGFuZGxlQnVuZGxlUHJlcGFyZWQiLA0KICAgICAgICAiTGF1bmNoQXV0aG9yaXplZCIsDQogICAgICAgICJBdXRob3JpemF0aW9uUHJlcGFyZWQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblNlbnQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblN0b3JlZCIsDQogICAgICAgICJDcmVhdGluZyIsDQogICAgICAgICJDcmVhdGVJbnRlbnRBY2tub3dsZWRnZWQiLA0KICAgICAgICAiQ3JlYXRlSXNzdWVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZVByb3Zpc2lvbmVkIiwNCiAgICAgICAgIkNyZWF0ZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlUHJvdmlzaW9uaW5nQWNjZXB0ZWQiLA0KICAgICAgICAiQXR0YWNobWVudFJlc3VtZUFybWVkIiwNCiAgICAgICAgIkF0dGFjaG1lbnRSZXN1bWVkIiwNCiAgICAgICAgIkF0dGFjaG1lbnRQaXBlQXV0aGVudGljYXRlZCIsDQogICAgICAgICJKb2luZWRBdHRhY2htZW50T2JzZXJ2ZWQiLA0KICAgICAgICAiQm9vdHN0cmFwRGV0YWNoQXJtZWQiLA0KICAgICAgICAiQm9vdHN0cmFwRGV0YWNoZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlT25seU9ic2VydmVkIiwNCiAgICAgICAgIlJ1bnRpbWVPYnNlcnZhdGlvbkNvbW1pdHRlZCIsDQogICAgICAgICJDb21waWxhdGlvblByZXBhcmVkIiwNCiAgICAgICAgIkNvZGVEb21JbnZva2VBcm1lZCIsDQogICAgICAgICJDb21waWxlck9ic2VydmVkIiwNCiAgICAgICAgIkNvbXBpbGVyRXhpdGVkIiwNCiAgICAgICAgIkZpbGVCYWNrZWRBcnRpZmFjdFZlcmlmaWVkIiwNCiAgICAgICAgIk1vZHVsZUxvYWRlZCIsDQogICAgICAgICJSdW5uaW5nIiwNCiAgICAgICAgIkNvbXBsZXRpb25Qcm9wb3NlZCIsDQogICAgICAgICJDb21wbGV0aW9uQWNjZXB0ZWQiLA0KICAgICAgICAiQ29tcGxldGlvblJlbGVhc2VBcm1lZCIsDQogICAgICAgICJDb21wbGV0aW9uUmVsZWFzZVNlbnQiLA0KICAgICAgICAiQ2FuZGlkYXRlQWNjZXB0YW5jZUFja25vd2xlZGdlZCIsDQogICAgICAgICJDYW5kaWRhdGVFeGl0T2JzZXJ2ZWQiLA0KICAgICAgICAiU2VhdEpvYlF1aWVzY2VkIiwNCiAgICAgICAgIkJvb3RzdHJhcEV4aXRBdXRob3JpemVkIiwNCiAgICAgICAgIkJvb3RzdHJhcEV4aXRPYnNlcnZlZCIsDQogICAgICAgICJUZXJtaW5hbFBsYXRmb3JtUXVpZXNjZWQiLA0KICAgICAgICAiV29ya2VyU2lnbmluZ0tleUNsb3NlQXJtZWQiLA0KICAgICAgICAiV29ya2VyRXhpdE9ic2VydmVkIiwNCiAgICAgICAgIkNvbXBsZXRlIiwNCiAgICAgICAgIlZtUXVpZXNjZWQiLA0KICAgICAgICAiTGVhc2VSZWxlYXNlZCIsDQogICAgICAgICJDbGVhbnVwTXV0ZXhSZWxlYXNlZCINCiAgICAgIF0NCiAgICB9LA0KICAgIHsNCiAgICAgICJuYW1lIjogIkludGVyYWN0aXZlV2luZG93c1Rlcm1pbmFsUFM3IiwNCiAgICAgICJwcm9maWxlIjogIkludGVyYWN0aXZlU2VhdCIsDQogICAgICAic3RhdGVzIjogWw0KICAgICAgICAiTGVhc2VBY3F1aXJlZCIsDQogICAgICAgICJJc29sYXRpb25Db21taXR0ZWQiLA0KICAgICAgICAiVHJhbnNwb3J0TGlzdGVuaW5nIiwNCiAgICAgICAgIlZtUmVzdG9yZWQiLA0KICAgICAgICAiVHJhbnNwb3J0QXV0aGVudGljYXRlZCIsDQogICAgICAgICJJbnRlcmFjdGl2ZUxhdW5jaEF0dGVzdGVkIiwNCiAgICAgICAgIlN0YWdlQnVpbGRBcm1lZCIsDQogICAgICAgICJTYW5kYm94UG9saWN5SW5zdGFsbGVkIiwNCiAgICAgICAgIkJ1aWxkZXJDcmVhdGVkU3VzcGVuZGVkIiwNCiAgICAgICAgIkJ1aWxkZXJQcm9iZVJ1bm5pbmciLA0KICAgICAgICAiQnVpbGRlclByb2JlQmxvY2tlZCIsDQogICAgICAgICJCdWlsZGVySGFuZGxlc0dyYW50ZWQiLA0KICAgICAgICAiQnVpbGRlclNhbmRib3hWYWxpZGF0ZWQiLA0KICAgICAgICAiSXNvQnVpbGRlclJ1bm5pbmciLA0KICAgICAgICAiVmVyaWZpZXJDcmVhdGVkU3VzcGVuZGVkIiwNCiAgICAgICAgIlZlcmlmaWVyUHJvYmVSdW5uaW5nIiwNCiAgICAgICAgIlZlcmlmaWVyUHJvYmVCbG9ja2VkIiwNCiAgICAgICAgIlZlcmlmaWVySGFuZGxlc0dyYW50ZWQiLA0KICAgICAgICAiVmVyaWZpZXJTYW5kYm94VmFsaWRhdGVkIiwNCiAgICAgICAgIlN0YWdlUHJlcGFyZWQiLA0KICAgICAgICAiU3RhZ2VDb21taXR0ZWQiLA0KICAgICAgICAiUmVsZWFzZUFybWVkIiwNCiAgICAgICAgIlJlbGVhc2VTZW50IiwNCiAgICAgICAgIlJlbGVhc2VBY2NlcHRlZCIsDQogICAgICAgICJNZWRpYUF0dGFjaGVkIiwNCiAgICAgICAgIk1lZGlhVmFsaWRhdGVkIiwNCiAgICAgICAgIldvcmtlckhlbGxvIiwNCiAgICAgICAgIkNoYWxsZW5nZUlzc3VlZCIsDQogICAgICAgICJTZWF0UmVhZHkiLA0KICAgICAgICAiQ2FuZGlkYXRlVG9rZW5BdHRlc3RlZCIsDQogICAgICAgICJDaGFsbGVuZ2VCb3VuZCIsDQogICAgICAgICJTdGFuZGFyZEhhbmRsZUJ1bmRsZVByZXBhcmVkIiwNCiAgICAgICAgIkxhdW5jaEF1dGhvcml6ZWQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblByZXBhcmVkIiwNCiAgICAgICAgIkF1dGhvcml6YXRpb25TZW50IiwNCiAgICAgICAgIkF1dGhvcml6YXRpb25TdG9yZWQiLA0KICAgICAgICAiQ3JlYXRpbmciLA0KICAgICAgICAiQ3JlYXRlSW50ZW50QWNrbm93bGVkZ2VkIiwNCiAgICAgICAgIkNyZWF0ZUlzc3VlZCIsDQogICAgICAgICJDYW5kaWRhdGVQcm92aXNpb25lZCIsDQogICAgICAgICJDcmVhdGVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZVByb3Zpc2lvbmluZ0FjY2VwdGVkIiwNCiAgICAgICAgIkF0dGFjaG1lbnRSZXN1bWVBcm1lZCIsDQogICAgICAgICJBdHRhY2htZW50UmVzdW1lZCIsDQogICAgICAgICJBdHRhY2htZW50UGlwZUF1dGhlbnRpY2F0ZWQiLA0KICAgICAgICAiSm9pbmVkQXR0YWNobWVudE9ic2VydmVkIiwNCiAgICAgICAgIkJvb3RzdHJhcERldGFjaEFybWVkIiwNCiAgICAgICAgIkJvb3RzdHJhcERldGFjaGVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZU9ubHlPYnNlcnZlZCIsDQogICAgICAgICJSdW50aW1lT2JzZXJ2YXRpb25Db21taXR0ZWQiLA0KICAgICAgICAiQ29tcGlsYXRpb25QcmVwYXJlZCIsDQogICAgICAgICJJblByb2Nlc3NSb3NseW5FbnRlcmVkIiwNCiAgICAgICAgIkluUHJvY2Vzc1Jvc2x5bkNvbXBsZXRlZCIsDQogICAgICAgICJJbk1lbW9yeUFydGlmYWN0VmVyaWZpZWQiLA0KICAgICAgICAiTW9kdWxlTG9hZGVkIiwNCiAgICAgICAgIlJ1bm5pbmciLA0KICAgICAgICAiQ29tcGxldGlvblByb3Bvc2VkIiwNCiAgICAgICAgIkNvbXBsZXRpb25BY2NlcHRlZCIsDQogICAgICAgICJDb21wbGV0aW9uUmVsZWFzZUFybWVkIiwNCiAgICAgICAgIkNvbXBsZXRpb25SZWxlYXNlU2VudCIsDQogICAgICAgICJDYW5kaWRhdGVBY2NlcHRhbmNlQWNrbm93bGVkZ2VkIiwNCiAgICAgICAgIkNhbmRpZGF0ZUV4aXRPYnNlcnZlZCIsDQogICAgICAgICJTZWF0Sm9iUXVpZXNjZWQiLA0KICAgICAgICAiQm9vdHN0cmFwRXhpdEF1dGhvcml6ZWQiLA0KICAgICAgICAiQm9vdHN0cmFwRXhpdE9ic2VydmVkIiwNCiAgICAgICAgIlRlcm1pbmFsUGxhdGZvcm1RdWllc2NlZCIsDQogICAgICAgICJXb3JrZXJTaWduaW5nS2V5Q2xvc2VBcm1lZCIsDQogICAgICAgICJXb3JrZXJFeGl0T2JzZXJ2ZWQiLA0KICAgICAgICAiQ29tcGxldGUiLA0KICAgICAgICAiVm1RdWllc2NlZCIsDQogICAgICAgICJMZWFzZVJlbGVhc2VkIiwNCiAgICAgICAgIkNsZWFudXBNdXRleFJlbGVhc2VkIg0KICAgICAgXQ0KICAgIH0sDQogICAgew0KICAgICAgIm5hbWUiOiAiSW50ZXJhY3RpdmVDb25ob3N0UFM1IiwNCiAgICAgICJwcm9maWxlIjogIkludGVyYWN0aXZlU2VhdCIsDQogICAgICAic3RhdGVzIjogWw0KICAgICAgICAiTGVhc2VBY3F1aXJlZCIsDQogICAgICAgICJJc29sYXRpb25Db21taXR0ZWQiLA0KICAgICAgICAiVHJhbnNwb3J0TGlzdGVuaW5nIiwNCiAgICAgICAgIlZtUmVzdG9yZWQiLA0KICAgICAgICAiVHJhbnNwb3J0QXV0aGVudGljYXRlZCIsDQogICAgICAgICJJbnRlcmFjdGl2ZUxhdW5jaEF0dGVzdGVkIiwNCiAgICAgICAgIlN0YWdlQnVpbGRBcm1lZCIsDQogICAgICAgICJTYW5kYm94UG9saWN5SW5zdGFsbGVkIiwNCiAgICAgICAgIkJ1aWxkZXJDcmVhdGVkU3VzcGVuZGVkIiwNCiAgICAgICAgIkJ1aWxkZXJQcm9iZVJ1bm5pbmciLA0KICAgICAgICAiQnVpbGRlclByb2JlQmxvY2tlZCIsDQogICAgICAgICJCdWlsZGVySGFuZGxlc0dyYW50ZWQiLA0KICAgICAgICAiQnVpbGRlclNhbmRib3hWYWxpZGF0ZWQiLA0KICAgICAgICAiSXNvQnVpbGRlclJ1bm5pbmciLA0KICAgICAgICAiVmVyaWZpZXJDcmVhdGVkU3VzcGVuZGVkIiwNCiAgICAgICAgIlZlcmlmaWVyUHJvYmVSdW5uaW5nIiwNCiAgICAgICAgIlZlcmlmaWVyUHJvYmVCbG9ja2VkIiwNCiAgICAgICAgIlZlcmlmaWVySGFuZGxlc0dyYW50ZWQiLA0KICAgICAgICAiVmVyaWZpZXJTYW5kYm94VmFsaWRhdGVkIiwNCiAgICAgICAgIlN0YWdlUHJlcGFyZWQiLA0KICAgICAgICAiU3RhZ2VDb21taXR0ZWQiLA0KICAgICAgICAiUmVsZWFzZUFybWVkIiwNCiAgICAgICAgIlJlbGVhc2VTZW50IiwNCiAgICAgICAgIlJlbGVhc2VBY2NlcHRlZCIsDQogICAgICAgICJNZWRpYUF0dGFjaGVkIiwNCiAgICAgICAgIk1lZGlhVmFsaWRhdGVkIiwNCiAgICAgICAgIldvcmtlckhlbGxvIiwNCiAgICAgICAgIkNoYWxsZW5nZUlzc3VlZCIsDQogICAgICAgICJTZWF0UmVhZHkiLA0KICAgICAgICAiQ2FuZGlkYXRlVG9rZW5BdHRlc3RlZCIsDQogICAgICAgICJDaGFsbGVuZ2VCb3VuZCIsDQogICAgICAgICJTdGFuZGFyZEhhbmRsZUJ1bmRsZVByZXBhcmVkIiwNCiAgICAgICAgIkxhdW5jaEF1dGhvcml6ZWQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblByZXBhcmVkIiwNCiAgICAgICAgIkF1dGhvcml6YXRpb25TZW50IiwNCiAgICAgICAgIkF1dGhvcml6YXRpb25TdG9yZWQiLA0KICAgICAgICAiQ3JlYXRpbmciLA0KICAgICAgICAiQ3JlYXRlSW50ZW50QWNrbm93bGVkZ2VkIiwNCiAgICAgICAgIkNyZWF0ZUlzc3VlZCIsDQogICAgICAgICJDYW5kaWRhdGVQcm92aXNpb25lZCIsDQogICAgICAgICJDcmVhdGVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZVByb3Zpc2lvbmluZ0FjY2VwdGVkIiwNCiAgICAgICAgIkF0dGFjaG1lbnRSZXN1bWVBcm1lZCIsDQogICAgICAgICJBdHRhY2htZW50UmVzdW1lZCIsDQogICAgICAgICJBdHRhY2htZW50UGlwZUF1dGhlbnRpY2F0ZWQiLA0KICAgICAgICAiSm9pbmVkQXR0YWNobWVudE9ic2VydmVkIiwNCiAgICAgICAgIkJvb3RzdHJhcERldGFjaEFybWVkIiwNCiAgICAgICAgIkJvb3RzdHJhcERldGFjaGVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZU9ubHlPYnNlcnZlZCIsDQogICAgICAgICJSdW50aW1lT2JzZXJ2YXRpb25Db21taXR0ZWQiLA0KICAgICAgICAiQ29tcGlsYXRpb25QcmVwYXJlZCIsDQogICAgICAgICJDb2RlRG9tSW52b2tlQXJtZWQiLA0KICAgICAgICAiQ29tcGlsZXJPYnNlcnZlZCIsDQogICAgICAgICJDb21waWxlckV4aXRlZCIsDQogICAgICAgICJGaWxlQmFja2VkQXJ0aWZhY3RWZXJpZmllZCIsDQogICAgICAgICJNb2R1bGVMb2FkZWQiLA0KICAgICAgICAiUnVubmluZyIsDQogICAgICAgICJDb21wbGV0aW9uUHJvcG9zZWQiLA0KICAgICAgICAiQ29tcGxldGlvbkFjY2VwdGVkIiwNCiAgICAgICAgIkNvbXBsZXRpb25SZWxlYXNlQXJtZWQiLA0KICAgICAgICAiQ29tcGxldGlvblJlbGVhc2VTZW50IiwNCiAgICAgICAgIkNhbmRpZGF0ZUFjY2VwdGFuY2VBY2tub3dsZWRnZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlRXhpdE9ic2VydmVkIiwNCiAgICAgICAgIlNlYXRKb2JRdWllc2NlZCIsDQogICAgICAgICJCb290c3RyYXBFeGl0QXV0aG9yaXplZCIsDQogICAgICAgICJDb25ob3N0VGVhcmRvd25XYWl0aW5nIiwNCiAgICAgICAgIldvcmtlclNpZ25pbmdLZXlDbG9zZUFybWVkIiwNCiAgICAgICAgIldvcmtlckV4aXRPYnNlcnZlZCIsDQogICAgICAgICJDb21wbGV0ZSIsDQogICAgICAgICJWbVF1aWVzY2VkIiwNCiAgICAgICAgIkxlYXNlUmVsZWFzZWQiLA0KICAgICAgICAiQ2xlYW51cE11dGV4UmVsZWFzZWQiDQogICAgICBdDQogICAgfSwNCiAgICB7DQogICAgICAibmFtZSI6ICJJbnRlcmFjdGl2ZUNvbmhvc3RQUzciLA0KICAgICAgInByb2ZpbGUiOiAiSW50ZXJhY3RpdmVTZWF0IiwNCiAgICAgICJzdGF0ZXMiOiBbDQogICAgICAgICJMZWFzZUFjcXVpcmVkIiwNCiAgICAgICAgIklzb2xhdGlvbkNvbW1pdHRlZCIsDQogICAgICAgICJUcmFuc3BvcnRMaXN0ZW5pbmciLA0KICAgICAgICAiVm1SZXN0b3JlZCIsDQogICAgICAgICJUcmFuc3BvcnRBdXRoZW50aWNhdGVkIiwNCiAgICAgICAgIkludGVyYWN0aXZlTGF1bmNoQXR0ZXN0ZWQiLA0KICAgICAgICAiU3RhZ2VCdWlsZEFybWVkIiwNCiAgICAgICAgIlNhbmRib3hQb2xpY3lJbnN0YWxsZWQiLA0KICAgICAgICAiQnVpbGRlckNyZWF0ZWRTdXNwZW5kZWQiLA0KICAgICAgICAiQnVpbGRlclByb2JlUnVubmluZyIsDQogICAgICAgICJCdWlsZGVyUHJvYmVCbG9ja2VkIiwNCiAgICAgICAgIkJ1aWxkZXJIYW5kbGVzR3JhbnRlZCIsDQogICAgICAgICJCdWlsZGVyU2FuZGJveFZhbGlkYXRlZCIsDQogICAgICAgICJJc29CdWlsZGVyUnVubmluZyIsDQogICAgICAgICJWZXJpZmllckNyZWF0ZWRTdXNwZW5kZWQiLA0KICAgICAgICAiVmVyaWZpZXJQcm9iZVJ1bm5pbmciLA0KICAgICAgICAiVmVyaWZpZXJQcm9iZUJsb2NrZWQiLA0KICAgICAgICAiVmVyaWZpZXJIYW5kbGVzR3JhbnRlZCIsDQogICAgICAgICJWZXJpZmllclNhbmRib3hWYWxpZGF0ZWQiLA0KICAgICAgICAiU3RhZ2VQcmVwYXJlZCIsDQogICAgICAgICJTdGFnZUNvbW1pdHRlZCIsDQogICAgICAgICJSZWxlYXNlQXJtZWQiLA0KICAgICAgICAiUmVsZWFzZVNlbnQiLA0KICAgICAgICAiUmVsZWFzZUFjY2VwdGVkIiwNCiAgICAgICAgIk1lZGlhQXR0YWNoZWQiLA0KICAgICAgICAiTWVkaWFWYWxpZGF0ZWQiLA0KICAgICAgICAiV29ya2VySGVsbG8iLA0KICAgICAgICAiQ2hhbGxlbmdlSXNzdWVkIiwNCiAgICAgICAgIlNlYXRSZWFkeSIsDQogICAgICAgICJDYW5kaWRhdGVUb2tlbkF0dGVzdGVkIiwNCiAgICAgICAgIkNoYWxsZW5nZUJvdW5kIiwNCiAgICAgICAgIlN0YW5kYXJkSGFuZGxlQnVuZGxlUHJlcGFyZWQiLA0KICAgICAgICAiTGF1bmNoQXV0aG9yaXplZCIsDQogICAgICAgICJBdXRob3JpemF0aW9uUHJlcGFyZWQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblNlbnQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblN0b3JlZCIsDQogICAgICAgICJDcmVhdGluZyIsDQogICAgICAgICJDcmVhdGVJbnRlbnRBY2tub3dsZWRnZWQiLA0KICAgICAgICAiQ3JlYXRlSXNzdWVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZVByb3Zpc2lvbmVkIiwNCiAgICAgICAgIkNyZWF0ZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlUHJvdmlzaW9uaW5nQWNjZXB0ZWQiLA0KICAgICAgICAiQXR0YWNobWVudFJlc3VtZUFybWVkIiwNCiAgICAgICAgIkF0dGFjaG1lbnRSZXN1bWVkIiwNCiAgICAgICAgIkF0dGFjaG1lbnRQaXBlQXV0aGVudGljYXRlZCIsDQogICAgICAgICJKb2luZWRBdHRhY2htZW50T2JzZXJ2ZWQiLA0KICAgICAgICAiQm9vdHN0cmFwRGV0YWNoQXJtZWQiLA0KICAgICAgICAiQm9vdHN0cmFwRGV0YWNoZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlT25seU9ic2VydmVkIiwNCiAgICAgICAgIlJ1bnRpbWVPYnNlcnZhdGlvbkNvbW1pdHRlZCIsDQogICAgICAgICJDb21waWxhdGlvblByZXBhcmVkIiwNCiAgICAgICAgIkluUHJvY2Vzc1Jvc2x5bkVudGVyZWQiLA0KICAgICAgICAiSW5Qcm9jZXNzUm9zbHluQ29tcGxldGVkIiwNCiAgICAgICAgIkluTWVtb3J5QXJ0aWZhY3RWZXJpZmllZCIsDQogICAgICAgICJNb2R1bGVMb2FkZWQiLA0KICAgICAgICAiUnVubmluZyIsDQogICAgICAgICJDb21wbGV0aW9uUHJvcG9zZWQiLA0KICAgICAgICAiQ29tcGxldGlvbkFjY2VwdGVkIiwNCiAgICAgICAgIkNvbXBsZXRpb25SZWxlYXNlQXJtZWQiLA0KICAgICAgICAiQ29tcGxldGlvblJlbGVhc2VTZW50IiwNCiAgICAgICAgIkNhbmRpZGF0ZUFjY2VwdGFuY2VBY2tub3dsZWRnZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlRXhpdE9ic2VydmVkIiwNCiAgICAgICAgIlNlYXRKb2JRdWllc2NlZCIsDQogICAgICAgICJCb290c3RyYXBFeGl0QXV0aG9yaXplZCIsDQogICAgICAgICJDb25ob3N0VGVhcmRvd25XYWl0aW5nIiwNCiAgICAgICAgIldvcmtlclNpZ25pbmdLZXlDbG9zZUFybWVkIiwNCiAgICAgICAgIldvcmtlckV4aXRPYnNlcnZlZCIsDQogICAgICAgICJDb21wbGV0ZSIsDQogICAgICAgICJWbVF1aWVzY2VkIiwNCiAgICAgICAgIkxlYXNlUmVsZWFzZWQiLA0KICAgICAgICAiQ2xlYW51cE11dGV4UmVsZWFzZWQiDQogICAgICBdDQogICAgfSwNCiAgICB7DQogICAgICAibmFtZSI6ICJOb25JbnRlcmFjdGl2ZVBTNSIsDQogICAgICAicHJvZmlsZSI6ICJOb25JbnRlcmFjdGl2ZUVsZXZhdGVkIiwNCiAgICAgICJzdGF0ZXMiOiBbDQogICAgICAgICJMZWFzZUFjcXVpcmVkIiwNCiAgICAgICAgIklzb2xhdGlvbkNvbW1pdHRlZCIsDQogICAgICAgICJUcmFuc3BvcnRMaXN0ZW5pbmciLA0KICAgICAgICAiQnJva2VyVHJhbnNwb3J0TGlzdGVuaW5nIiwNCiAgICAgICAgIlZtUmVzdG9yZWQiLA0KICAgICAgICAiQnJva2VyVHJhbnNwb3J0QXV0aGVudGljYXRlZCIsDQogICAgICAgICJUcmFuc3BvcnRBdXRoZW50aWNhdGVkIiwNCiAgICAgICAgIlNlcnZpY2VMYXVuY2hBdHRlc3RlZCIsDQogICAgICAgICJTdGFnZUJ1aWxkQXJtZWQiLA0KICAgICAgICAiU2FuZGJveFBvbGljeUluc3RhbGxlZCIsDQogICAgICAgICJCdWlsZGVyQ3JlYXRlZFN1c3BlbmRlZCIsDQogICAgICAgICJCdWlsZGVyUHJvYmVSdW5uaW5nIiwNCiAgICAgICAgIkJ1aWxkZXJQcm9iZUJsb2NrZWQiLA0KICAgICAgICAiQnVpbGRlckhhbmRsZXNHcmFudGVkIiwNCiAgICAgICAgIkJ1aWxkZXJTYW5kYm94VmFsaWRhdGVkIiwNCiAgICAgICAgIklzb0J1aWxkZXJSdW5uaW5nIiwNCiAgICAgICAgIlZlcmlmaWVyQ3JlYXRlZFN1c3BlbmRlZCIsDQogICAgICAgICJWZXJpZmllclByb2JlUnVubmluZyIsDQogICAgICAgICJWZXJpZmllclByb2JlQmxvY2tlZCIsDQogICAgICAgICJWZXJpZmllckhhbmRsZXNHcmFudGVkIiwNCiAgICAgICAgIlZlcmlmaWVyU2FuZGJveFZhbGlkYXRlZCIsDQogICAgICAgICJTdGFnZVByZXBhcmVkIiwNCiAgICAgICAgIlN0YWdlQ29tbWl0dGVkIiwNCiAgICAgICAgIlJlbGVhc2VBcm1lZCIsDQogICAgICAgICJSZWxlYXNlU2VudCIsDQogICAgICAgICJSZWxlYXNlQWNjZXB0ZWQiLA0KICAgICAgICAiTWVkaWFBdHRhY2hlZCIsDQogICAgICAgICJNZWRpYVZhbGlkYXRlZCIsDQogICAgICAgICJXb3JrZXJIZWxsbyIsDQogICAgICAgICJOb25JbnRlcmFjdGl2ZUNoYWxsZW5nZUlzc3VlZCIsDQogICAgICAgICJUb2tlbk1pbnRBdXRob3JpemVkIiwNCiAgICAgICAgIlRva2VuTWludEluc3RhbGxTYW1wbGVBY2NlcHRlZCIsDQogICAgICAgICJUb2tlbk1pbnREZWFkbGluZUF1dGhvcml6ZWQiLA0KICAgICAgICAiTG9jYWxUcmFuc2NyaXB0U2VhbGVkIiwNCiAgICAgICAgIkxvY2FsVHJhbnNjcmlwdFJvb3RBY2NlcHRlZCIsDQogICAgICAgICJDYW5kaWRhdGVBY2Nlc3NQcm9iZUF0dGVzdGVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZVRva2VuQXR0ZXN0ZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlTGF1bmNoQXV0aG9yaXR5Qm91bmQiLA0KICAgICAgICAiQ2hhbGxlbmdlQm91bmQiLA0KICAgICAgICAiTGF1bmNoQXV0aG9yaXplZCIsDQogICAgICAgICJBdXRob3JpemF0aW9uUHJlcGFyZWQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblNlbnQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblN0b3JlZCIsDQogICAgICAgICJDcmVhdGluZyIsDQogICAgICAgICJDcmVhdGVJbnRlbnRBY2tub3dsZWRnZWQiLA0KICAgICAgICAiQ3JlYXRlSXNzdWVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZVByb3Zpc2lvbmVkIiwNCiAgICAgICAgIkNyZWF0ZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlUHJvdmlzaW9uaW5nQWNjZXB0ZWQiLA0KICAgICAgICAiUmVzdW1lSXNzdWVkIiwNCiAgICAgICAgIkNvbXBpbGF0aW9uUHJlcGFyZWQiLA0KICAgICAgICAiQ29kZURvbUludm9rZUFybWVkIiwNCiAgICAgICAgIkNvbXBpbGVyT2JzZXJ2ZWQiLA0KICAgICAgICAiQ29tcGlsZXJFeGl0ZWQiLA0KICAgICAgICAiRmlsZUJhY2tlZEFydGlmYWN0VmVyaWZpZWQiLA0KICAgICAgICAiTW9kdWxlTG9hZGVkIiwNCiAgICAgICAgIlJ1bm5pbmciLA0KICAgICAgICAiQ29tcGxldGlvblByb3Bvc2VkIiwNCiAgICAgICAgIkNvbXBsZXRpb25BY2NlcHRlZCIsDQogICAgICAgICJXb3JrZXJEcmFpbmVkIiwNCiAgICAgICAgIldvcmtlclNpZ25pbmdLZXlDbG9zZUFybWVkIiwNCiAgICAgICAgIldvcmtlckFwcEVvZk9ic2VydmVkIiwNCiAgICAgICAgIldvcmtlckV4aXRPYnNlcnZlZCIsDQogICAgICAgICJDb21wbGV0ZSIsDQogICAgICAgICJWbVF1aWVzY2VkIiwNCiAgICAgICAgIkxlYXNlUmVsZWFzZWQiLA0KICAgICAgICAiQ2xlYW51cE11dGV4UmVsZWFzZWQiDQogICAgICBdDQogICAgfSwNCiAgICB7DQogICAgICAibmFtZSI6ICJOb25JbnRlcmFjdGl2ZVBTNyIsDQogICAgICAicHJvZmlsZSI6ICJOb25JbnRlcmFjdGl2ZUVsZXZhdGVkIiwNCiAgICAgICJzdGF0ZXMiOiBbDQogICAgICAgICJMZWFzZUFjcXVpcmVkIiwNCiAgICAgICAgIklzb2xhdGlvbkNvbW1pdHRlZCIsDQogICAgICAgICJUcmFuc3BvcnRMaXN0ZW5pbmciLA0KICAgICAgICAiQnJva2VyVHJhbnNwb3J0TGlzdGVuaW5nIiwNCiAgICAgICAgIlZtUmVzdG9yZWQiLA0KICAgICAgICAiQnJva2VyVHJhbnNwb3J0QXV0aGVudGljYXRlZCIsDQogICAgICAgICJUcmFuc3BvcnRBdXRoZW50aWNhdGVkIiwNCiAgICAgICAgIlNlcnZpY2VMYXVuY2hBdHRlc3RlZCIsDQogICAgICAgICJTdGFnZUJ1aWxkQXJtZWQiLA0KICAgICAgICAiU2FuZGJveFBvbGljeUluc3RhbGxlZCIsDQogICAgICAgICJCdWlsZGVyQ3JlYXRlZFN1c3BlbmRlZCIsDQogICAgICAgICJCdWlsZGVyUHJvYmVSdW5uaW5nIiwNCiAgICAgICAgIkJ1aWxkZXJQcm9iZUJsb2NrZWQiLA0KICAgICAgICAiQnVpbGRlckhhbmRsZXNHcmFudGVkIiwNCiAgICAgICAgIkJ1aWxkZXJTYW5kYm94VmFsaWRhdGVkIiwNCiAgICAgICAgIklzb0J1aWxkZXJSdW5uaW5nIiwNCiAgICAgICAgIlZlcmlmaWVyQ3JlYXRlZFN1c3BlbmRlZCIsDQogICAgICAgICJWZXJpZmllclByb2JlUnVubmluZyIsDQogICAgICAgICJWZXJpZmllclByb2JlQmxvY2tlZCIsDQogICAgICAgICJWZXJpZmllckhhbmRsZXNHcmFudGVkIiwNCiAgICAgICAgIlZlcmlmaWVyU2FuZGJveFZhbGlkYXRlZCIsDQogICAgICAgICJTdGFnZVByZXBhcmVkIiwNCiAgICAgICAgIlN0YWdlQ29tbWl0dGVkIiwNCiAgICAgICAgIlJlbGVhc2VBcm1lZCIsDQogICAgICAgICJSZWxlYXNlU2VudCIsDQogICAgICAgICJSZWxlYXNlQWNjZXB0ZWQiLA0KICAgICAgICAiTWVkaWFBdHRhY2hlZCIsDQogICAgICAgICJNZWRpYVZhbGlkYXRlZCIsDQogICAgICAgICJXb3JrZXJIZWxsbyIsDQogICAgICAgICJOb25JbnRlcmFjdGl2ZUNoYWxsZW5nZUlzc3VlZCIsDQogICAgICAgICJUb2tlbk1pbnRBdXRob3JpemVkIiwNCiAgICAgICAgIlRva2VuTWludEluc3RhbGxTYW1wbGVBY2NlcHRlZCIsDQogICAgICAgICJUb2tlbk1pbnREZWFkbGluZUF1dGhvcml6ZWQiLA0KICAgICAgICAiTG9jYWxUcmFuc2NyaXB0U2VhbGVkIiwNCiAgICAgICAgIkxvY2FsVHJhbnNjcmlwdFJvb3RBY2NlcHRlZCIsDQogICAgICAgICJDYW5kaWRhdGVBY2Nlc3NQcm9iZUF0dGVzdGVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZVRva2VuQXR0ZXN0ZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlTGF1bmNoQXV0aG9yaXR5Qm91bmQiLA0KICAgICAgICAiQ2hhbGxlbmdlQm91bmQiLA0KICAgICAgICAiTGF1bmNoQXV0aG9yaXplZCIsDQogICAgICAgICJBdXRob3JpemF0aW9uUHJlcGFyZWQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblNlbnQiLA0KICAgICAgICAiQXV0aG9yaXphdGlvblN0b3JlZCIsDQogICAgICAgICJDcmVhdGluZyIsDQogICAgICAgICJDcmVhdGVJbnRlbnRBY2tub3dsZWRnZWQiLA0KICAgICAgICAiQ3JlYXRlSXNzdWVkIiwNCiAgICAgICAgIkNhbmRpZGF0ZVByb3Zpc2lvbmVkIiwNCiAgICAgICAgIkNyZWF0ZWQiLA0KICAgICAgICAiQ2FuZGlkYXRlUHJvdmlzaW9uaW5nQWNjZXB0ZWQiLA0KICAgICAgICAiUmVzdW1lSXNzdWVkIiwNCiAgICAgICAgIkNvbXBpbGF0aW9uUHJlcGFyZWQiLA0KICAgICAgICAiSW5Qcm9jZXNzUm9zbHluRW50ZXJlZCIsDQogICAgICAgICJJblByb2Nlc3NSb3NseW5Db21wbGV0ZWQiLA0KICAgICAgICAiSW5NZW1vcnlBcnRpZmFjdFZlcmlmaWVkIiwNCiAgICAgICAgIk1vZHVsZUxvYWRlZCIsDQogICAgICAgICJSdW5uaW5nIiwNCiAgICAgICAgIkNvbXBsZXRpb25Qcm9wb3NlZCIsDQogICAgICAgICJDb21wbGV0aW9uQWNjZXB0ZWQiLA0KICAgICAgICAiV29ya2VyRHJhaW5lZCIsDQogICAgICAgICJXb3JrZXJTaWduaW5nS2V5Q2xvc2VBcm1lZCIsDQogICAgICAgICJXb3JrZXJBcHBFb2ZPYnNlcnZlZCIsDQogICAgICAgICJXb3JrZXJFeGl0T2JzZXJ2ZWQiLA0KICAgICAgICAiQ29tcGxldGUiLA0KICAgICAgICAiVm1RdWllc2NlZCIsDQogICAgICAgICJMZWFzZVJlbGVhc2VkIiwNCiAgICAgICAgIkNsZWFudXBNdXRleFJlbGVhc2VkIg0KICAgICAgXQ0KICAgIH0NCiAgXSwNCiAgInRvdGFsU3RhdGVzIjogNDIxLjAsDQogICJ0b3RhbFNjaGVkdWxlUm93cyI6IDg0Mi4wDQp9DQo=",
+  "lifecycle": {
+    "schemaVersion": 1,
+    "schemaId": "PspktProtocolLifecycleVariantsR8",
+    "sourceR6Sha256": "6cfd8953c7cbcf9ee28634bd892c697df86dd43094233776b1aa9a31ddd7d241",
+    "sourceOverlaySha256": "9b3bd129f1e7c0d89f7ecafbe42284b45bebe0676cac1c5bca1ea3529e9bf904",
+    "variantOrder": [
+      "InteractiveWindowsTerminalPS5",
+      "InteractiveWindowsTerminalPS7",
+      "InteractiveConhostPS5",
+      "InteractiveConhostPS7",
+      "NonInteractivePS5",
+      "NonInteractivePS7"
+    ],
+    "variants": [
+      {
+        "name": "InteractiveWindowsTerminalPS5",
+        "profile": "InteractiveSeat",
+        "states": [
+          "LeaseAcquired",
+          "IsolationCommitted",
+          "TransportListening",
+          "VmRestored",
+          "TransportAuthenticated",
+          "InteractiveLaunchAttested",
+          "StageBuildArmed",
+          "SandboxPolicyInstalled",
+          "BuilderCreatedSuspended",
+          "BuilderProbeRunning",
+          "BuilderProbeBlocked",
+          "BuilderHandlesGranted",
+          "BuilderSandboxValidated",
+          "IsoBuilderRunning",
+          "VerifierCreatedSuspended",
+          "VerifierProbeRunning",
+          "VerifierProbeBlocked",
+          "VerifierHandlesGranted",
+          "VerifierSandboxValidated",
+          "StagePrepared",
+          "StageCommitted",
+          "ReleaseArmed",
+          "ReleaseSent",
+          "ReleaseAccepted",
+          "MediaAttached",
+          "MediaValidated",
+          "WorkerHello",
+          "ChallengeIssued",
+          "SeatReady",
+          "CandidateTokenAttested",
+          "ChallengeBound",
+          "StandardHandleBundlePrepared",
+          "LaunchAuthorized",
+          "AuthorizationPrepared",
+          "AuthorizationSent",
+          "AuthorizationStored",
+          "Creating",
+          "CreateIntentAcknowledged",
+          "CreateIssued",
+          "CandidateProvisioned",
+          "Created",
+          "CandidateProvisioningAccepted",
+          "AttachmentResumeArmed",
+          "AttachmentResumed",
+          "AttachmentPipeAuthenticated",
+          "JoinedAttachmentObserved",
+          "BootstrapDetachArmed",
+          "BootstrapDetached",
+          "CandidateOnlyObserved",
+          "RuntimeObservationCommitted",
+          "CompilationPrepared",
+          "CodeDomInvokeArmed",
+          "CompilerObserved",
+          "CompilerExited",
+          "FileBackedArtifactVerified",
+          "ModuleLoaded",
+          "Running",
+          "CompletionProposed",
+          "CompletionAccepted",
+          "CompletionReleaseArmed",
+          "CompletionReleaseSent",
+          "CandidateAcceptanceAcknowledged",
+          "CandidateExitObserved",
+          "SeatJobQuiesced",
+          "BootstrapExitAuthorized",
+          "BootstrapExitObserved",
+          "TerminalPlatformQuiesced",
+          "WorkerSigningKeyCloseArmed",
+          "WorkerExitObserved",
+          "Complete",
+          "VmQuiesced",
+          "LeaseReleased",
+          "CleanupMutexReleased"
+        ]
+      },
+      {
+        "name": "InteractiveWindowsTerminalPS7",
+        "profile": "InteractiveSeat",
+        "states": [
+          "LeaseAcquired",
+          "IsolationCommitted",
+          "TransportListening",
+          "VmRestored",
+          "TransportAuthenticated",
+          "InteractiveLaunchAttested",
+          "StageBuildArmed",
+          "SandboxPolicyInstalled",
+          "BuilderCreatedSuspended",
+          "BuilderProbeRunning",
+          "BuilderProbeBlocked",
+          "BuilderHandlesGranted",
+          "BuilderSandboxValidated",
+          "IsoBuilderRunning",
+          "VerifierCreatedSuspended",
+          "VerifierProbeRunning",
+          "VerifierProbeBlocked",
+          "VerifierHandlesGranted",
+          "VerifierSandboxValidated",
+          "StagePrepared",
+          "StageCommitted",
+          "ReleaseArmed",
+          "ReleaseSent",
+          "ReleaseAccepted",
+          "MediaAttached",
+          "MediaValidated",
+          "WorkerHello",
+          "ChallengeIssued",
+          "SeatReady",
+          "CandidateTokenAttested",
+          "ChallengeBound",
+          "StandardHandleBundlePrepared",
+          "LaunchAuthorized",
+          "AuthorizationPrepared",
+          "AuthorizationSent",
+          "AuthorizationStored",
+          "Creating",
+          "CreateIntentAcknowledged",
+          "CreateIssued",
+          "CandidateProvisioned",
+          "Created",
+          "CandidateProvisioningAccepted",
+          "AttachmentResumeArmed",
+          "AttachmentResumed",
+          "AttachmentPipeAuthenticated",
+          "JoinedAttachmentObserved",
+          "BootstrapDetachArmed",
+          "BootstrapDetached",
+          "CandidateOnlyObserved",
+          "RuntimeObservationCommitted",
+          "CompilationPrepared",
+          "InProcessRoslynEntered",
+          "InProcessRoslynCompleted",
+          "InMemoryArtifactVerified",
+          "ModuleLoaded",
+          "Running",
+          "CompletionProposed",
+          "CompletionAccepted",
+          "CompletionReleaseArmed",
+          "CompletionReleaseSent",
+          "CandidateAcceptanceAcknowledged",
+          "CandidateExitObserved",
+          "SeatJobQuiesced",
+          "BootstrapExitAuthorized",
+          "BootstrapExitObserved",
+          "TerminalPlatformQuiesced",
+          "WorkerSigningKeyCloseArmed",
+          "WorkerExitObserved",
+          "Complete",
+          "VmQuiesced",
+          "LeaseReleased",
+          "CleanupMutexReleased"
+        ]
+      },
+      {
+        "name": "InteractiveConhostPS5",
+        "profile": "InteractiveSeat",
+        "states": [
+          "LeaseAcquired",
+          "IsolationCommitted",
+          "TransportListening",
+          "VmRestored",
+          "TransportAuthenticated",
+          "InteractiveLaunchAttested",
+          "StageBuildArmed",
+          "SandboxPolicyInstalled",
+          "BuilderCreatedSuspended",
+          "BuilderProbeRunning",
+          "BuilderProbeBlocked",
+          "BuilderHandlesGranted",
+          "BuilderSandboxValidated",
+          "IsoBuilderRunning",
+          "VerifierCreatedSuspended",
+          "VerifierProbeRunning",
+          "VerifierProbeBlocked",
+          "VerifierHandlesGranted",
+          "VerifierSandboxValidated",
+          "StagePrepared",
+          "StageCommitted",
+          "ReleaseArmed",
+          "ReleaseSent",
+          "ReleaseAccepted",
+          "MediaAttached",
+          "MediaValidated",
+          "WorkerHello",
+          "ChallengeIssued",
+          "SeatReady",
+          "CandidateTokenAttested",
+          "ChallengeBound",
+          "StandardHandleBundlePrepared",
+          "LaunchAuthorized",
+          "AuthorizationPrepared",
+          "AuthorizationSent",
+          "AuthorizationStored",
+          "Creating",
+          "CreateIntentAcknowledged",
+          "CreateIssued",
+          "CandidateProvisioned",
+          "Created",
+          "CandidateProvisioningAccepted",
+          "AttachmentResumeArmed",
+          "AttachmentResumed",
+          "AttachmentPipeAuthenticated",
+          "JoinedAttachmentObserved",
+          "BootstrapDetachArmed",
+          "BootstrapDetached",
+          "CandidateOnlyObserved",
+          "RuntimeObservationCommitted",
+          "CompilationPrepared",
+          "CodeDomInvokeArmed",
+          "CompilerObserved",
+          "CompilerExited",
+          "FileBackedArtifactVerified",
+          "ModuleLoaded",
+          "Running",
+          "CompletionProposed",
+          "CompletionAccepted",
+          "CompletionReleaseArmed",
+          "CompletionReleaseSent",
+          "CandidateAcceptanceAcknowledged",
+          "CandidateExitObserved",
+          "SeatJobQuiesced",
+          "BootstrapExitAuthorized",
+          "ConhostTeardownWaiting",
+          "WorkerSigningKeyCloseArmed",
+          "WorkerExitObserved",
+          "Complete",
+          "VmQuiesced",
+          "LeaseReleased",
+          "CleanupMutexReleased"
+        ]
+      },
+      {
+        "name": "InteractiveConhostPS7",
+        "profile": "InteractiveSeat",
+        "states": [
+          "LeaseAcquired",
+          "IsolationCommitted",
+          "TransportListening",
+          "VmRestored",
+          "TransportAuthenticated",
+          "InteractiveLaunchAttested",
+          "StageBuildArmed",
+          "SandboxPolicyInstalled",
+          "BuilderCreatedSuspended",
+          "BuilderProbeRunning",
+          "BuilderProbeBlocked",
+          "BuilderHandlesGranted",
+          "BuilderSandboxValidated",
+          "IsoBuilderRunning",
+          "VerifierCreatedSuspended",
+          "VerifierProbeRunning",
+          "VerifierProbeBlocked",
+          "VerifierHandlesGranted",
+          "VerifierSandboxValidated",
+          "StagePrepared",
+          "StageCommitted",
+          "ReleaseArmed",
+          "ReleaseSent",
+          "ReleaseAccepted",
+          "MediaAttached",
+          "MediaValidated",
+          "WorkerHello",
+          "ChallengeIssued",
+          "SeatReady",
+          "CandidateTokenAttested",
+          "ChallengeBound",
+          "StandardHandleBundlePrepared",
+          "LaunchAuthorized",
+          "AuthorizationPrepared",
+          "AuthorizationSent",
+          "AuthorizationStored",
+          "Creating",
+          "CreateIntentAcknowledged",
+          "CreateIssued",
+          "CandidateProvisioned",
+          "Created",
+          "CandidateProvisioningAccepted",
+          "AttachmentResumeArmed",
+          "AttachmentResumed",
+          "AttachmentPipeAuthenticated",
+          "JoinedAttachmentObserved",
+          "BootstrapDetachArmed",
+          "BootstrapDetached",
+          "CandidateOnlyObserved",
+          "RuntimeObservationCommitted",
+          "CompilationPrepared",
+          "InProcessRoslynEntered",
+          "InProcessRoslynCompleted",
+          "InMemoryArtifactVerified",
+          "ModuleLoaded",
+          "Running",
+          "CompletionProposed",
+          "CompletionAccepted",
+          "CompletionReleaseArmed",
+          "CompletionReleaseSent",
+          "CandidateAcceptanceAcknowledged",
+          "CandidateExitObserved",
+          "SeatJobQuiesced",
+          "BootstrapExitAuthorized",
+          "ConhostTeardownWaiting",
+          "WorkerSigningKeyCloseArmed",
+          "WorkerExitObserved",
+          "Complete",
+          "VmQuiesced",
+          "LeaseReleased",
+          "CleanupMutexReleased"
+        ]
+      },
+      {
+        "name": "NonInteractivePS5",
+        "profile": "NonInteractiveElevated",
+        "states": [
+          "LeaseAcquired",
+          "IsolationCommitted",
+          "TransportListening",
+          "BrokerTransportListening",
+          "VmRestored",
+          "BrokerTransportAuthenticated",
+          "TransportAuthenticated",
+          "ServiceLaunchAttested",
+          "StageBuildArmed",
+          "SandboxPolicyInstalled",
+          "BuilderCreatedSuspended",
+          "BuilderProbeRunning",
+          "BuilderProbeBlocked",
+          "BuilderHandlesGranted",
+          "BuilderSandboxValidated",
+          "IsoBuilderRunning",
+          "VerifierCreatedSuspended",
+          "VerifierProbeRunning",
+          "VerifierProbeBlocked",
+          "VerifierHandlesGranted",
+          "VerifierSandboxValidated",
+          "StagePrepared",
+          "StageCommitted",
+          "ReleaseArmed",
+          "ReleaseSent",
+          "ReleaseAccepted",
+          "MediaAttached",
+          "MediaValidated",
+          "WorkerHello",
+          "NonInteractiveChallengeIssued",
+          "TokenMintAuthorized",
+          "TokenMintInstallSampleAccepted",
+          "TokenMintDeadlineAuthorized",
+          "LocalTranscriptSealed",
+          "LocalTranscriptRootAccepted",
+          "CandidateAccessProbeAttested",
+          "CandidateTokenAttested",
+          "CandidateLaunchAuthorityBound",
+          "ChallengeBound",
+          "LaunchAuthorized",
+          "AuthorizationPrepared",
+          "AuthorizationSent",
+          "AuthorizationStored",
+          "Creating",
+          "CreateIntentAcknowledged",
+          "CreateIssued",
+          "CandidateProvisioned",
+          "Created",
+          "CandidateProvisioningAccepted",
+          "ResumeIssued",
+          "CompilationPrepared",
+          "CodeDomInvokeArmed",
+          "CompilerObserved",
+          "CompilerExited",
+          "FileBackedArtifactVerified",
+          "ModuleLoaded",
+          "Running",
+          "CompletionProposed",
+          "CompletionAccepted",
+          "WorkerDrained",
+          "WorkerSigningKeyCloseArmed",
+          "WorkerAppEofObserved",
+          "WorkerExitObserved",
+          "Complete",
+          "VmQuiesced",
+          "LeaseReleased",
+          "CleanupMutexReleased"
+        ]
+      },
+      {
+        "name": "NonInteractivePS7",
+        "profile": "NonInteractiveElevated",
+        "states": [
+          "LeaseAcquired",
+          "IsolationCommitted",
+          "TransportListening",
+          "BrokerTransportListening",
+          "VmRestored",
+          "BrokerTransportAuthenticated",
+          "TransportAuthenticated",
+          "ServiceLaunchAttested",
+          "StageBuildArmed",
+          "SandboxPolicyInstalled",
+          "BuilderCreatedSuspended",
+          "BuilderProbeRunning",
+          "BuilderProbeBlocked",
+          "BuilderHandlesGranted",
+          "BuilderSandboxValidated",
+          "IsoBuilderRunning",
+          "VerifierCreatedSuspended",
+          "VerifierProbeRunning",
+          "VerifierProbeBlocked",
+          "VerifierHandlesGranted",
+          "VerifierSandboxValidated",
+          "StagePrepared",
+          "StageCommitted",
+          "ReleaseArmed",
+          "ReleaseSent",
+          "ReleaseAccepted",
+          "MediaAttached",
+          "MediaValidated",
+          "WorkerHello",
+          "NonInteractiveChallengeIssued",
+          "TokenMintAuthorized",
+          "TokenMintInstallSampleAccepted",
+          "TokenMintDeadlineAuthorized",
+          "LocalTranscriptSealed",
+          "LocalTranscriptRootAccepted",
+          "CandidateAccessProbeAttested",
+          "CandidateTokenAttested",
+          "CandidateLaunchAuthorityBound",
+          "ChallengeBound",
+          "LaunchAuthorized",
+          "AuthorizationPrepared",
+          "AuthorizationSent",
+          "AuthorizationStored",
+          "Creating",
+          "CreateIntentAcknowledged",
+          "CreateIssued",
+          "CandidateProvisioned",
+          "Created",
+          "CandidateProvisioningAccepted",
+          "ResumeIssued",
+          "CompilationPrepared",
+          "InProcessRoslynEntered",
+          "InProcessRoslynCompleted",
+          "InMemoryArtifactVerified",
+          "ModuleLoaded",
+          "Running",
+          "CompletionProposed",
+          "CompletionAccepted",
+          "WorkerDrained",
+          "WorkerSigningKeyCloseArmed",
+          "WorkerAppEofObserved",
+          "WorkerExitObserved",
+          "Complete",
+          "VmQuiesced",
+          "LeaseReleased",
+          "CleanupMutexReleased"
+        ]
+      }
+    ]
+  },
+  "unionMappings": [
+    {
+      "union": "LaunchFenceGate",
+      "discriminator": "LaunchFenceKind",
+      "branches": [
+        {
+          "semanticLabel": "Prepared",
+          "value": 0,
+          "emittedIdentifier": "LaunchFencePreparedV1"
+        },
+        {
+          "semanticLabel": "Revoked",
+          "value": 1,
+          "emittedIdentifier": "LaunchFenceRevokedV1"
+        },
+        {
+          "semanticLabel": "Committed",
+          "value": 2,
+          "emittedIdentifier": "LaunchFenceCommittedV1"
+        },
+        {
+          "semanticLabel": "CreateIntentAcknowledged",
+          "value": 3,
+          "emittedIdentifier": "LaunchFenceCreateIntentAcknowledgedV1"
+        },
+        {
+          "semanticLabel": "RevokedBeforeCreate",
+          "value": 4,
+          "emittedIdentifier": "LaunchFenceRevokedBeforeCreateV1"
+        },
+        {
+          "semanticLabel": "CreateIssued",
+          "value": 5,
+          "emittedIdentifier": "LaunchFenceCreateIssuedV1"
+        },
+        {
+          "semanticLabel": "CreateDefinitivelyFailed",
+          "value": 6,
+          "emittedIdentifier": "LaunchFenceCreateDefinitivelyFailedV1"
+        },
+        {
+          "semanticLabel": "RevokedBeforeResume",
+          "value": 7,
+          "emittedIdentifier": "LaunchFenceRevokedBeforeResumeV1"
+        },
+        {
+          "semanticLabel": "ResumeIssued",
+          "value": 8,
+          "emittedIdentifier": "LaunchFenceResumeIssuedV1"
+        }
+      ]
+    },
+    {
+      "union": "CreatePermit",
+      "discriminator": "CreatePermitKind",
+      "branches": [
+        {
+          "semanticLabel": "Unused",
+          "value": 0,
+          "emittedIdentifier": "CreatePermitUnusedV1"
+        },
+        {
+          "semanticLabel": "Consumed",
+          "value": 1,
+          "emittedIdentifier": "CreatePermitConsumedV1"
+        },
+        {
+          "semanticLabel": "Revoked",
+          "value": 2,
+          "emittedIdentifier": "CreatePermitRevokedV1"
+        }
+      ]
+    },
+    {
+      "union": "AuthorizationLedgerRecord",
+      "discriminator": "AuthorizationLedgerKind",
+      "branches": [
+        {
+          "semanticLabel": "AuthorizationPrepared",
+          "value": 0,
+          "emittedIdentifier": "AuthorizationLedgerPreparedV1"
+        },
+        {
+          "semanticLabel": "AuthorizationSent",
+          "value": 1,
+          "emittedIdentifier": "AuthorizationLedgerSentV1"
+        },
+        {
+          "semanticLabel": "AuthorizationStored",
+          "value": 2,
+          "emittedIdentifier": "AuthorizationLedgerStoredV1"
+        },
+        {
+          "semanticLabel": "Creating",
+          "value": 3,
+          "emittedIdentifier": "AuthorizationLedgerCreatingV1"
+        },
+        {
+          "semanticLabel": "Created",
+          "value": 4,
+          "emittedIdentifier": "AuthorizationLedgerCreatedV1"
+        },
+        {
+          "semanticLabel": "Completed",
+          "value": 5,
+          "emittedIdentifier": "AuthorizationLedgerCompletedV1"
+        },
+        {
+          "semanticLabel": "CreateDefinitivelyFailed",
+          "value": 6,
+          "emittedIdentifier": "AuthorizationLedgerCreateDefinitivelyFailedV1"
+        },
+        {
+          "semanticLabel": "AbortedCreateDefinitivelyFailed",
+          "value": 7,
+          "emittedIdentifier": "AuthorizationLedgerAbortedCreateDefinitivelyFailedV1"
+        },
+        {
+          "semanticLabel": "RevokedBeforeCreate",
+          "value": 8,
+          "emittedIdentifier": "AuthorizationLedgerRevokedBeforeCreateV1"
+        },
+        {
+          "semanticLabel": "AbortedProvenNotCreated",
+          "value": 9,
+          "emittedIdentifier": "AuthorizationLedgerAbortedProvenNotCreatedV1"
+        },
+        {
+          "semanticLabel": "AbortedCreatedNeverResumed",
+          "value": 10,
+          "emittedIdentifier": "AuthorizationLedgerAbortedCreatedNeverResumedV1"
+        },
+        {
+          "semanticLabel": "AbortedAttachmentHandshake",
+          "value": 11,
+          "emittedIdentifier": "AuthorizationLedgerAbortedAttachmentHandshakeV1"
+        },
+        {
+          "semanticLabel": "AbortedResourcePreparationFailed",
+          "value": 12,
+          "emittedIdentifier": "AuthorizationLedgerAbortedResourcePreparationFailedV1"
+        },
+        {
+          "semanticLabel": "AbortedCompilationDefinitivelyFailed",
+          "value": 13,
+          "emittedIdentifier": "AuthorizationLedgerAbortedCompilationDefinitivelyFailedV1"
+        },
+        {
+          "semanticLabel": "AuthorizationOutcomeUnknown",
+          "value": 14,
+          "emittedIdentifier": "AuthorizationLedgerOutcomeUnknownV1"
+        },
+        {
+          "semanticLabel": "BurnedUnknown",
+          "value": 15,
+          "emittedIdentifier": "AuthorizationLedgerBurnedUnknownV1"
+        }
+      ]
+    },
+    {
+      "union": "OperationRecord",
+      "discriminator": "OperationRecordKind",
+      "branches": [
+        {
+          "semanticLabel": "Unseen",
+          "value": 0,
+          "emittedIdentifier": "OperationUnseenV1"
+        },
+        {
+          "semanticLabel": "Active",
+          "value": 1,
+          "emittedIdentifier": "OperationActiveV1"
+        },
+        {
+          "semanticLabel": "ActiveWithLaunchAuthority",
+          "value": 2,
+          "emittedIdentifier": "OperationActiveWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "Completed",
+          "value": 3,
+          "emittedIdentifier": "OperationCompletedV1"
+        },
+        {
+          "semanticLabel": "CompletedWithLaunchAuthority",
+          "value": 4,
+          "emittedIdentifier": "OperationCompletedWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "BurnedUnknown",
+          "value": 5,
+          "emittedIdentifier": "OperationBurnedUnknownV1"
+        },
+        {
+          "semanticLabel": "BurnedUnknownWithLaunchAuthority",
+          "value": 6,
+          "emittedIdentifier": "OperationBurnedUnknownWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "AbortedProvenNotCreated",
+          "value": 7,
+          "emittedIdentifier": "OperationAbortedProvenNotCreatedV1"
+        },
+        {
+          "semanticLabel": "AbortedProvenNotCreatedWithLaunchAuthority",
+          "value": 8,
+          "emittedIdentifier": "OperationAbortedProvenNotCreatedWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "AbortedCreateDefinitivelyFailed",
+          "value": 9,
+          "emittedIdentifier": "OperationAbortedCreateDefinitivelyFailedV1"
+        },
+        {
+          "semanticLabel": "AbortedCreateDefinitivelyFailedWithLaunchAuthority",
+          "value": 10,
+          "emittedIdentifier": "OperationAbortedCreateDefinitivelyFailedWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "AbortedCreatedNeverResumed",
+          "value": 11,
+          "emittedIdentifier": "OperationAbortedCreatedNeverResumedV1"
+        },
+        {
+          "semanticLabel": "AbortedCreatedNeverResumedWithLaunchAuthority",
+          "value": 12,
+          "emittedIdentifier": "OperationAbortedCreatedNeverResumedWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "AbortedAttachmentHandshake",
+          "value": 13,
+          "emittedIdentifier": "OperationAbortedAttachmentHandshakeV1"
+        },
+        {
+          "semanticLabel": "AbortedAttachmentHandshakeWithLaunchAuthority",
+          "value": 14,
+          "emittedIdentifier": "OperationAbortedAttachmentHandshakeWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "AbortedResourcePreparationFailed",
+          "value": 15,
+          "emittedIdentifier": "OperationAbortedResourcePreparationFailedV1"
+        },
+        {
+          "semanticLabel": "AbortedResourcePreparationFailedWithLaunchAuthority",
+          "value": 16,
+          "emittedIdentifier": "OperationAbortedResourcePreparationFailedWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "AbortedCompilationDefinitivelyFailed",
+          "value": 17,
+          "emittedIdentifier": "OperationAbortedCompilationDefinitivelyFailedV1"
+        },
+        {
+          "semanticLabel": "AbortedCompilationDefinitivelyFailedWithLaunchAuthority",
+          "value": 18,
+          "emittedIdentifier": "AbortedCompilationDefinitivelyFailedWithLaunchAuthority"
+        },
+        {
+          "semanticLabel": "BurnResolved",
+          "value": 19,
+          "emittedIdentifier": "OperationBurnResolvedV1"
+        },
+        {
+          "semanticLabel": "BurnResolvedWithLaunchAuthority",
+          "value": 20,
+          "emittedIdentifier": "OperationBurnResolvedWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "SuccessorAuthorizedPendingCapacity",
+          "value": 21,
+          "emittedIdentifier": "OperationSuccessorAuthorizedPendingCapacityV1"
+        },
+        {
+          "semanticLabel": "SuccessorAuthorizedPendingCapacityWithLaunchAuthority",
+          "value": 22,
+          "emittedIdentifier": "OperationSuccessorAuthorizedPendingCapacityWithLaunchAuthorityV1"
+        },
+        {
+          "semanticLabel": "BurnResolutionDeferred",
+          "value": 23,
+          "emittedIdentifier": "OperationBurnResolutionDeferredV1"
+        },
+        {
+          "semanticLabel": "BurnResolutionDeferredWithLaunchAuthority",
+          "value": 24,
+          "emittedIdentifier": "OperationBurnResolutionDeferredWithLaunchAuthorityV1"
+        }
+      ]
+    }
+  ],
+  "profileOrder": [
+    "InteractiveSeat",
+    "NonInteractiveElevated"
+  ],
+  "directionOrder": [
+    "HostToWorker",
+    "WorkerToHost"
+  ],
+  "deferredSeedTypeNames": [
+    "MintAttestedV1",
+    "S4UMintSlotV1",
+    "ServiceControlEventNodeProofV1"
+  ],
+  "deferredSeedMessageKeys": [
+    "BrokerControl:MintRevoked"
+  ],
+  "omittedTypeNames": [
+    "IsolationAdmission",
+    "IsolationExit",
+    "MintAttestedV1",
+    "S4UMintSlotV1",
+    "ServiceControlEventNodeProofV1"
+  ],
+  "omittedMessageKeys": [
+    "BrokerControl:IsolationAdmission",
+    "BrokerControl:IsolationExit",
+    "BrokerControl:MintAttested",
+    "BrokerControl:MintRevoked"
+  ],
+  "primitiveValueMaxima": {
+    "U8": 1,
+    "U16": 2,
+    "U32": 4,
+    "U64": 8,
+    "FILETIME": 8,
+    "QPC": 8,
+    "GUID": 16,
+    "Opaque16": 16,
+    "FixedAscii8": 8,
+    "SHA-256": 32,
+    "Opaque32": 32,
+    "AsciiIdentifier": 128,
+    "BinarySid": 68,
+    "Utf8Short": 256,
+    "Rsa3072PublicBlob": 512,
+    "Rsa3072Signature": 384,
+    "LUID": 8
+  },
+  "payloadMaxima": [
+    {
+      "name": "WorkerSessionKeyCertificateV1",
+      "profile": "InteractiveSeat",
+      "maxPayloadBytes": 1431
+    },
+    {
+      "name": "WorkerSessionKeyCertificateV1",
+      "profile": "NonInteractiveElevated",
+      "maxPayloadBytes": 1529
+    },
+    {
+      "name": "BootstrapWorkerContext",
+      "profile": "InteractiveSeat",
+      "maxPayloadBytes": 1958
+    },
+    {
+      "name": "BootstrapWorkerContext",
+      "profile": "NonInteractiveElevated",
+      "maxPayloadBytes": 2078
+    }
+  ],
+  "mandatoryCardinality": 1,
+  "maximumNamedDepth": 4,
+  "maximumTailRecords": 5535,
+  "maximumTailWrapperBytes": 29360128,
+  "excludedTailChannels": [
+    "BrokerControl",
+    "LocalIpc"
+  ],
+  "unassignedOverlayTypeIds": [
+    4872,
+    4873,
+    4875,
+    4876
+  ],
+  "reservedIllegalType": {
+    "name": "LocalTranscriptRecordSetV1",
+    "id": 4881
+  }
+}

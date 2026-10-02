@@ -1,0 +1,8 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/catalog/protocol-base.catalog.v1.json -text -eol -filter -ident -working-tree-encoding
+/catalog/overlay.catalog.v1.json -text -eol -filter -ident -working-tree-encoding
+/protocol-inventory.v1.json -text -eol -filter -ident -working-tree-encoding
+/protocol-schema.v1.json -text -eol -filter -ident -working-tree-encoding
+/generated-base-id-map.v1.json -text -eol -filter -ident -working-tree-encoding
+/protocol-message-association.v1.json -text -eol -filter -ident -working-tree-encoding
+/mandatory-tail-schedule.v1.json -text -eol -filter -ident -working-tree-encoding

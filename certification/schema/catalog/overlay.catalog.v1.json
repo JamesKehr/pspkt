@@ -1,0 +1,5459 @@
+{
+  "schemaVersion": 1,
+  "schemaId": "PspktProtocolOverlayCatalogV1",
+  "space": "protocol-overlay",
+  "entries": [
+    {
+      "op": "overlay-type",
+      "name": "TokenMintAuthorizationBodyV1",
+      "production": "Named",
+      "id": 4865
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "mintId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "mintId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "leaseId",
+      "id": 2,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "leaseActivationGeneration",
+      "id": 3,
+      "variants": [
+        {
+          "name": "leaseActivationGeneration",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "activationNonce",
+      "id": 4,
+      "variants": [
+        {
+          "name": "activationNonce",
+          "type": "Opaque32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "bootId",
+      "id": 5,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "checkpointId",
+      "id": 6,
+      "variants": [
+        {
+          "name": "checkpointId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "profile",
+      "id": 7,
+      "variants": [
+        {
+          "name": "profile",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "challengeId",
+      "id": 8,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "workerPid",
+      "id": 9,
+      "variants": [
+        {
+          "name": "workerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "workerCreationTime",
+      "id": 10,
+      "variants": [
+        {
+          "name": "workerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "brokerPid",
+      "id": 11,
+      "variants": [
+        {
+          "name": "brokerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "brokerCreationTime",
+      "id": 12,
+      "variants": [
+        {
+          "name": "brokerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "workerPrincipalEntryDigest",
+      "id": 13,
+      "variants": [
+        {
+          "name": "workerPrincipalEntryDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "candidatePrincipalEntryDigest",
+      "id": 14,
+      "variants": [
+        {
+          "name": "candidatePrincipalEntryDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "principalPolicyId",
+      "id": 15,
+      "variants": [
+        {
+          "name": "principalPolicyId",
+          "type": "AsciiIdentifier"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "principalPolicyBundleDigest",
+      "id": 16,
+      "variants": [
+        {
+          "name": "principalPolicyBundleDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "semanticDigest",
+      "id": 17,
+      "variants": [
+        {
+          "name": "semanticDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "stageDigest",
+      "id": 18,
+      "variants": [
+        {
+          "name": "stageDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "releaseId",
+      "id": 19,
+      "variants": [
+        {
+          "name": "releaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "mintSlotId",
+      "id": 20,
+      "variants": [
+        {
+          "name": "mintSlotId",
+          "type": "AsciiIdentifier"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "hostDeadlineFiletime",
+      "id": 21,
+      "variants": [
+        {
+          "name": "hostDeadlineFiletime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "maximumMintTtl100ns",
+      "id": 22,
+      "variants": [
+        {
+          "name": "maximumMintTtl100ns",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "remainingDuration100ns",
+      "id": 23,
+      "variants": [
+        {
+          "name": "remainingDuration100ns",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "TokenMintAuthorizationBodyV1",
+      "name": "revocationVersion",
+      "id": 24,
+      "variants": [
+        {
+          "name": "revocationVersion",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "S4UMintSlotV1",
+      "production": "Named",
+      "id": 4866
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "mintId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "mintId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "leaseId",
+      "id": 2,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "state",
+      "id": 3,
+      "variants": [
+        {
+          "name": "state",
+          "type": "U16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "authorizationBodyDigest",
+      "id": 4,
+      "variants": [
+        {
+          "name": "authorizationBodyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "workerPid",
+      "id": 5,
+      "variants": [
+        {
+          "name": "workerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "workerCreationTime",
+      "id": 6,
+      "variants": [
+        {
+          "name": "workerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "brokerPid",
+      "id": 7,
+      "variants": [
+        {
+          "name": "brokerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "brokerCreationTime",
+      "id": 8,
+      "variants": [
+        {
+          "name": "brokerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "arrivalSource",
+      "id": 9,
+      "variants": [
+        {
+          "name": "arrivalSource",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "localMintRequestFrameDigest",
+      "id": 10,
+      "variants": [
+        {
+          "name": "localMintRequestFrameDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "finalRestrictedTokenDigest",
+      "id": 11,
+      "variants": [
+        {
+          "name": "finalRestrictedTokenDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "candidateTokenPolicyDigest",
+      "id": 12,
+      "variants": [
+        {
+          "name": "candidateTokenPolicyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "duplicatedHandleValue",
+      "id": 13,
+      "variants": [
+        {
+          "name": "duplicatedHandleValue",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "mintResultDisposition",
+      "id": 14,
+      "variants": [
+        {
+          "name": "mintResultDisposition",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "localMintResultFrameDigest",
+      "id": 15,
+      "variants": [
+        {
+          "name": "localMintResultFrameDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "omittedResultDigest",
+      "id": 16,
+      "variants": [
+        {
+          "name": "omittedResultDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "localTranscriptDigest",
+      "id": 17,
+      "variants": [
+        {
+          "name": "localTranscriptDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "brokerInstallTime",
+      "id": 18,
+      "variants": [
+        {
+          "name": "brokerInstallTime",
+          "type": "QPC"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "brokerClockEra",
+      "id": 19,
+      "variants": [
+        {
+          "name": "brokerClockEra",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "brokerQpcFrequency",
+      "id": 20,
+      "variants": [
+        {
+          "name": "brokerQpcFrequency",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "remainingDuration100ns",
+      "id": 21,
+      "variants": [
+        {
+          "name": "remainingDuration100ns",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "brokerMintDeadline",
+      "id": 22,
+      "variants": [
+        {
+          "name": "brokerMintDeadline",
+          "type": "QPC"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "revocationVersion",
+      "id": 23,
+      "variants": [
+        {
+          "name": "revocationVersion",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "installSampleDigest",
+      "id": 24,
+      "variants": [
+        {
+          "name": "installSampleDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "deadlineAuthorizationDigest",
+      "id": 25,
+      "variants": [
+        {
+          "name": "deadlineAuthorizationDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "challengeId",
+      "id": 26,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "mintSlotId",
+      "id": 27,
+      "variants": [
+        {
+          "name": "mintSlotId",
+          "type": "AsciiIdentifier"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "S4UMintSlotV1",
+      "name": "liveCandidateAccessProbeDigest",
+      "id": 28,
+      "variants": [
+        {
+          "name": "liveCandidateAccessProbeDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "MintAttestedV1",
+      "production": "Named",
+      "id": 4867
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "mintId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "mintId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "authorizationBodyDigest",
+      "id": 2,
+      "variants": [
+        {
+          "name": "authorizationBodyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "finalRestrictedTokenDigest",
+      "id": 3,
+      "variants": [
+        {
+          "name": "finalRestrictedTokenDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "candidateTokenPolicyDigest",
+      "id": 4,
+      "variants": [
+        {
+          "name": "candidateTokenPolicyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "workerPid",
+      "id": 5,
+      "variants": [
+        {
+          "name": "workerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "workerCreationTime",
+      "id": 6,
+      "variants": [
+        {
+          "name": "workerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "workerPrincipalEntryDigest",
+      "id": 7,
+      "variants": [
+        {
+          "name": "workerPrincipalEntryDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "localMintResultFrameDigest",
+      "id": 8,
+      "variants": [
+        {
+          "name": "localMintResultFrameDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "localTranscriptDigest",
+      "id": 9,
+      "variants": [
+        {
+          "name": "localTranscriptDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "slotRecordDigest",
+      "id": 10,
+      "variants": [
+        {
+          "name": "slotRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "challengeId",
+      "id": 11,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "leaseId",
+      "id": 12,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "mintResultDisposition",
+      "id": 13,
+      "variants": [
+        {
+          "name": "mintResultDisposition",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "predecessorSlotRecordDigest",
+      "id": 14,
+      "variants": [
+        {
+          "name": "predecessorSlotRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "localTranscriptProofDigest",
+      "id": 15,
+      "variants": [
+        {
+          "name": "localTranscriptProofDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "omittedResultDigest",
+      "id": 16,
+      "variants": [
+        {
+          "name": "omittedResultDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "liveCandidateAccessProbeDigest",
+      "id": 17,
+      "variants": [
+        {
+          "name": "liveCandidateAccessProbeDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintAttestedV1",
+      "name": "liveCandidateAccessProbe",
+      "id": 18,
+      "variants": [
+        {
+          "name": "liveCandidateAccessProbe",
+          "type": "LiveCandidateAccessProbeV1"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "MintRevokedV1",
+      "production": "Named",
+      "id": 4868
+    },
+    {
+      "op": "field-set",
+      "parent": "MintRevokedV1",
+      "name": "mintId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "mintId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintRevokedV1",
+      "name": "authorizationBodyDigest",
+      "id": 2,
+      "variants": [
+        {
+          "name": "authorizationBodyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintRevokedV1",
+      "name": "revocationVersion",
+      "id": 3,
+      "variants": [
+        {
+          "name": "revocationVersion",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintRevokedV1",
+      "name": "leaseId",
+      "id": 4,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "MintRevokedV1",
+      "name": "challengeId",
+      "id": 5,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "ServiceLaunchProofV1",
+      "production": "Named",
+      "id": 4869
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "serviceName",
+      "id": 1,
+      "variants": [
+        {
+          "name": "serviceName",
+          "type": "AsciiIdentifier"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "serviceSid",
+      "id": 2,
+      "variants": [
+        {
+          "name": "serviceSid",
+          "type": "BinarySid"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "serviceConfigDigest",
+      "id": 3,
+      "variants": [
+        {
+          "name": "serviceConfigDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "workerPid",
+      "id": 4,
+      "variants": [
+        {
+          "name": "workerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "workerCreationTime",
+      "id": 5,
+      "variants": [
+        {
+          "name": "workerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "sessionId",
+      "id": 6,
+      "variants": [
+        {
+          "name": "sessionId",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "volumeSerialNumber",
+      "id": 7,
+      "variants": [
+        {
+          "name": "volumeSerialNumber",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "fileId128",
+      "id": 8,
+      "variants": [
+        {
+          "name": "fileId128",
+          "type": "Opaque16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "imageDigest",
+      "id": 9,
+      "variants": [
+        {
+          "name": "imageDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "imageSignerDigest",
+      "id": 10,
+      "variants": [
+        {
+          "name": "imageSignerDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "mappedImageProofDigest",
+      "id": 11,
+      "variants": [
+        {
+          "name": "mappedImageProofDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "incarnationCount",
+      "id": 12,
+      "variants": [
+        {
+          "name": "incarnationCount",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "scmAncestryDigest",
+      "id": 13,
+      "variants": [
+        {
+          "name": "scmAncestryDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "serviceControlEventNodeProofDigest",
+      "id": 14,
+      "variants": [
+        {
+          "name": "serviceControlEventNodeProofDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "processStartRecordDigest",
+      "id": 15,
+      "variants": [
+        {
+          "name": "processStartRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "leaseId",
+      "id": 16,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "bootId",
+      "id": 17,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "checkpointId",
+      "id": 18,
+      "variants": [
+        {
+          "name": "checkpointId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "profile",
+      "id": 19,
+      "variants": [
+        {
+          "name": "profile",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "localBrokerWorkerChannelId",
+      "id": 20,
+      "variants": [
+        {
+          "name": "localBrokerWorkerChannelId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "workerAppServiceId",
+      "id": 21,
+      "variants": [
+        {
+          "name": "workerAppServiceId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "brokerControlServiceId",
+      "id": 22,
+      "variants": [
+        {
+          "name": "brokerControlServiceId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "parentPid",
+      "id": 23,
+      "variants": [
+        {
+          "name": "parentPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceLaunchProofV1",
+      "name": "parentCreationTime",
+      "id": 24,
+      "variants": [
+        {
+          "name": "parentCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "BrokerServicePrincipalAnchorV1",
+      "production": "Named",
+      "id": 4870
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "serviceName",
+      "id": 1,
+      "variants": [
+        {
+          "name": "serviceName",
+          "type": "AsciiIdentifier"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "serviceSid",
+      "id": 2,
+      "variants": [
+        {
+          "name": "serviceSid",
+          "type": "BinarySid"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "systemSid",
+      "id": 3,
+      "variants": [
+        {
+          "name": "systemSid",
+          "type": "BinarySid"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "authenticationId",
+      "id": 4,
+      "variants": [
+        {
+          "name": "authenticationId",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "tokenSourceName",
+      "id": 5,
+      "variants": [
+        {
+          "name": "tokenSourceName",
+          "type": "FixedAscii8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "pid",
+      "id": 6,
+      "variants": [
+        {
+          "name": "pid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "creationTime",
+      "id": 7,
+      "variants": [
+        {
+          "name": "creationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "imageDigest",
+      "id": 8,
+      "variants": [
+        {
+          "name": "imageDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "imageSignerDigest",
+      "id": 9,
+      "variants": [
+        {
+          "name": "imageSignerDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "volumeSerialNumber",
+      "id": 10,
+      "variants": [
+        {
+          "name": "volumeSerialNumber",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "fileId128",
+      "id": 11,
+      "variants": [
+        {
+          "name": "fileId128",
+          "type": "Opaque16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "mappedImageProofDigest",
+      "id": 12,
+      "variants": [
+        {
+          "name": "mappedImageProofDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "sessionId",
+      "id": 13,
+      "variants": [
+        {
+          "name": "sessionId",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "sidType",
+      "id": 14,
+      "variants": [
+        {
+          "name": "sidType",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "startType",
+      "id": 15,
+      "variants": [
+        {
+          "name": "startType",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "daclDigest",
+      "id": 16,
+      "variants": [
+        {
+          "name": "daclDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "tokenSourceIdentifier",
+      "id": 17,
+      "variants": [
+        {
+          "name": "tokenSourceIdentifier",
+          "type": "LUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "tokenOrigin",
+      "id": 18,
+      "variants": [
+        {
+          "name": "tokenOrigin",
+          "type": "LUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServicePrincipalAnchorV1",
+      "name": "brokerTokenDigest",
+      "id": 19,
+      "variants": [
+        {
+          "name": "brokerTokenDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "BrokerSessionKeyCertificateBodyV1",
+      "production": "Named",
+      "id": 4871
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "brokerSessionPublicBlob",
+      "id": 1,
+      "variants": [
+        {
+          "name": "brokerSessionPublicBlob",
+          "type": "Rsa3072PublicBlob"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "brokerSessionKeyId",
+      "id": 2,
+      "variants": [
+        {
+          "name": "brokerSessionKeyId",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "leaseId",
+      "id": 3,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "leaseActivationGeneration",
+      "id": 4,
+      "variants": [
+        {
+          "name": "leaseActivationGeneration",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "activationNonce",
+      "id": 5,
+      "variants": [
+        {
+          "name": "activationNonce",
+          "type": "Opaque32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "bootId",
+      "id": 6,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "checkpointId",
+      "id": 7,
+      "variants": [
+        {
+          "name": "checkpointId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "profile",
+      "id": 8,
+      "variants": [
+        {
+          "name": "profile",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "brokerPid",
+      "id": 9,
+      "variants": [
+        {
+          "name": "brokerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "brokerCreationTime",
+      "id": 10,
+      "variants": [
+        {
+          "name": "brokerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "brokerControlServiceId",
+      "id": 11,
+      "variants": [
+        {
+          "name": "brokerControlServiceId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "localBrokerWorkerChannelId",
+      "id": 12,
+      "variants": [
+        {
+          "name": "localBrokerWorkerChannelId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "brokerNonce",
+      "id": 13,
+      "variants": [
+        {
+          "name": "brokerNonce",
+          "type": "Opaque32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "hostNonce",
+      "id": 14,
+      "variants": [
+        {
+          "name": "hostNonce",
+          "type": "Opaque32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "protocolSchemaMetaDigest",
+      "id": 15,
+      "variants": [
+        {
+          "name": "protocolSchemaMetaDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "protocolSchemaDigest",
+      "id": 16,
+      "variants": [
+        {
+          "name": "protocolSchemaDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "evidenceSchemaMetaDigest",
+      "id": 17,
+      "variants": [
+        {
+          "name": "evidenceSchemaMetaDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateBodyV1",
+      "name": "evidenceSchemaDigest",
+      "id": 18,
+      "variants": [
+        {
+          "name": "evidenceSchemaDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "ServiceControlEventNodeProofV1",
+      "production": "Named",
+      "id": 4874
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "serviceName",
+      "id": 1,
+      "variants": [
+        {
+          "name": "serviceName",
+          "type": "AsciiIdentifier"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "scmProviderId",
+      "id": 2,
+      "variants": [
+        {
+          "name": "scmProviderId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "enrollmentInstallProofDigest",
+      "id": 3,
+      "variants": [
+        {
+          "name": "enrollmentInstallProofDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "currentBootStartControlEventId",
+      "id": 4,
+      "variants": [
+        {
+          "name": "currentBootStartControlEventId",
+          "type": "U16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "currentBootStartControlRecordDigest",
+      "id": 5,
+      "variants": [
+        {
+          "name": "currentBootStartControlRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "currentBootStartControlProviderSequence",
+      "id": 6,
+      "variants": [
+        {
+          "name": "currentBootStartControlProviderSequence",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "currentBootRunningEventId",
+      "id": 7,
+      "variants": [
+        {
+          "name": "currentBootRunningEventId",
+          "type": "U16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "currentBootRunningRecordDigest",
+      "id": 8,
+      "variants": [
+        {
+          "name": "currentBootRunningRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "currentBootRunningProviderSequence",
+      "id": 9,
+      "variants": [
+        {
+          "name": "currentBootRunningProviderSequence",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "scmLostEventCount",
+      "id": 10,
+      "variants": [
+        {
+          "name": "scmLostEventCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "scmSequenceBarrierDigest",
+      "id": 11,
+      "variants": [
+        {
+          "name": "scmSequenceBarrierDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "kernelProcessProviderId",
+      "id": 12,
+      "variants": [
+        {
+          "name": "kernelProcessProviderId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "processStartEventId",
+      "id": 13,
+      "variants": [
+        {
+          "name": "processStartEventId",
+          "type": "U16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "processStartRecordDigest",
+      "id": 14,
+      "variants": [
+        {
+          "name": "processStartRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "processStartProviderSequence",
+      "id": 15,
+      "variants": [
+        {
+          "name": "processStartProviderSequence",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "processStopEventId",
+      "id": 16,
+      "variants": [
+        {
+          "name": "processStopEventId",
+          "type": "U16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "processStopRecordDigest",
+      "id": 17,
+      "variants": [
+        {
+          "name": "processStopRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "processStopProviderSequence",
+      "id": 18,
+      "variants": [
+        {
+          "name": "processStopProviderSequence",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "kernelLostEventCount",
+      "id": 19,
+      "variants": [
+        {
+          "name": "kernelLostEventCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "kernelSequenceBarrierDigest",
+      "id": 20,
+      "variants": [
+        {
+          "name": "kernelSequenceBarrierDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "pid",
+      "id": 21,
+      "variants": [
+        {
+          "name": "pid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "creationTime",
+      "id": 22,
+      "variants": [
+        {
+          "name": "creationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "bootId",
+      "id": 23,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "leaseId",
+      "id": 24,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "parentPid",
+      "id": 25,
+      "variants": [
+        {
+          "name": "parentPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceControlEventNodeProofV1",
+      "name": "parentCreationTime",
+      "id": 26,
+      "variants": [
+        {
+          "name": "parentCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "BrokerMintInstallSampleV1",
+      "production": "Named",
+      "id": 4877
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintInstallSampleV1",
+      "name": "mintId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "mintId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintInstallSampleV1",
+      "name": "authorizationBodyDigest",
+      "id": 2,
+      "variants": [
+        {
+          "name": "authorizationBodyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintInstallSampleV1",
+      "name": "leaseId",
+      "id": 3,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintInstallSampleV1",
+      "name": "challengeId",
+      "id": 4,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintInstallSampleV1",
+      "name": "brokerInstallTime",
+      "id": 5,
+      "variants": [
+        {
+          "name": "brokerInstallTime",
+          "type": "QPC"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintInstallSampleV1",
+      "name": "brokerClockEra",
+      "id": 6,
+      "variants": [
+        {
+          "name": "brokerClockEra",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintInstallSampleV1",
+      "name": "brokerQpcFrequency",
+      "id": 7,
+      "variants": [
+        {
+          "name": "brokerQpcFrequency",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintInstallSampleV1",
+      "name": "revocationVersion",
+      "id": 8,
+      "variants": [
+        {
+          "name": "revocationVersion",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "BrokerMintDeadlineAuthorizationV1",
+      "production": "Named",
+      "id": 4878
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "mintId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "mintId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "authorizationBodyDigest",
+      "id": 2,
+      "variants": [
+        {
+          "name": "authorizationBodyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "leaseId",
+      "id": 3,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "challengeId",
+      "id": 4,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "revocationVersion",
+      "id": 5,
+      "variants": [
+        {
+          "name": "revocationVersion",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "remainingDuration100ns",
+      "id": 6,
+      "variants": [
+        {
+          "name": "remainingDuration100ns",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "installSampleDigest",
+      "id": 7,
+      "variants": [
+        {
+          "name": "installSampleDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "hostNowFiletime",
+      "id": 8,
+      "variants": [
+        {
+          "name": "hostNowFiletime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "maximumMintTtl100ns",
+      "id": 9,
+      "variants": [
+        {
+          "name": "maximumMintTtl100ns",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerMintDeadlineAuthorizationV1",
+      "name": "hostDeadlineFiletime",
+      "id": 10,
+      "variants": [
+        {
+          "name": "hostDeadlineFiletime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "ServiceEnrollmentInstallProofV1",
+      "production": "Named",
+      "id": 4879
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "serviceName",
+      "id": 1,
+      "variants": [
+        {
+          "name": "serviceName",
+          "type": "AsciiIdentifier"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "scmProviderId",
+      "id": 2,
+      "variants": [
+        {
+          "name": "scmProviderId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "eventId",
+      "id": 3,
+      "variants": [
+        {
+          "name": "eventId",
+          "type": "U16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "installRecordDigest",
+      "id": 4,
+      "variants": [
+        {
+          "name": "installRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "providerSequence",
+      "id": 5,
+      "variants": [
+        {
+          "name": "providerSequence",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "imagePathDigest",
+      "id": 6,
+      "variants": [
+        {
+          "name": "imagePathDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "serviceSid",
+      "id": 7,
+      "variants": [
+        {
+          "name": "serviceSid",
+          "type": "BinarySid"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "checkpointId",
+      "id": 8,
+      "variants": [
+        {
+          "name": "checkpointId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ServiceEnrollmentInstallProofV1",
+      "name": "enrollmentEpoch",
+      "id": 9,
+      "variants": [
+        {
+          "name": "enrollmentEpoch",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "LocalTranscriptProofV1",
+      "production": "Named",
+      "id": 4880
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "localBrokerWorkerChannelId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "localBrokerWorkerChannelId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "localChannelBinding",
+      "id": 2,
+      "variants": [
+        {
+          "name": "localChannelBinding",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "localTranscriptDigest",
+      "id": 3,
+      "variants": [
+        {
+          "name": "localTranscriptDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "workerToBrokerRecordCount",
+      "id": 4,
+      "variants": [
+        {
+          "name": "workerToBrokerRecordCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "brokerToWorkerRecordCount",
+      "id": 5,
+      "variants": [
+        {
+          "name": "brokerToWorkerRecordCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "workerToBrokerWrapperInclusiveBytes",
+      "id": 6,
+      "variants": [
+        {
+          "name": "workerToBrokerWrapperInclusiveBytes",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "brokerToWorkerWrapperInclusiveBytes",
+      "id": 7,
+      "variants": [
+        {
+          "name": "brokerToWorkerWrapperInclusiveBytes",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "recordSetDigest",
+      "id": 8,
+      "variants": [
+        {
+          "name": "recordSetDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "protocolSchemaMetaDigest",
+      "id": 9,
+      "variants": [
+        {
+          "name": "protocolSchemaMetaDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "protocolSchemaDigest",
+      "id": 10,
+      "variants": [
+        {
+          "name": "protocolSchemaDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "bootId",
+      "id": 11,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "leaseId",
+      "id": 12,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "localTranscriptRootDigest",
+      "id": 13,
+      "variants": [
+        {
+          "name": "localTranscriptRootDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "workerToBrokerChunkCount",
+      "id": 14,
+      "variants": [
+        {
+          "name": "workerToBrokerChunkCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "brokerToWorkerChunkCount",
+      "id": 15,
+      "variants": [
+        {
+          "name": "brokerToWorkerChunkCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptProofV1",
+      "name": "localBootstrapCompleteness",
+      "id": 16,
+      "variants": [
+        {
+          "name": "localBootstrapCompleteness",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "reserve-illegal-type",
+      "name": "LocalTranscriptRecordSetV1",
+      "id": 4881
+    },
+    {
+      "op": "overlay-type",
+      "name": "BrokerSessionKeyCertificateEnvelopeV1",
+      "production": "Named",
+      "id": 4882
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateEnvelopeV1",
+      "name": "masterKeyId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "masterKeyId",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateEnvelopeV1",
+      "name": "certificateBodyDigest",
+      "id": 2,
+      "variants": [
+        {
+          "name": "certificateBodyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerSessionKeyCertificateEnvelopeV1",
+      "name": "masterSignature",
+      "id": 3,
+      "variants": [
+        {
+          "name": "masterSignature",
+          "type": "Rsa3072Signature"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "LocalTranscriptChunkV1",
+      "production": "Named",
+      "id": 4883
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "localBrokerWorkerChannelId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "localBrokerWorkerChannelId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "leaseId",
+      "id": 2,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "bootId",
+      "id": 3,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "direction",
+      "id": 4,
+      "variants": [
+        {
+          "name": "direction",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "chunkIndex",
+      "id": 5,
+      "variants": [
+        {
+          "name": "chunkIndex",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "firstSequence",
+      "id": 6,
+      "variants": [
+        {
+          "name": "firstSequence",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "lastSequence",
+      "id": 7,
+      "variants": [
+        {
+          "name": "lastSequence",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "recordCount",
+      "id": 8,
+      "variants": [
+        {
+          "name": "recordCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "wrapperInclusiveBytes",
+      "id": 9,
+      "variants": [
+        {
+          "name": "wrapperInclusiveBytes",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "recordBytes",
+      "id": 10,
+      "variants": [
+        {
+          "name": "recordBytes",
+          "type": "BoundedBytes",
+          "maxBytes": 261972
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptChunkV1",
+      "name": "predecessorChunkDigest",
+      "id": 11,
+      "variants": [
+        {
+          "name": "predecessorChunkDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "LocalTranscriptRootV1",
+      "production": "Named",
+      "id": 4884
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "localBrokerWorkerChannelId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "localBrokerWorkerChannelId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "leaseId",
+      "id": 2,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "bootId",
+      "id": 3,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "workerToBrokerRecordCount",
+      "id": 4,
+      "variants": [
+        {
+          "name": "workerToBrokerRecordCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "brokerToWorkerRecordCount",
+      "id": 5,
+      "variants": [
+        {
+          "name": "brokerToWorkerRecordCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "workerToBrokerWrapperInclusiveBytes",
+      "id": 6,
+      "variants": [
+        {
+          "name": "workerToBrokerWrapperInclusiveBytes",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "brokerToWorkerWrapperInclusiveBytes",
+      "id": 7,
+      "variants": [
+        {
+          "name": "brokerToWorkerWrapperInclusiveBytes",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "workerToBrokerChunkCount",
+      "id": 8,
+      "variants": [
+        {
+          "name": "workerToBrokerChunkCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "brokerToWorkerChunkCount",
+      "id": 9,
+      "variants": [
+        {
+          "name": "brokerToWorkerChunkCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "chunkDigestList",
+      "id": 10,
+      "variants": [
+        {
+          "name": "chunkDigestList",
+          "type": "BoundedBytes",
+          "maxBytes": 512
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "localTranscriptDigest",
+      "id": 11,
+      "variants": [
+        {
+          "name": "localTranscriptDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "localChannelBinding",
+      "id": 12,
+      "variants": [
+        {
+          "name": "localChannelBinding",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "recordSetDigest",
+      "id": 13,
+      "variants": [
+        {
+          "name": "recordSetDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "protocolSchemaMetaDigest",
+      "id": 14,
+      "variants": [
+        {
+          "name": "protocolSchemaMetaDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "protocolSchemaDigest",
+      "id": 15,
+      "variants": [
+        {
+          "name": "protocolSchemaDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootV1",
+      "name": "localBootstrapCompleteness",
+      "id": 16,
+      "variants": [
+        {
+          "name": "localBootstrapCompleteness",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "BrokerServiceLaunchProofV1",
+      "production": "Named",
+      "id": 4885
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "serviceName",
+      "id": 1,
+      "variants": [
+        {
+          "name": "serviceName",
+          "type": "AsciiIdentifier"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "serviceSid",
+      "id": 2,
+      "variants": [
+        {
+          "name": "serviceSid",
+          "type": "BinarySid"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "serviceConfigDigest",
+      "id": 3,
+      "variants": [
+        {
+          "name": "serviceConfigDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "brokerPid",
+      "id": 4,
+      "variants": [
+        {
+          "name": "brokerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "brokerCreationTime",
+      "id": 5,
+      "variants": [
+        {
+          "name": "brokerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "sessionId",
+      "id": 6,
+      "variants": [
+        {
+          "name": "sessionId",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "volumeSerialNumber",
+      "id": 7,
+      "variants": [
+        {
+          "name": "volumeSerialNumber",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "fileId128",
+      "id": 8,
+      "variants": [
+        {
+          "name": "fileId128",
+          "type": "Opaque16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "imageDigest",
+      "id": 9,
+      "variants": [
+        {
+          "name": "imageDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "imageSignerDigest",
+      "id": 10,
+      "variants": [
+        {
+          "name": "imageSignerDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "mappedImageProofDigest",
+      "id": 11,
+      "variants": [
+        {
+          "name": "mappedImageProofDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "incarnationCount",
+      "id": 12,
+      "variants": [
+        {
+          "name": "incarnationCount",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "scmAncestryDigest",
+      "id": 13,
+      "variants": [
+        {
+          "name": "scmAncestryDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "serviceControlEventNodeProofDigest",
+      "id": 14,
+      "variants": [
+        {
+          "name": "serviceControlEventNodeProofDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "processStartRecordDigest",
+      "id": 15,
+      "variants": [
+        {
+          "name": "processStartRecordDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "leaseId",
+      "id": 16,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "bootId",
+      "id": 17,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "checkpointId",
+      "id": 18,
+      "variants": [
+        {
+          "name": "checkpointId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "profile",
+      "id": 19,
+      "variants": [
+        {
+          "name": "profile",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "localBrokerWorkerChannelId",
+      "id": 20,
+      "variants": [
+        {
+          "name": "localBrokerWorkerChannelId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "workerAppServiceId",
+      "id": 21,
+      "variants": [
+        {
+          "name": "workerAppServiceId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "brokerControlServiceId",
+      "id": 22,
+      "variants": [
+        {
+          "name": "brokerControlServiceId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "parentPid",
+      "id": 23,
+      "variants": [
+        {
+          "name": "parentPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "BrokerServiceLaunchProofV1",
+      "name": "parentCreationTime",
+      "id": 24,
+      "variants": [
+        {
+          "name": "parentCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "LocalTranscriptRootAcceptedV1",
+      "production": "Named",
+      "id": 4886
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootAcceptedV1",
+      "name": "localTranscriptRootDigest",
+      "id": 1,
+      "variants": [
+        {
+          "name": "localTranscriptRootDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootAcceptedV1",
+      "name": "localTranscriptProofDigest",
+      "id": 2,
+      "variants": [
+        {
+          "name": "localTranscriptProofDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootAcceptedV1",
+      "name": "leaseId",
+      "id": 3,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootAcceptedV1",
+      "name": "challengeId",
+      "id": 4,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootAcceptedV1",
+      "name": "brokerPid",
+      "id": 5,
+      "variants": [
+        {
+          "name": "brokerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootAcceptedV1",
+      "name": "brokerCreationTime",
+      "id": 6,
+      "variants": [
+        {
+          "name": "brokerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootAcceptedV1",
+      "name": "brokerSessionKeyId",
+      "id": 7,
+      "variants": [
+        {
+          "name": "brokerSessionKeyId",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LocalTranscriptRootAcceptedV1",
+      "name": "acceptedLocalTranscriptRootSequence",
+      "id": 8,
+      "variants": [
+        {
+          "name": "acceptedLocalTranscriptRootSequence",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "WorkerProcessDaclAccessPolicyProofV1",
+      "production": "Named",
+      "id": 4887
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "workerPid",
+      "id": 1,
+      "variants": [
+        {
+          "name": "workerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "workerCreationTime",
+      "id": 2,
+      "variants": [
+        {
+          "name": "workerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "processOwnerSid",
+      "id": 3,
+      "variants": [
+        {
+          "name": "processOwnerSid",
+          "type": "BinarySid"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "processDaclBytes",
+      "id": 4,
+      "variants": [
+        {
+          "name": "processDaclBytes",
+          "type": "BoundedBytes",
+          "maxBytes": 1024
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "processDaclDigest",
+      "id": 5,
+      "variants": [
+        {
+          "name": "processDaclDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "controlFlags",
+      "id": 6,
+      "variants": [
+        {
+          "name": "controlFlags",
+          "type": "U16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "candidateRid500Sid",
+      "id": 7,
+      "variants": [
+        {
+          "name": "candidateRid500Sid",
+          "type": "BinarySid"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "objectType",
+      "id": 8,
+      "variants": [
+        {
+          "name": "objectType",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "genericRead",
+      "id": 9,
+      "variants": [
+        {
+          "name": "genericRead",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "genericWrite",
+      "id": 10,
+      "variants": [
+        {
+          "name": "genericWrite",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "genericExecute",
+      "id": 11,
+      "variants": [
+        {
+          "name": "genericExecute",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "genericAll",
+      "id": 12,
+      "variants": [
+        {
+          "name": "genericAll",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "aceCount",
+      "id": 13,
+      "variants": [
+        {
+          "name": "aceCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "aceOrderDigest",
+      "id": 14,
+      "variants": [
+        {
+          "name": "aceOrderDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "requestedMaskCount",
+      "id": 15,
+      "variants": [
+        {
+          "name": "requestedMaskCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "requestedMasks",
+      "id": 16,
+      "variants": [
+        {
+          "name": "requestedMasks",
+          "type": "BoundedBytes",
+          "maxBytes": 32
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "accessCheckEvaluation",
+      "id": 17,
+      "variants": [
+        {
+          "name": "accessCheckEvaluation",
+          "type": "BoundedBytes",
+          "maxBytes": 40
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "readbackIdentityDigest",
+      "id": 18,
+      "variants": [
+        {
+          "name": "readbackIdentityDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "aclRevision",
+      "id": 19,
+      "variants": [
+        {
+          "name": "aclRevision",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "aclSize",
+      "id": 20,
+      "variants": [
+        {
+          "name": "aclSize",
+          "type": "U16"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "processHandleAccessMask",
+      "id": 21,
+      "variants": [
+        {
+          "name": "processHandleAccessMask",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "securityDescriptorLength",
+      "id": 22,
+      "variants": [
+        {
+          "name": "securityDescriptorLength",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "securityDescriptorSha256",
+      "id": 23,
+      "variants": [
+        {
+          "name": "securityDescriptorSha256",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "ownerPresent",
+      "id": 24,
+      "variants": [
+        {
+          "name": "ownerPresent",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "daclPresent",
+      "id": 25,
+      "variants": [
+        {
+          "name": "daclPresent",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "daclProtected",
+      "id": 26,
+      "variants": [
+        {
+          "name": "daclProtected",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "workerImageDigest",
+      "id": 27,
+      "variants": [
+        {
+          "name": "workerImageDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "leaseId",
+      "id": 28,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "bootId",
+      "id": 29,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessDaclAccessPolicyProofV1",
+      "name": "observerEpoch",
+      "id": 30,
+      "variants": [
+        {
+          "name": "observerEpoch",
+          "type": "U64"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "LiveCandidateAccessProbeV1",
+      "production": "Named",
+      "id": 4888
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "mintId",
+      "id": 1,
+      "variants": [
+        {
+          "name": "mintId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "leaseId",
+      "id": 2,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "challengeId",
+      "id": 3,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "workerPid",
+      "id": 4,
+      "variants": [
+        {
+          "name": "workerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "workerCreationTime",
+      "id": 5,
+      "variants": [
+        {
+          "name": "workerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "t0AuthenticationId",
+      "id": 6,
+      "variants": [
+        {
+          "name": "t0AuthenticationId",
+          "type": "LUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "t0LogonSid",
+      "id": 7,
+      "variants": [
+        {
+          "name": "t0LogonSid",
+          "type": "BinarySid"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "accessProbeDigest",
+      "id": 8,
+      "variants": [
+        {
+          "name": "accessProbeDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "probeThreadId",
+      "id": 9,
+      "variants": [
+        {
+          "name": "probeThreadId",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "probeThreadCreationTime",
+      "id": 10,
+      "variants": [
+        {
+          "name": "probeThreadCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "impersonationApi",
+      "id": 11,
+      "variants": [
+        {
+          "name": "impersonationApi",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "impersonationWin32Error",
+      "id": 12,
+      "variants": [
+        {
+          "name": "impersonationWin32Error",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "revertWin32Error",
+      "id": 13,
+      "variants": [
+        {
+          "name": "revertWin32Error",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "postRevertThreadTokenWin32Error",
+      "id": 14,
+      "variants": [
+        {
+          "name": "postRevertThreadTokenWin32Error",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "requestedMaskCount",
+      "id": 15,
+      "variants": [
+        {
+          "name": "requestedMaskCount",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "liveProbeRecords",
+      "id": 16,
+      "variants": [
+        {
+          "name": "liveProbeRecords",
+          "type": "BoundedBytes",
+          "maxBytes": 80
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "dedicatedThreadProof",
+      "id": 17,
+      "variants": [
+        {
+          "name": "dedicatedThreadProof",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LiveCandidateAccessProbeV1",
+      "name": "t0ImpersonationLevel",
+      "id": 18,
+      "variants": [
+        {
+          "name": "t0ImpersonationLevel",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "overlay-type",
+      "name": "CandidateLaunchAuthorityV1",
+      "production": "Named",
+      "id": 4889
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "finalRestrictedTokenDigest",
+      "id": 1,
+      "variants": [
+        {
+          "name": "finalRestrictedTokenDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "candidateTokenPolicyDigest",
+      "id": 2,
+      "variants": [
+        {
+          "name": "candidateTokenPolicyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "liveCandidateAccessProbeDigest",
+      "id": 3,
+      "variants": [
+        {
+          "name": "liveCandidateAccessProbeDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "authorizationBodyDigest",
+      "id": 4,
+      "variants": [
+        {
+          "name": "authorizationBodyDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "mintAttestedDigest",
+      "id": 5,
+      "variants": [
+        {
+          "name": "mintAttestedDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "workerPid",
+      "id": 6,
+      "variants": [
+        {
+          "name": "workerPid",
+          "type": "U32"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "workerCreationTime",
+      "id": 7,
+      "variants": [
+        {
+          "name": "workerCreationTime",
+          "type": "FILETIME"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "workerPrincipalEntryDigest",
+      "id": 8,
+      "variants": [
+        {
+          "name": "workerPrincipalEntryDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "leaseId",
+      "id": 9,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "challengeId",
+      "id": 10,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "bootId",
+      "id": 11,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "mintId",
+      "id": 12,
+      "variants": [
+        {
+          "name": "mintId",
+          "type": "GUID"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "stageDigest",
+      "id": 13,
+      "variants": [
+        {
+          "name": "stageDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "semanticDigest",
+      "id": 14,
+      "variants": [
+        {
+          "name": "semanticDigest",
+          "type": "SHA-256"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CandidateLaunchAuthorityV1",
+      "name": "profile",
+      "id": 15,
+      "variants": [
+        {
+          "name": "profile",
+          "type": "U8"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerSessionKeyCertificateV1",
+      "name": "localBrokerWorkerChannelId",
+      "id": 40,
+      "variants": [
+        {
+          "name": "localBrokerWorkerChannelId",
+          "type": "GUID",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "localBrokerWorkerChannelId",
+          "type": "GUID",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerSessionKeyCertificateV1",
+      "name": "brokerSessionKeyId",
+      "id": 41,
+      "variants": [
+        {
+          "name": "brokerSessionKeyId",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "brokerSessionKeyId",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerSessionKeyCertificateV1",
+      "name": "certificateBodyDigest",
+      "id": 42,
+      "variants": [
+        {
+          "name": "certificateBodyDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "certificateBodyDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationAdmissionReceiptV1",
+      "name": "imageDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "imageDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "imageDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationAdmissionReceiptV1",
+      "name": "leaseId",
+      "id": 41,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "leaseId",
+          "type": "GUID",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationAdmissionReceiptV1",
+      "name": "bootId",
+      "id": 42,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "bootId",
+          "type": "GUID",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationAdmissionReceiptV1",
+      "name": "serviceLaunchProofDigest",
+      "id": 43,
+      "variants": [
+        {
+          "name": "serviceLaunchProofDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "serviceLaunchProofDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationReceiptV1",
+      "name": "workerPid",
+      "id": 40,
+      "variants": [
+        {
+          "name": "workerPid",
+          "type": "U32",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "workerPid",
+          "type": "U32",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationReceiptV1",
+      "name": "creationTime",
+      "id": 41,
+      "variants": [
+        {
+          "name": "creationTime",
+          "type": "FILETIME",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "creationTime",
+          "type": "FILETIME",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationReceiptV1",
+      "name": "observerEpoch",
+      "id": 42,
+      "variants": [
+        {
+          "name": "observerEpoch",
+          "type": "U64",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "observerEpoch",
+          "type": "U64",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationReceiptV1",
+      "name": "leaseId",
+      "id": 43,
+      "variants": [
+        {
+          "name": "leaseId",
+          "type": "GUID",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "leaseId",
+          "type": "GUID",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationReceiptV1",
+      "name": "bootId",
+      "id": 44,
+      "variants": [
+        {
+          "name": "bootId",
+          "type": "GUID",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "bootId",
+          "type": "GUID",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "WorkerProcessIsolationReceiptV1",
+      "name": "challengeId",
+      "id": 45,
+      "variants": [
+        {
+          "name": "challengeId",
+          "type": "GUID",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "challengeId",
+          "type": "GUID",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "ChallengeBound",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CreatorPermitInstallationV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CreatorDeadlineAuthorization",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFencePreparedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFenceRevokedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFenceCommittedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFenceCreateIntentAcknowledgedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFenceRevokedBeforeCreateV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFenceCreateIssuedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFenceCreateDefinitivelyFailedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFenceRevokedBeforeResumeV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "LaunchFenceResumeIssuedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CreatePermitUnusedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CreatePermitConsumedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "CreatePermitRevokedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerPreparedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerSentV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerStoredV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerCreatingV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerCreatedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerCompletedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerCreateDefinitivelyFailedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerAbortedCreateDefinitivelyFailedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerRevokedBeforeCreateV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerAbortedProvenNotCreatedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerAbortedCreatedNeverResumedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerAbortedAttachmentHandshakeV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerAbortedResourcePreparationFailedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerAbortedCompilationDefinitivelyFailedV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerOutcomeUnknownV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AuthorizationLedgerBurnedUnknownV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationActiveWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationCompletedWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationBurnedUnknownWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationAbortedProvenNotCreatedWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationAbortedCreateDefinitivelyFailedWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationAbortedCreatedNeverResumedWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationAbortedAttachmentHandshakeWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationAbortedResourcePreparationFailedWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "AbortedCompilationDefinitivelyFailedWithLaunchAuthority",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationBurnResolvedWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationSuccessorAuthorizedPendingCapacityWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "field-set",
+      "parent": "OperationBurnResolutionDeferredWithLaunchAuthorityV1",
+      "name": "candidateLaunchAuthorityDigest",
+      "id": 40,
+      "variants": [
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "InteractiveSeat",
+          "status": "Forbidden"
+        },
+        {
+          "name": "candidateLaunchAuthorityDigest",
+          "type": "SHA-256",
+          "profile": "NonInteractiveElevated"
+        }
+      ]
+    },
+    {
+      "op": "overlay-message",
+      "channel": "WorkerApp",
+      "name": "TokenMintAuthorized",
+      "id": 4224,
+      "payloadRoot": "TokenMintAuthorizationBodyV1",
+      "direction": "HostToWorker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "TokenMintAuthorized",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "BootstrapBrokerHello",
+      "id": 4353,
+      "payloadRoot": "BootstrapBrokerHello",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "BrokerTransportListening",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "BootstrapHostHello",
+      "id": 4354,
+      "payloadRoot": "BrokerBootstrapHostHello",
+      "direction": "HostToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "BrokerTransportListening",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "BootstrapBrokerContext",
+      "id": 4355,
+      "payloadRoot": "BootstrapBrokerContext",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "BrokerTransportAuthenticated",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "BootstrapBrokerFinished",
+      "id": 4356,
+      "payloadRoot": "BootstrapBrokerFinished",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "BrokerTransportAuthenticated",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "IsolationAdmission",
+      "id": 4368,
+      "payloadRoot": "IsolationAdmission",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "ServiceLaunchAttested",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "TokenMintAuthorized",
+      "id": 4369,
+      "payloadRoot": "TokenMintAuthorizationBodyV1",
+      "direction": "HostToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "TokenMintAuthorized",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "MintAttested",
+      "id": 4370,
+      "payloadRoot": "MintAttestedV1",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "CandidateAccessProbeAttested",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "IsolationExit",
+      "id": 4371,
+      "payloadRoot": "IsolationExit",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "WorkerExitObserved",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "Keepalive",
+      "id": 4372,
+      "payloadRoot": "Keepalive",
+      "direction": "HostToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "None",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "Keepalive",
+      "id": 4372,
+      "payloadRoot": "Keepalive",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "None",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "BrokerFailure",
+      "id": 4373,
+      "payloadRoot": "BrokerFailure",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "None",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "BrokerFailure",
+      "id": 4373,
+      "payloadRoot": "BrokerFailure",
+      "direction": "HostToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "None",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "MintRevoked",
+      "id": 4374,
+      "payloadRoot": "MintRevokedV1",
+      "direction": "HostToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "TokenMintAuthorizedSent",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "BrokerMintInstallSample",
+      "id": 4375,
+      "payloadRoot": "BrokerMintInstallSampleV1",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "TokenMintInstallSampleAccepted",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "BrokerMintDeadlineAuthorization",
+      "id": 4376,
+      "payloadRoot": "BrokerMintDeadlineAuthorizationV1",
+      "direction": "HostToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "TokenMintDeadlineAuthorized",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "LocalTranscriptChunk",
+      "id": 4377,
+      "payloadRoot": "LocalTranscriptChunkV1",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "LocalTranscriptSealed",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "LocalTranscriptRoot",
+      "id": 4378,
+      "payloadRoot": "LocalTranscriptRootV1",
+      "direction": "BrokerToHost",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "LocalTranscriptSealed",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "BrokerControl",
+      "name": "LocalTranscriptRootAccepted",
+      "id": 4379,
+      "payloadRoot": "LocalTranscriptRootAcceptedV1",
+      "direction": "HostToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "LocalTranscriptRootAccepted",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "LocalIpc",
+      "name": "LocalHelloW",
+      "id": 4609,
+      "payloadRoot": "LocalHelloW",
+      "direction": "WorkerToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "WorkerHello",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "LocalIpc",
+      "name": "LocalHelloB",
+      "id": 4610,
+      "payloadRoot": "LocalHelloB",
+      "direction": "BrokerToWorker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "WorkerHello",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "LocalIpc",
+      "name": "MintRequest",
+      "id": 4624,
+      "payloadRoot": "MintRequest",
+      "direction": "WorkerToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "TokenMintAuthorized",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "LocalIpc",
+      "name": "MintResult",
+      "id": 4625,
+      "payloadRoot": "MintResult",
+      "direction": "BrokerToWorker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "TokenMintAuthorized",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "LocalIpc",
+      "name": "LocalKeepalive",
+      "id": 4626,
+      "payloadRoot": "LocalKeepalive",
+      "direction": "WorkerToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "None",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "LocalIpc",
+      "name": "LocalKeepalive",
+      "id": 4626,
+      "payloadRoot": "LocalKeepalive",
+      "direction": "BrokerToWorker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "None",
+      "mandatoryTailClass": "Ordinary"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "LocalIpc",
+      "name": "LocalFailure",
+      "id": 4627,
+      "payloadRoot": "LocalFailure",
+      "direction": "WorkerToBroker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "None",
+      "mandatoryTailClass": "Mandatory"
+    },
+    {
+      "op": "overlay-message",
+      "channel": "LocalIpc",
+      "name": "LocalFailure",
+      "id": 4627,
+      "payloadRoot": "LocalFailure",
+      "direction": "BrokerToWorker",
+      "profile": "NonInteractiveElevated",
+      "stateAssoc": "None",
+      "mandatoryTailClass": "Mandatory"
+    }
+  ]
+}

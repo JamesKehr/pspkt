@@ -1,0 +1,2 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/Invoke-PspktPhase4ProtocolSchemaAuthorityValidators.ps1 text eol=lf -filter -ident -working-tree-encoding
