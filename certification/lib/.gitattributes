@@ -1,0 +1,4 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/Pspkt.Certification.ProtocolSchemaAuthority.cs text eol=lf -filter -ident -working-tree-encoding
+/Pspkt.Certification.ProtocolSchemaVerify.cs text eol=lf -filter -ident -working-tree-encoding
+/Pspkt.Certification.ProtocolSchemaContract.ps1 text eol=lf -filter -ident -working-tree-encoding
