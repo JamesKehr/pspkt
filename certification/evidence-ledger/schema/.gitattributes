@@ -1,0 +1,2 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/*.json -text -eol -filter -ident -working-tree-encoding
