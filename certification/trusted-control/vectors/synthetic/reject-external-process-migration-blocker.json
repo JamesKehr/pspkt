@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"external-process-migration-blocker","caseKind":"migrationBlockers","input":{"sites":[{"kind":"ExternalProcess","symbol":"pktmon.exe"}]}}

@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"migration-kind-unknown","caseKind":"migrationBlockers","input":{"sites":[{"kind":"Banana","symbol":"Unknown"}]}}

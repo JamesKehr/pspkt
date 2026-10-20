@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"timing-relation-unknown","caseKind":"timing","input":{"constraintKind":"Deadline","now":1,"deadline":2,"relation":"EQ"}}

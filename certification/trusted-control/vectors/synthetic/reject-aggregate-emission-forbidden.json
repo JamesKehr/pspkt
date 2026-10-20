@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"aggregate-emission-forbidden","caseKind":"emission","input":{"artifactKind":"TrustedControlArtifactSetV1","outputPath":"certification/trusted-control-artifact-set.v1"}}

@@ -1,0 +1,3 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/*.ps1 text eol=lf -filter -ident -working-tree-encoding
+/synthetic/** -text -eol -filter -ident -working-tree-encoding

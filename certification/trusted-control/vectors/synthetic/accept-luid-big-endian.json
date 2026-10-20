@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"ok","caseKind":"luidBytes","input":{"value":72623859790382856,"bigEndianHex":"0102030405060708"}}

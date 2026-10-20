@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"fixedascii-padding-invalid","caseKind":"fixedAscii8","input":{"hex":"6100620000000000"}}
