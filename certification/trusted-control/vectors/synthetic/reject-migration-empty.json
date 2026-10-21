@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"migration-sites-empty","caseKind":"migrationBlockers","input":{"sites":[]}}

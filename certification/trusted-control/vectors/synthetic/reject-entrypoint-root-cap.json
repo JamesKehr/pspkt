@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"entrypoint-cap-exceeded","caseKind":"entrypointCaps","input":{"rootBytes":1048577,"aggregateBytes":2097152,"totalSourceSites":256,"totalUserArguments":128}}

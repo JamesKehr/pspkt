@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"registry-instance-forbidden","caseKind":"emission","input":{"artifactKind":"SupportedBuildRegistryV1","outputPath":"certification/trusted-control/schema/supported-builds.v1.json"}}

@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"guid-rfc4122-bytes-invalid","caseKind":"guidBytes","input":{"text":"00112233-4455-4677-8899-AABBCCDDEEFF","rfc4122Hex":"00112233445546778899aabbccddeeff"}}

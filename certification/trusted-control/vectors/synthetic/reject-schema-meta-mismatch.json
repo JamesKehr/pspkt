@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"schema-meta-mismatch","caseKind":"schemaMetaHash","input":{"expectedSha256":"0000000000000000000000000000000000000000000000000000000000000000"}}

@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"timing-kind-relation-invalid","caseKind":"timing","input":{"constraintKind":"Deadline","now":7,"deadline":7,"relation":"LE"}}

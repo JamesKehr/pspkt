@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"membership-fixture-invalid-path","caseKind":"membershipPath","input":{"path":"certification/schema/protocol-schema-meta.v1.json","trackedPaths":["certification\\schema\\protocol-schema-meta.v1.json"],"pendingPaths":["C:\\host\\root"]}}

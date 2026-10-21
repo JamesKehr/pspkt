@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"membership-case-alias","caseKind":"membershipPath","input":{"path":"certification/schema/Protocol-schema-meta.v1.json","trackedPaths":["certification/schema/Protocol-schema-meta.v1.json","certification/schema/protocol-schema-meta.v1.json"],"pendingPaths":[]}}

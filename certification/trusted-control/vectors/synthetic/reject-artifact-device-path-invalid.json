@@ -1,0 +1,1 @@
+{"schemaId":"PspktTrustedControlVerificationVectorV1","schemaVersion":1,"syntheticOnly":true,"expectedReason":"artifact-path-invalid","caseKind":"pathSet","input":{"paths":["certification/CON/file.json"]}}
