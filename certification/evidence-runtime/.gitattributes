@@ -1,0 +1,11 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/README.md text eol=lf -filter -ident -working-tree-encoding
+/lib/*.cs text eol=lf -filter -ident -working-tree-encoding
+/lib/*.ps1 text eol=lf -filter -ident -working-tree-encoding
+/validators/*.ps1 text eol=lf -filter -ident -working-tree-encoding
+/vectors/*.ps1 text eol=lf -filter -ident -working-tree-encoding
+/tests/*.ps1 text eol=lf -filter -ident -working-tree-encoding
+/vectors/generated/*.json -text -eol -filter -ident -working-tree-encoding
+/vectors/generated/*.bin -text -eol -filter -ident -working-tree-encoding
+/vectors/hand-authored/*.json -text -eol -filter -ident -working-tree-encoding
+/vectors/hand-authored/*.bin -text -eol -filter -ident -working-tree-encoding
