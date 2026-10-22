@@ -1,0 +1,284 @@
+name: Evidence runtime conformance
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+permissions:
+  contents: read
+
+jobs:
+  windows_ps51:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PSPKT_HOST_SLOT: windows_ps51
+    outputs:
+      checkout: ${{ steps.validate_checkout.outputs.receipt }}
+      export: ${{ steps.validate_export.outputs.receipt }}
+      probes: ${{ steps.confirm_probes.outputs.receipts }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Select Pester 5.3.3
+        shell: powershell
+        run: &pester_setup |
+          $ErrorActionPreference = 'Stop'
+          $diagnosticMessages = @()
+          $setupStage = 'source-load'
+          try {
+            $encoding = [Text.UTF8Encoding]::new($false, $true)
+            $contractBytes = [IO.File]::ReadAllBytes((Join-Path $env:GITHUB_WORKSPACE 'certification\evidence-runtime\lib\Pspkt.Certification.EvidenceRuntimeContract.ps1'))
+            . ([scriptblock]::Create($encoding.GetString($contractBytes)))
+            $setupStage = 'source-admission'
+            $diagnosticMessages = @(Get-PspktEvidenceDiagnosticMessages -Snapshot (Get-PspktEvidenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE))
+            $setupStage = 'temporary-storage'
+            $toolRoot = Join-Path $env:RUNNER_TEMP ('pspkt-pester-' + [Guid]::NewGuid().ToString('N'))
+            [void][IO.Directory]::CreateDirectory($toolRoot)
+            $env:TEMP = $toolRoot
+            $env:TMP = $toolRoot
+            $package = Join-Path $toolRoot 'pester.zip'
+            $setupStage = 'tls'
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $setupStage = 'download'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://www.powershellgallery.com/api/v2/package/Pester/5.3.3' -OutFile $package
+            $setupStage = 'package-length'
+            if ([IO.FileInfo]::new($package).Length -ne 271297) { throw 'pester-package: Pinned Pester 5.3.3 package differs.' }
+            $setupStage = 'package-hash'
+            Assert-PspktEvidencePesterPackage -Bytes ([IO.File]::ReadAllBytes($package))
+            $setupStage = 'compression-load'
+            $compressionIdentity = if ($PSVersionTable.PSEdition -eq 'Desktop') {
+              'System.IO.Compression.FileSystem, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'
+            } else {
+              'System.IO.Compression.ZipFile'
+            }
+            [void][Reflection.Assembly]::Load($compressionIdentity)
+            $setupStage = 'archive-extract'
+            [IO.Compression.ZipFile]::ExtractToDirectory($package, (Join-Path $toolRoot 'module'))
+            $setupStage = 'manifest'
+            $manifest = Join-Path $toolRoot 'module\Pester.psd1'
+            if (-not [IO.File]::Exists($manifest)) { throw 'Pester manifest is absent.' }
+            $setupStage = 'publish'
+            [IO.File]::AppendAllText($env:GITHUB_ENV, 'PSPKT_PESTER_MANIFEST=' + $manifest + "`n", $encoding)
+          } catch {
+            if (Get-Command Get-PspktEvidencePesterSetupFailureMessage -ErrorAction SilentlyContinue) {
+              [Console]::Error.WriteLine((Get-PspktEvidencePesterSetupFailureMessage -Stage $setupStage))
+            } else { [Console]::Error.WriteLine('pester-setup: source-load failed.') }
+            exit 1
+          }
+      - id: validate_checkout
+        shell: powershell
+        env:
+          PSPKT_SOURCE_KIND: checkout
+        run: &validate_call |
+          $ErrorActionPreference = 'Stop'
+          $diagnosticMessages = @()
+          try {
+            $encoding = [Text.UTF8Encoding]::new($false, $true)
+            $contractPath = Join-Path $env:GITHUB_WORKSPACE 'certification\evidence-runtime\lib\Pspkt.Certification.EvidenceRuntimeContract.ps1'
+            $contractBytes = [IO.File]::ReadAllBytes($contractPath)
+            . ([scriptblock]::Create($encoding.GetString($contractBytes)))
+            $call = New-PspktEvidenceWorkflowCall -RepositoryRoot $env:GITHUB_WORKSPACE -SourceKind $env:PSPKT_SOURCE_KIND -PesterManifestPath $env:PSPKT_PESTER_MANIFEST -ContractBytes $contractBytes
+            $diagnosticMessages = $call.Context.DiagnosticMessages
+            foreach ($definition in $call.BoundaryDefinitions) { . $definition }
+            $PspktEvidenceInvocationContext = $call.Context
+            $captured = @(& $call.Command -RepositoryRoot $call.SourceRoot -WorkRoot $call.WorkRoot -PesterManifestPath $env:PSPKT_PESTER_MANIFEST)
+            Assert-PspktEvidenceValidationSuccess -CapturedResults $captured -Expected $call.Context.Expected
+            $receipt = New-PspktEvidenceCiReceipt -Result $captured[0] -Expected $call.Context.Expected -HostSlot $env:PSPKT_HOST_SLOT -SourceKind $env:PSPKT_SOURCE_KIND
+            [IO.File]::AppendAllText($env:GITHUB_OUTPUT, 'receipt=' + ($receipt | ConvertTo-Json -Depth 30 -Compress) + "`n", $encoding)
+          } catch {
+            if (Get-Command Write-PspktEvidenceFailureDiagnostics -ErrorAction SilentlyContinue) {
+              Write-PspktEvidenceFailureDiagnostics -Exception $_.Exception -AllowedMessages $diagnosticMessages
+            } else { [Console]::Error.WriteLine('workflow-failure: Evidence runtime workflow step failed.') }
+            exit 1
+          }
+      - id: validate_export
+        shell: powershell
+        env:
+          PSPKT_SOURCE_KIND: export
+        run: *validate_call
+      - id: probe_returned
+        continue-on-error: true
+        shell: powershell
+        env:
+          PSPKT_FAULT_CASE: returned-failure
+        run: &boundary_probe |
+          $ErrorActionPreference = 'Stop'
+          $diagnosticMessages = @()
+          try {
+            $encoding = [Text.UTF8Encoding]::new($false, $true)
+            $contractBytes = [IO.File]::ReadAllBytes((Join-Path $env:GITHUB_WORKSPACE 'certification\evidence-runtime\lib\Pspkt.Certification.EvidenceRuntimeContract.ps1'))
+            . ([scriptblock]::Create($encoding.GetString($contractBytes)))
+            $diagnosticMessages = @(Get-PspktEvidenceDiagnosticMessages -Snapshot (Get-PspktEvidenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE))
+            $definitions = Get-PspktEvidenceWorkflowBoundaryDefinitions -RepositoryRoot $env:GITHUB_WORKSPACE
+            foreach ($definition in $definitions) { . $definition }
+            $contract = Get-PspktEvidenceRuntimeContract
+            $healthy = New-PspktEvidenceValidationResultFixture -Contract $contract -CaseId healthy
+            $control = @(Complete-PspktEvidenceValidationInvocation -CapturedResults $healthy.Captured -Expected $healthy.Expected)
+            Assert-PspktEvidenceValidationSuccess -CapturedResults $control -Expected $healthy.Expected
+            $probe = Invoke-PspktEvidenceBoundaryProbe -Contract $contract -CaseId $env:PSPKT_FAULT_CASE
+            if (-not $probe.PositiveControlPassed) { throw 'Probe positive control failed.' }
+            $receipt = New-PspktEvidenceProbeReceipt -Probe $probe -HostSlot $env:PSPKT_HOST_SLOT
+            [IO.File]::AppendAllText($env:GITHUB_OUTPUT, 'receipt=' + ($receipt | ConvertTo-Json -Depth 10 -Compress) + "`n", $encoding)
+            exit 1
+          } catch {
+            if (Get-Command Write-PspktEvidenceFailureDiagnostics -ErrorAction SilentlyContinue) {
+              Write-PspktEvidenceFailureDiagnostics -Exception $_.Exception -AllowedMessages $diagnosticMessages
+            } else { [Console]::Error.WriteLine('workflow-failure: Evidence runtime workflow step failed.') }
+            exit 1
+          }
+      - id: probe_malformed
+        continue-on-error: true
+        shell: powershell
+        env:
+          PSPKT_FAULT_CASE: malformed-result
+        run: *boundary_probe
+      - id: probe_missing
+        continue-on-error: true
+        shell: powershell
+        env:
+          PSPKT_FAULT_CASE: missing-result
+        run: *boundary_probe
+      - id: probe_multiple
+        continue-on-error: true
+        shell: powershell
+        env:
+          PSPKT_FAULT_CASE: multiple-results
+        run: *boundary_probe
+      - id: probe_count
+        continue-on-error: true
+        shell: powershell
+        env:
+          PSPKT_FAULT_CASE: count-mismatch
+        run: *boundary_probe
+      - id: confirm_probes
+        if: ${{ !cancelled() }}
+        shell: powershell
+        env:
+          PROBE_OUTCOMES: '{"returned-failure":"${{ steps.probe_returned.outcome }}","malformed-result":"${{ steps.probe_malformed.outcome }}","missing-result":"${{ steps.probe_missing.outcome }}","multiple-results":"${{ steps.probe_multiple.outcome }}","count-mismatch":"${{ steps.probe_count.outcome }}"}'
+          PROBE_RETURNED: ${{ steps.probe_returned.outputs.receipt }}
+          PROBE_MALFORMED: ${{ steps.probe_malformed.outputs.receipt }}
+          PROBE_MISSING: ${{ steps.probe_missing.outputs.receipt }}
+          PROBE_MULTIPLE: ${{ steps.probe_multiple.outputs.receipt }}
+          PROBE_COUNT: ${{ steps.probe_count.outputs.receipt }}
+        run: &confirm_probes |
+          $ErrorActionPreference = 'Stop'
+          $diagnosticMessages = @()
+          try {
+            $encoding = [Text.UTF8Encoding]::new($false, $true)
+            . ([scriptblock]::Create($encoding.GetString([IO.File]::ReadAllBytes((Join-Path $env:GITHUB_WORKSPACE 'certification\evidence-runtime\lib\Pspkt.Certification.EvidenceRuntimeContract.ps1')))))
+            $diagnosticMessages = @(Get-PspktEvidenceDiagnosticMessages -Snapshot (Get-PspktEvidenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE))
+            $receipts = @(Confirm-PspktEvidenceProbeReceipts -HostSlot $env:PSPKT_HOST_SLOT -OutcomesJson $env:PROBE_OUTCOMES -ReceiptJson @($env:PROBE_RETURNED, $env:PROBE_MALFORMED, $env:PROBE_MISSING, $env:PROBE_MULTIPLE, $env:PROBE_COUNT))
+            [IO.File]::AppendAllText($env:GITHUB_OUTPUT, 'receipts=' + (ConvertTo-Json -InputObject $receipts -Depth 10 -Compress) + "`n", $encoding)
+          } catch {
+            if (Get-Command Write-PspktEvidenceFailureDiagnostics -ErrorAction SilentlyContinue) {
+              Write-PspktEvidenceFailureDiagnostics -Exception $_.Exception -AllowedMessages $diagnosticMessages
+            } else { [Console]::Error.WriteLine('workflow-failure: Evidence runtime workflow step failed.') }
+            exit 1
+          }
+
+  powershell_7:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PSPKT_HOST_SLOT: powershell_7
+    outputs:
+      checkout: ${{ steps.validate_checkout.outputs.receipt }}
+      export: ${{ steps.validate_export.outputs.receipt }}
+      probes: ${{ steps.confirm_probes.outputs.receipts }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Select Pester 5.3.3
+        shell: pwsh
+        run: *pester_setup
+      - id: validate_checkout
+        shell: pwsh
+        env:
+          PSPKT_SOURCE_KIND: checkout
+        run: *validate_call
+      - id: validate_export
+        shell: pwsh
+        env:
+          PSPKT_SOURCE_KIND: export
+        run: *validate_call
+      - id: probe_returned
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PSPKT_FAULT_CASE: returned-failure
+        run: *boundary_probe
+      - id: probe_malformed
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PSPKT_FAULT_CASE: malformed-result
+        run: *boundary_probe
+      - id: probe_missing
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PSPKT_FAULT_CASE: missing-result
+        run: *boundary_probe
+      - id: probe_multiple
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PSPKT_FAULT_CASE: multiple-results
+        run: *boundary_probe
+      - id: probe_count
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PSPKT_FAULT_CASE: count-mismatch
+        run: *boundary_probe
+      - id: confirm_probes
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          PROBE_OUTCOMES: '{"returned-failure":"${{ steps.probe_returned.outcome }}","malformed-result":"${{ steps.probe_malformed.outcome }}","missing-result":"${{ steps.probe_missing.outcome }}","multiple-results":"${{ steps.probe_multiple.outcome }}","count-mismatch":"${{ steps.probe_count.outcome }}"}'
+          PROBE_RETURNED: ${{ steps.probe_returned.outputs.receipt }}
+          PROBE_MALFORMED: ${{ steps.probe_malformed.outputs.receipt }}
+          PROBE_MISSING: ${{ steps.probe_missing.outputs.receipt }}
+          PROBE_MULTIPLE: ${{ steps.probe_multiple.outputs.receipt }}
+          PROBE_COUNT: ${{ steps.probe_count.outputs.receipt }}
+        run: *confirm_probes
+
+  evidence_runtime_acceptance:
+    if: ${{ !cancelled() }}
+    needs: [windows_ps51, powershell_7]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Require four complete calls and ten verified red probes
+        shell: pwsh
+        env:
+          DESKTOP_RESULT: ${{ needs.windows_ps51.result }}
+          CORE_RESULT: ${{ needs.powershell_7.result }}
+          DESKTOP_CHECKOUT: ${{ needs.windows_ps51.outputs.checkout }}
+          DESKTOP_EXPORT: ${{ needs.windows_ps51.outputs.export }}
+          CORE_CHECKOUT: ${{ needs.powershell_7.outputs.checkout }}
+          CORE_EXPORT: ${{ needs.powershell_7.outputs.export }}
+          DESKTOP_PROBES: ${{ needs.windows_ps51.outputs.probes }}
+          CORE_PROBES: ${{ needs.powershell_7.outputs.probes }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $diagnosticMessages = @()
+          try {
+            $encoding = [Text.UTF8Encoding]::new($false, $true)
+            . ([scriptblock]::Create($encoding.GetString([IO.File]::ReadAllBytes((Join-Path $env:GITHUB_WORKSPACE 'certification\evidence-runtime\lib\Pspkt.Certification.EvidenceRuntimeContract.ps1')))))
+            $diagnosticMessages = @(Get-PspktEvidenceDiagnosticMessages -Snapshot (Get-PspktEvidenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE))
+            Assert-PspktEvidenceWorkflowDependencies -DesktopResult $env:DESKTOP_RESULT -CoreResult $env:CORE_RESULT
+            foreach ($definition in (Get-PspktEvidenceWorkflowBoundaryDefinitions -RepositoryRoot $env:GITHUB_WORKSPACE)) { . $definition }
+            Assert-PspktEvidenceCiAggregate -ReceiptJson @($env:DESKTOP_CHECKOUT, $env:DESKTOP_EXPORT, $env:CORE_CHECKOUT, $env:CORE_EXPORT) -ProbeJson @($env:DESKTOP_PROBES, $env:CORE_PROBES)
+          } catch {
+            if (Get-Command Write-PspktEvidenceFailureDiagnostics -ErrorAction SilentlyContinue) {
+              Write-PspktEvidenceFailureDiagnostics -Exception $_.Exception -AllowedMessages $diagnosticMessages
+            } else { [Console]::Error.WriteLine('workflow-failure: Evidence runtime workflow step failed.') }
+            exit 1
+          }

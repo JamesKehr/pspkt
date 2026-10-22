@@ -1,0 +1,2 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/ci-evidence-runtime.yml text eol=lf -filter -ident -working-tree-encoding
