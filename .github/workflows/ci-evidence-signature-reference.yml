@@ -1,0 +1,339 @@
+name: Evidence signature reference
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+permissions:
+  contents: read
+env:
+  PSPKT_STAGE3_WORK_BASE: '${{ github.workspace }}-pspkt-stage3'
+jobs:
+  windows_ps51:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+    outputs:
+      checkout: ${{ steps.checkout_validation.outputs.receipt }}
+      export: ${{ steps.export_validation.outputs.receipt }}
+      probes: ${{ steps.confirm_probes.outputs.probes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Admit Pester package
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard {
+              $package=Install-PspktSignatureReferencePesterPackage -WorkBase $env:PSPKT_STAGE3_WORK_BASE
+              Assert-PspktSignatureReferencePesterPackage $package.Length $package.Sha256
+            }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: checkout_validation
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard {
+              $binding=[pscustomobject]@{WorkflowRunId=$env:GITHUB_RUN_ID;WorkflowRunAttempt=$env:GITHUB_RUN_ATTEMPT;Revision=$env:GITHUB_SHA;Slot='windows_ps51/checkout'}
+              Invoke-PspktSignatureReferenceCiCall -Source $source -RepositoryRoot $env:GITHUB_WORKSPACE -WorkBase $env:PSPKT_STAGE3_WORK_BASE -Binding $binding
+            }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: export_validation
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard {
+              $binding=[pscustomobject]@{WorkflowRunId=$env:GITHUB_RUN_ID;WorkflowRunAttempt=$env:GITHUB_RUN_ATTEMPT;Revision=$env:GITHUB_SHA;Slot='windows_ps51/export'}
+              Invoke-PspktSignatureReferenceCiCall -Source $source -RepositoryRoot $env:GITHUB_WORKSPACE -WorkBase $env:PSPKT_STAGE3_WORK_BASE -Binding $binding
+            }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_returned_failure
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'windows_ps51' -CaseId 'returned-failure' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_malformed_result
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'windows_ps51' -CaseId 'malformed-result' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_missing_result
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'windows_ps51' -CaseId 'missing-result' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_multiple_results
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'windows_ps51' -CaseId 'multiple-results' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_count_mismatch
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'windows_ps51' -CaseId 'count-mismatch' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: confirm_probes
+        if: ${{ !cancelled() }}
+        env:
+          PROBE_1: ${{ steps.probe_returned_failure.outputs.probe }}
+          PROBE_2: ${{ steps.probe_malformed_result.outputs.probe }}
+          PROBE_3: ${{ steps.probe_missing_result.outputs.probe }}
+          PROBE_4: ${{ steps.probe_multiple_results.outputs.probe }}
+          PROBE_5: ${{ steps.probe_count_mismatch.outputs.probe }}
+          RAW_1: ${{ steps.probe_returned_failure.outcome }}
+          RAW_2: ${{ steps.probe_malformed_result.outcome }}
+          RAW_3: ${{ steps.probe_missing_result.outcome }}
+          RAW_4: ${{ steps.probe_multiple_results.outcome }}
+          RAW_5: ${{ steps.probe_count_mismatch.outcome }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Confirm-PspktSignatureReferenceProbes -HostSlot 'windows_ps51' -ProbeJson @($env:PROBE_1,$env:PROBE_2,$env:PROBE_3,$env:PROBE_4,$env:PROBE_5) -RawOutcomes @($env:RAW_1,$env:RAW_2,$env:RAW_3,$env:RAW_4,$env:RAW_5) }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+  powershell_7:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      checkout: ${{ steps.checkout_validation.outputs.receipt }}
+      export: ${{ steps.export_validation.outputs.receipt }}
+      probes: ${{ steps.confirm_probes.outputs.probes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Admit Pester package
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard {
+              $package=Install-PspktSignatureReferencePesterPackage -WorkBase $env:PSPKT_STAGE3_WORK_BASE
+              Assert-PspktSignatureReferencePesterPackage $package.Length $package.Sha256
+            }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: checkout_validation
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard {
+              $binding=[pscustomobject]@{WorkflowRunId=$env:GITHUB_RUN_ID;WorkflowRunAttempt=$env:GITHUB_RUN_ATTEMPT;Revision=$env:GITHUB_SHA;Slot='powershell_7/checkout'}
+              Invoke-PspktSignatureReferenceCiCall -Source $source -RepositoryRoot $env:GITHUB_WORKSPACE -WorkBase $env:PSPKT_STAGE3_WORK_BASE -Binding $binding
+            }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: export_validation
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard {
+              $binding=[pscustomobject]@{WorkflowRunId=$env:GITHUB_RUN_ID;WorkflowRunAttempt=$env:GITHUB_RUN_ATTEMPT;Revision=$env:GITHUB_SHA;Slot='powershell_7/export'}
+              Invoke-PspktSignatureReferenceCiCall -Source $source -RepositoryRoot $env:GITHUB_WORKSPACE -WorkBase $env:PSPKT_STAGE3_WORK_BASE -Binding $binding
+            }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_returned_failure
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'powershell_7' -CaseId 'returned-failure' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_malformed_result
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'powershell_7' -CaseId 'malformed-result' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_missing_result
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'powershell_7' -CaseId 'missing-result' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_multiple_results
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'powershell_7' -CaseId 'multiple-results' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: probe_count_mismatch
+        continue-on-error: true
+        env:
+          PSPKT_STAGE3_BASELINE: ${{ steps.checkout_validation.outputs.receipt }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceRawProbeStep -Source $source -HostSlot 'powershell_7' -CaseId 'count-mismatch' }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: confirm_probes
+        if: ${{ !cancelled() }}
+        env:
+          PROBE_1: ${{ steps.probe_returned_failure.outputs.probe }}
+          PROBE_2: ${{ steps.probe_malformed_result.outputs.probe }}
+          PROBE_3: ${{ steps.probe_missing_result.outputs.probe }}
+          PROBE_4: ${{ steps.probe_multiple_results.outputs.probe }}
+          PROBE_5: ${{ steps.probe_count_mismatch.outputs.probe }}
+          RAW_1: ${{ steps.probe_returned_failure.outcome }}
+          RAW_2: ${{ steps.probe_malformed_result.outcome }}
+          RAW_3: ${{ steps.probe_missing_result.outcome }}
+          RAW_4: ${{ steps.probe_multiple_results.outcome }}
+          RAW_5: ${{ steps.probe_count_mismatch.outcome }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Confirm-PspktSignatureReferenceProbes -HostSlot 'powershell_7' -ProbeJson @($env:PROBE_1,$env:PROBE_2,$env:PROBE_3,$env:PROBE_4,$env:PROBE_5) -RawOutcomes @($env:RAW_1,$env:RAW_2,$env:RAW_3,$env:RAW_4,$env:RAW_5) }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+  evidence_signature_reference_acceptance:
+    needs: [windows_ps51, powershell_7]
+    if: ${{ !cancelled() }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - id: stage_windows_checkout
+        if: ${{ !cancelled() }}
+        env:
+          PSPKT_STAGE3_PAYLOAD: ${{ needs.windows_ps51.outputs.checkout }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Write-PspktSignatureReferenceTransport -Destination (Join-Path $env:PSPKT_STAGE3_WORK_BASE 'acceptance\windows_ps51_checkout.json') -MaximumBytes 16384 }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: stage_windows_export
+        if: ${{ !cancelled() }}
+        env:
+          PSPKT_STAGE3_PAYLOAD: ${{ needs.windows_ps51.outputs.export }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Write-PspktSignatureReferenceTransport -Destination (Join-Path $env:PSPKT_STAGE3_WORK_BASE 'acceptance\windows_ps51_export.json') -MaximumBytes 16384 }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: stage_core_checkout
+        if: ${{ !cancelled() }}
+        env:
+          PSPKT_STAGE3_PAYLOAD: ${{ needs.powershell_7.outputs.checkout }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Write-PspktSignatureReferenceTransport -Destination (Join-Path $env:PSPKT_STAGE3_WORK_BASE 'acceptance\powershell_7_checkout.json') -MaximumBytes 16384 }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: stage_core_export
+        if: ${{ !cancelled() }}
+        env:
+          PSPKT_STAGE3_PAYLOAD: ${{ needs.powershell_7.outputs.export }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Write-PspktSignatureReferenceTransport -Destination (Join-Path $env:PSPKT_STAGE3_WORK_BASE 'acceptance\powershell_7_export.json') -MaximumBytes 16384 }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: stage_windows_probes
+        if: ${{ !cancelled() }}
+        env:
+          PSPKT_STAGE3_PAYLOAD: ${{ needs.windows_ps51.outputs.probes }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Write-PspktSignatureReferenceTransport -Destination (Join-Path $env:PSPKT_STAGE3_WORK_BASE 'acceptance\windows_ps51_probes.json') -MaximumBytes 4096 }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - id: stage_core_probes
+        if: ${{ !cancelled() }}
+        env:
+          PSPKT_STAGE3_PAYLOAD: ${{ needs.powershell_7.outputs.probes }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Write-PspktSignatureReferenceTransport -Destination (Join-Path $env:PSPKT_STAGE3_WORK_BASE 'acceptance\powershell_7_probes.json') -MaximumBytes 4096 }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
+      - name: Require complete current-attempt evidence
+        if: ${{ !cancelled() }}
+        run: |
+          try {
+            . "$env:GITHUB_WORKSPACE\certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceContract.ps1"
+            $source=Get-PspktSignatureReferenceSourceSnapshot -RepositoryRoot $env:GITHUB_WORKSPACE
+            . ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($source.Files['certification\evidence-signature-reference\lib\Pspkt.Certification.EvidenceSignatureReferenceCi.ps1'])))
+            Invoke-PspktSignatureReferenceCiGuard { Invoke-PspktSignatureReferenceAggregate -Source $source -ArtifactRoot (Join-Path $env:PSPKT_STAGE3_WORK_BASE 'acceptance') }
+          } catch { [Console]::Error.WriteLine('validation:contract'); exit 1 }
