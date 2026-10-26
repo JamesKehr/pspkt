@@ -1,0 +1,2 @@
+/.gitattributes text eol=lf -filter -ident -working-tree-encoding
+/workflows/ci-evidence-signature-reference.yml text eol=lf -filter -ident -working-tree-encoding
