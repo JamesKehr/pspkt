@@ -1,0 +1,320 @@
+name: Broker lifecycle structural conformance
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows_ps51:
+    runs-on: windows-latest
+    env:
+      PSPKT_BROKER_ROOT: ${{ github.workspace }}\..\bl-${{ github.run_id }}-${{ github.run_attempt }}
+      PSPKT_BROKER_HOST_SLOT: windows_ps51
+    outputs:
+      checkout: ${{ steps.checkout_validation.outputs.receipt }}
+      export: ${{ steps.export_validation.outputs.receipt }}
+      boundaries: ${{ steps.confirm_boundaries.outputs.group }}
+      preflight: ${{ steps.confirm_preflight.outputs.group }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        env:
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
+          GIT_CONFIG_KEY_1: core.eol
+          GIT_CONFIG_VALUE_1: lf
+        with:
+          persist-credentials: false
+      - name: Admit pinned Pester tool
+        shell: powershell
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          [void](Initialize-PspktBrokerLifecycleWorkflowTools (Join-Path $env:PSPKT_BROKER_ROOT 'tools'))
+      - id: checkout_validation
+        name: Complete Desktop checkout call
+        shell: powershell
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowCall -RepositoryRoot $env:GITHUB_WORKSPACE -WorkRoot (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-checkout') -PesterManifestPath (Join-Path $env:PSPKT_BROKER_ROOT 'tools\Pester\Pester.psd1') -HostSlot windows_ps51 -SourceSlot checkout -ResultPath (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-result.json')
+      - id: export_validation
+        name: Complete Desktop no-git export call
+        shell: powershell
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          $contract=[IO.File]::ReadAllBytes((Join-Path $env:GITHUB_WORKSPACE 'certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycleContract.ps1'))
+          $source=Get-PspktBrokerLifecycleSourceSnapshot $env:GITHUB_WORKSPACE $contract
+          $export=Join-Path $env:PSPKT_BROKER_ROOT 'desktop-source-export'
+          [void](Export-PspktBrokerLifecycleSource $source $export)
+          Invoke-PspktBrokerLifecycleWorkflowCall -RepositoryRoot $export -WorkRoot (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-export') -PesterManifestPath (Join-Path $env:PSPKT_BROKER_ROOT 'tools\Pester\Pester.psd1') -HostSlot windows_ps51 -SourceSlot export -ResultPath (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-export-result.json')
+      - id: returned
+        name: Returned failure is red
+        continue-on-error: true
+        shell: powershell
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-result.json') windows_ps51 ReturnedFailure
+          exit 1
+      - id: malformed
+        name: Malformed result is red
+        continue-on-error: true
+        shell: powershell
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-result.json') windows_ps51 MalformedResult
+          exit 1
+      - id: missing
+        name: Missing result is red
+        continue-on-error: true
+        shell: powershell
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-result.json') windows_ps51 MissingResult
+          exit 1
+      - id: multiple
+        name: Multiple results are red
+        continue-on-error: true
+        shell: powershell
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-result.json') windows_ps51 MultipleResults
+          exit 1
+      - id: counts
+        name: Count mismatch is red
+        continue-on-error: true
+        shell: powershell
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-result.json') windows_ps51 CountMismatch
+          exit 1
+      - id: confirm_boundaries
+        name: Confirm five actual Desktop red outcomes
+        shell: powershell
+        env:
+          R1: ${{ steps.returned.outputs.probe }}
+          R2: ${{ steps.malformed.outputs.probe }}
+          R3: ${{ steps.missing.outputs.probe }}
+          R4: ${{ steps.multiple.outputs.probe }}
+          R5: ${{ steps.counts.outputs.probe }}
+          O1: ${{ steps.returned.outcome }}
+          O2: ${{ steps.malformed.outcome }}
+          O3: ${{ steps.missing.outcome }}
+          O4: ${{ steps.multiple.outcome }}
+          O5: ${{ steps.counts.outcome }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          $receipts=@();$outcomes=@()
+          foreach($index in 1..5) { $receipts+=,(ConvertFrom-PspktBrokerLifecycleTransport ([Environment]::GetEnvironmentVariable('R'+$index)) 1024); $outcomes+=,[Environment]::GetEnvironmentVariable('O'+$index) }
+          $group=Confirm-PspktBrokerLifecycleBoundaryGroup $receipts $outcomes (Get-PspktBrokerLifecycleWorkflowContext windows_ps51)
+          Write-PspktBrokerLifecycleWorkflowOutput group $group 4096
+      - id: preflight
+        name: Failed preflight consumes Desktop host
+        continue-on-error: true
+        shell: powershell
+        run: |
+          & (Join-Path $env:GITHUB_WORKSPACE 'certification\broker-lifecycle\probes\Invoke-PspktBrokerLifecycleFailedPreflightProbe.ps1') -RepositoryRoot $env:GITHUB_WORKSPACE -WorkRoot (Join-Path $env:PSPKT_BROKER_ROOT 'desktop-preflight') -PesterManifestPath (Join-Path $env:PSPKT_BROKER_ROOT 'tools\Pester\Pester.psd1')
+      - id: confirm_preflight
+        name: Confirm actual Desktop preflight red
+        shell: powershell
+        env:
+          PROBE: ${{ steps.preflight.outputs.probe }}
+          RAW_OUTCOME: ${{ steps.preflight.outcome }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          $probe=ConvertFrom-PspktBrokerLifecycleTransport $env:PROBE 1024
+          $group=Confirm-PspktBrokerLifecyclePreflightGroup $probe $env:RAW_OUTCOME (Get-PspktBrokerLifecycleWorkflowContext windows_ps51)
+          Write-PspktBrokerLifecycleWorkflowOutput group $group 4096
+  powershell_7:
+    runs-on: windows-latest
+    env:
+      PSPKT_BROKER_ROOT: ${{ github.workspace }}\..\bl-${{ github.run_id }}-${{ github.run_attempt }}
+      PSPKT_BROKER_HOST_SLOT: powershell_7
+    outputs:
+      checkout: ${{ steps.checkout_validation.outputs.receipt }}
+      export: ${{ steps.export_validation.outputs.receipt }}
+      boundaries: ${{ steps.confirm_boundaries.outputs.group }}
+      preflight: ${{ steps.confirm_preflight.outputs.group }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        env:
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
+          GIT_CONFIG_KEY_1: core.eol
+          GIT_CONFIG_VALUE_1: lf
+        with:
+          persist-credentials: false
+      - name: Admit pinned Pester tool
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          [void](Initialize-PspktBrokerLifecycleWorkflowTools (Join-Path $env:PSPKT_BROKER_ROOT 'tools'))
+      - id: checkout_validation
+        name: Complete Core checkout call
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowCall -RepositoryRoot $env:GITHUB_WORKSPACE -WorkRoot (Join-Path $env:PSPKT_BROKER_ROOT 'core-checkout') -PesterManifestPath (Join-Path $env:PSPKT_BROKER_ROOT 'tools\Pester\Pester.psd1') -HostSlot powershell_7 -SourceSlot checkout -ResultPath (Join-Path $env:PSPKT_BROKER_ROOT 'core-result.json')
+      - id: export_validation
+        name: Complete Core no-git export call
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          $contract=[IO.File]::ReadAllBytes((Join-Path $env:GITHUB_WORKSPACE 'certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycleContract.ps1'))
+          $source=Get-PspktBrokerLifecycleSourceSnapshot $env:GITHUB_WORKSPACE $contract
+          $export=Join-Path $env:PSPKT_BROKER_ROOT 'core-source-export'
+          [void](Export-PspktBrokerLifecycleSource $source $export)
+          Invoke-PspktBrokerLifecycleWorkflowCall -RepositoryRoot $export -WorkRoot (Join-Path $env:PSPKT_BROKER_ROOT 'core-export') -PesterManifestPath (Join-Path $env:PSPKT_BROKER_ROOT 'tools\Pester\Pester.psd1') -HostSlot powershell_7 -SourceSlot export -ResultPath (Join-Path $env:PSPKT_BROKER_ROOT 'core-export-result.json')
+      - id: returned
+        name: Returned failure is red
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'core-result.json') powershell_7 ReturnedFailure
+          exit 1
+      - id: malformed
+        name: Malformed result is red
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'core-result.json') powershell_7 MalformedResult
+          exit 1
+      - id: missing
+        name: Missing result is red
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'core-result.json') powershell_7 MissingResult
+          exit 1
+      - id: multiple
+        name: Multiple results are red
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'core-result.json') powershell_7 MultipleResults
+          exit 1
+      - id: counts
+        name: Count mismatch is red
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleWorkflowBoundary $env:GITHUB_WORKSPACE (Join-Path $env:PSPKT_BROKER_ROOT 'core-result.json') powershell_7 CountMismatch
+          exit 1
+      - id: confirm_boundaries
+        name: Confirm five actual Core red outcomes
+        shell: pwsh
+        env:
+          R1: ${{ steps.returned.outputs.probe }}
+          R2: ${{ steps.malformed.outputs.probe }}
+          R3: ${{ steps.missing.outputs.probe }}
+          R4: ${{ steps.multiple.outputs.probe }}
+          R5: ${{ steps.counts.outputs.probe }}
+          O1: ${{ steps.returned.outcome }}
+          O2: ${{ steps.malformed.outcome }}
+          O3: ${{ steps.missing.outcome }}
+          O4: ${{ steps.multiple.outcome }}
+          O5: ${{ steps.counts.outcome }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          $receipts=@();$outcomes=@()
+          foreach($index in 1..5) { $receipts+=,(ConvertFrom-PspktBrokerLifecycleTransport ([Environment]::GetEnvironmentVariable('R'+$index)) 1024); $outcomes+=,[Environment]::GetEnvironmentVariable('O'+$index) }
+          $group=Confirm-PspktBrokerLifecycleBoundaryGroup $receipts $outcomes (Get-PspktBrokerLifecycleWorkflowContext powershell_7)
+          Write-PspktBrokerLifecycleWorkflowOutput group $group 4096
+      - id: preflight
+        name: Failed preflight consumes Core host
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          & (Join-Path $env:GITHUB_WORKSPACE 'certification\broker-lifecycle\probes\Invoke-PspktBrokerLifecycleFailedPreflightProbe.ps1') -RepositoryRoot $env:GITHUB_WORKSPACE -WorkRoot (Join-Path $env:PSPKT_BROKER_ROOT 'core-preflight') -PesterManifestPath (Join-Path $env:PSPKT_BROKER_ROOT 'tools\Pester\Pester.psd1')
+      - id: confirm_preflight
+        name: Confirm actual Core preflight red
+        shell: pwsh
+        env:
+          PROBE: ${{ steps.preflight.outputs.probe }}
+          RAW_OUTCOME: ${{ steps.preflight.outcome }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          $probe=ConvertFrom-PspktBrokerLifecycleTransport $env:PROBE 1024
+          $group=Confirm-PspktBrokerLifecyclePreflightGroup $probe $env:RAW_OUTCOME (Get-PspktBrokerLifecycleWorkflowContext powershell_7)
+          Write-PspktBrokerLifecycleWorkflowOutput group $group 4096
+  aggregate:
+    needs: [windows_ps51, powershell_7]
+    runs-on: windows-latest
+    env:
+      PSPKT_BROKER_INPUTS: ${{ github.workspace }}\..\bl-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        env:
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
+          GIT_CONFIG_KEY_1: core.eol
+          GIT_CONFIG_VALUE_1: lf
+        with:
+          persist-credentials: false
+      - name: Stage Desktop checkout receipt
+        shell: pwsh
+        env:
+          PSPKT_INPUT: ${{ needs.windows_ps51.outputs.checkout }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Save-PspktBrokerLifecycleTransportPart $env:PSPKT_BROKER_INPUTS windows-checkout $env:PSPKT_INPUT
+      - name: Stage Desktop export receipt
+        shell: pwsh
+        env:
+          PSPKT_INPUT: ${{ needs.windows_ps51.outputs.export }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Save-PspktBrokerLifecycleTransportPart $env:PSPKT_BROKER_INPUTS windows-export $env:PSPKT_INPUT
+      - name: Stage Core checkout receipt
+        shell: pwsh
+        env:
+          PSPKT_INPUT: ${{ needs.powershell_7.outputs.checkout }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Save-PspktBrokerLifecycleTransportPart $env:PSPKT_BROKER_INPUTS core-checkout $env:PSPKT_INPUT
+      - name: Stage Core export receipt
+        shell: pwsh
+        env:
+          PSPKT_INPUT: ${{ needs.powershell_7.outputs.export }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Save-PspktBrokerLifecycleTransportPart $env:PSPKT_BROKER_INPUTS core-export $env:PSPKT_INPUT
+      - name: Stage Desktop boundary group
+        shell: pwsh
+        env:
+          PSPKT_INPUT: ${{ needs.windows_ps51.outputs.boundaries }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Save-PspktBrokerLifecycleTransportPart $env:PSPKT_BROKER_INPUTS windows-boundaries $env:PSPKT_INPUT
+      - name: Stage Core boundary group
+        shell: pwsh
+        env:
+          PSPKT_INPUT: ${{ needs.powershell_7.outputs.boundaries }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Save-PspktBrokerLifecycleTransportPart $env:PSPKT_BROKER_INPUTS core-boundaries $env:PSPKT_INPUT
+      - name: Stage Desktop preflight group
+        shell: pwsh
+        env:
+          PSPKT_INPUT: ${{ needs.windows_ps51.outputs.preflight }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Save-PspktBrokerLifecycleTransportPart $env:PSPKT_BROKER_INPUTS windows-preflight $env:PSPKT_INPUT
+      - name: Stage Core preflight group
+        shell: pwsh
+        env:
+          PSPKT_INPUT: ${{ needs.powershell_7.outputs.preflight }}
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Save-PspktBrokerLifecycleTransportPart $env:PSPKT_BROKER_INPUTS core-preflight $env:PSPKT_INPUT
+      - name: Verify complete current-attempt aggregate
+        shell: pwsh
+        run: |
+          foreach($name in @('Contract','Compilation','Ci')) { . (Join-Path $env:GITHUB_WORKSPACE ('certification\broker-lifecycle\lib\Pspkt.Certification.BrokerLifecycle'+$name+'.ps1')) }
+          Invoke-PspktBrokerLifecycleAggregate $env:GITHUB_WORKSPACE $env:PSPKT_BROKER_INPUTS
