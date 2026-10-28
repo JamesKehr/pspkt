@@ -1,0 +1,5 @@
+.gitattributes text eol=lf -filter -ident -working-tree-encoding
+*.cs text eol=lf -filter -ident -working-tree-encoding
+*.ps1 text eol=lf -filter -ident -working-tree-encoding
+*.md text eol=lf -filter -ident -working-tree-encoding
+*.json -text -eol -filter -ident -working-tree-encoding
